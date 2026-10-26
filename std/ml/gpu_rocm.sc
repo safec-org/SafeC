@@ -7,6 +7,7 @@
 // safeguard: link linux -L${ROCM_PATH:-/opt/rocm}/lib -lamdhip64 -lhiprtc -lrocblas
 #pragma once
 #include <std/ml/gpu_rocm.h>
+#include <std/ml/rocm_ffi.h>
 #include <std/math.h>
 #include <std/mem.h>
 #include <std/time.h>
@@ -14,53 +15,7 @@
 namespace std {
 
 // ── HIP runtime / hiprtc / rocBLAS C ABI (hip_runtime_api.h, hiprtc.h, rocblas.h) ──
-extern int hipInit(unsigned int flags);
-extern int hipGetDeviceCount(int* count);
-extern int hipDeviceGetAttribute(int* value, int attr, int device);
-extern int hipDeviceGetName(char* name, int len, int device);
-extern int hipSetDevice(int device);
-extern int hipStreamCreate(void** stream);
-extern int hipStreamSynchronize(void* stream);
-extern int hipMalloc(void** ptr, unsigned long size);
-extern int hipFree(void* ptr);
-extern int hipMemcpyAsync(void* dst, const void* src, unsigned long size, int kind, void* stream);
-extern int hipMemsetAsync(void* dst, int value, unsigned long size, void* stream);
-extern int hipModuleLoadData(void** module, const void* image);
-extern int hipModuleGetFunction(void** func, void* module, const char* name);
-extern int hipModuleLaunchKernel(void* func, unsigned int gx, unsigned int gy, unsigned int gz,
-                                 unsigned int bx, unsigned int by, unsigned int bz,
-                                 unsigned int shared, void* stream, void** params, void** extra);
-extern int hipStreamBeginCapture(void* stream, int mode);
-extern int hipStreamEndCapture(void* stream, void** graph);
-extern int hipGraphInstantiate(void** exec, void* graph, void* errNode, char* log, unsigned long logSize);
-extern int hipGraphLaunch(void* exec, void* stream);
-extern int hipGraphDestroy(void* graph);
-extern int hipGraphExecDestroy(void* exec);
-
-extern int hiprtcCreateProgram(void** prog, const char* src, const char* name, int numHeaders,
-                               const char** headers, const char** includeNames);
-extern int hiprtcCompileProgram(void* prog, int numOptions, const char** options);
-extern int hiprtcGetCodeSize(void* prog, unsigned long* size);
-extern int hiprtcGetCode(void* prog, char* code);
-extern int hiprtcDestroyProgram(void** prog);
-
-extern int rocblas_create_handle(void** handle);
-extern int rocblas_set_stream(void* handle, void* stream);
-extern int rocblas_gemm_ex(void* handle, int transA, int transB, int m, int n, int k,
-                           const void* alpha, const void* A, int aType, int lda,
-                           const void* B, int bType, int ldb, const void* beta,
-                           const void* C, int cType, int ldc, void* D, int dType, int ldd,
-                           int computeType, int algo, int solutionIndex, unsigned int flags);
-extern int rocblas_gemm_ex_get_solutions(void* handle, int transA, int transB, int m, int n, int k,
-                                         const void* alpha, const void* A, int aType, int lda,
-                                         const void* B, int bType, int ldb, const void* beta,
-                                         const void* C, int cType, int ldc, void* D, int dType, int ldd,
-                                         int computeType, int algo, unsigned int flags,
-                                         int* list, int* size);
-extern int rocblas_sgemm(void* handle, int transA, int transB, int m, int n, int k,
-                         const float* alpha, const float* A, int lda,
-                         const float* B, int ldb,
-                         const float* beta, float* C, int ldc);
+// The HIP runtime, hiprtc and rocBLAS are declared in rocm_ffi.h.
 
 #define ROCM_HIP_OK              0
 #define ROCM_ATTR_CU_COUNT       63   // hipDeviceAttributeMultiprocessorCount
@@ -1658,9 +1613,9 @@ static const char* rocm_kernel_name_(int k) {
 
 // ── Backend state (one per process) ──────────────────────────────────────────
 static int   g_rocm_state = 0;        // 0 = not tried, 1 = ready, -1 = unavailable
-static void* g_rocm_stream = (void*)0;
-static void* g_rocm_blas = (void*)0;
-static void* g_rocm_fn[K_COUNT];
+static RocmNativeStream* g_rocm_stream = null;
+static RocblasHandle_* g_rocm_blas = null;
+static HipFunction_* g_rocm_fn[K_COUNT];
 static char  g_rocm_name[256];
 static int   g_rocm_mfma = 0;         // 1 = the MFMA attention kernels run (matrix cores, not switched off)
 static int   g_rocm_mfma_has = 0;     // 1 = the GPU has matrix cores (CDNA)
@@ -1694,7 +1649,7 @@ static int rocm_ensure_() {
         if (rocblas_create_handle(&g_rocm_blas) != 0) return 0;
         rocblas_set_stream(g_rocm_blas, g_rocm_stream);
 
-        void* prog = (void*)0;
+        HiprtcProgram_* prog = null;
         if (hiprtcCreateProgram(&prog, rocm_kernel_source_(), "safec_rocm.hip", 0,
                                 (const char**)0, (const char**)0) != 0) return 0;
         const char* opts[1];
@@ -1706,8 +1661,8 @@ static int rocm_ensure_() {
         if (code == (char*)0) { hiprtcDestroyProgram(&prog); return 0; }
         hiprtcGetCode(prog, code);
         hiprtcDestroyProgram(&prog);
-        void* module = (void*)0;
-        int loaded = hipModuleLoadData(&module, (const void*)code);
+        HipModule_* module = null;
+        int loaded = hipModuleLoadData(&module, (const char*)code);
         dealloc(code);
         if (loaded != ROCM_HIP_OK) return 0;
         int k = 0;
@@ -1717,14 +1672,14 @@ static int rocm_ensure_() {
         }
         // Ask the compiled code whether this GPU has matrix cores (the kernel
         // source knows the target; the host API doesn't say).
-        void* flag = (void*)0;
+        HipDevPtr_* flag = null;
         if (hipMalloc(&flag, 4UL) == ROCM_HIP_OK) {
-            void* pp[1];
-            pp[0] = (void*)&flag;
+            HipKernelArg_* pp[1];
+            pp[0] = (HipKernelArg_*)&flag;
             float has = 0.0f;
             if (hipModuleLaunchKernel(g_rocm_fn[K_MFMA_PROBE], 1U, 1U, 1U, 64U, 1U, 1U, 0U, g_rocm_stream,
-                                      &pp[0], (void**)0) == ROCM_HIP_OK &&
-                hipMemcpyAsync((void*)&has, (const void*)flag, 4UL, ROCM_D2H, g_rocm_stream) == ROCM_HIP_OK &&
+                                      &pp[0], (HipKernelArg_**)0) == ROCM_HIP_OK &&
+                hipMemcpyAsync((unsigned char*)&has, (const unsigned char*)flag, 4UL, ROCM_D2H, g_rocm_stream) == ROCM_HIP_OK &&
                 hipStreamSynchronize(g_rocm_stream) == ROCM_HIP_OK)
                 g_rocm_mfma_has = has == 1.0f ? 1 : 0;
             g_rocm_mfma = g_rocm_mfma_has;
@@ -1756,7 +1711,7 @@ struct RocmBuf RocmBuf::alloc(unsigned long n) {
     b.len = 0UL;
     if (n == 0UL || !rocm_ensure_()) return b;
     unsafe {
-        void* p = (void*)0;
+        HipDevPtr_* p = (HipDevPtr_*)0;
         if (hipMalloc(&p, checked_mul_size(n, sizeof(float))) != ROCM_HIP_OK) return b;
         b.dev = (unsigned long)p;
     }
@@ -1767,7 +1722,7 @@ struct RocmBuf RocmBuf::alloc(unsigned long n) {
 int rocm_write_n_(struct RocmBuf dst, const &float host, unsigned long n) {
     if (dst.dev == 0UL || n > dst.len || !rocm_ensure_()) return 0;
     unsafe {
-        return hipMemcpyAsync((void*)dst.dev, (const void*)host, n * sizeof(float),
+        return hipMemcpyAsync((unsigned char*)dst.dev, (const unsigned char*)host, n * sizeof(float),
                               ROCM_H2D, g_rocm_stream) == ROCM_HIP_OK;
     }
 }
@@ -1797,7 +1752,7 @@ struct RocmBuf RocmBuf::upload([]const float host_s) {
 int rocm_read_n_(struct RocmBuf src, &float host, unsigned long n) {
     if (src.dev == 0UL || n > src.len || !rocm_ensure_()) return 0;
     unsafe {
-        if (hipMemcpyAsync((void*)host, (const void*)src.dev, n * sizeof(float),
+        if (hipMemcpyAsync((unsigned char*)host, (const unsigned char*)src.dev, n * sizeof(float),
                            ROCM_D2H, g_rocm_stream) != ROCM_HIP_OK) return 0;
         return hipStreamSynchronize(g_rocm_stream) == ROCM_HIP_OK;
     }
@@ -1812,7 +1767,7 @@ int rocm_read(struct RocmBuf src, []float host_s) {
 }
 
 void RocmBuf::free() {
-    if (self.dev != 0UL) { unsafe { hipFree((void*)self.dev); } }
+    if (self.dev != 0UL) { unsafe { hipFree((HipDevPtr_*)self.dev); } }
     self.dev = 0UL;
     self.len = 0UL;
 }
@@ -1831,22 +1786,22 @@ int rocm_copy(struct RocmBuf src, unsigned long srcOff, struct RocmBuf dst, unsi
     if (!rocm_ensure_() || src.dev == 0UL || dst.dev == 0UL || n == 0UL ||
         srcOff + n > src.len || dstOff + n > dst.len) return 0;
     unsafe {
-        return hipMemcpyAsync((void*)(dst.dev + dstOff * sizeof(float)),
-                              (const void*)(src.dev + srcOff * sizeof(float)),
+        return hipMemcpyAsync((unsigned char*)(dst.dev + dstOff * sizeof(float)),
+                              (const unsigned char*)(src.dev + srcOff * sizeof(float)),
                               n * sizeof(float), ROCM_D2D, g_rocm_stream) == ROCM_HIP_OK;
     }
 }
 
 // ── Launch helpers ───────────────────────────────────────────────────────────
 
-static int rocm_launch_(int kernel, unsigned long n, &void params) {
+static int rocm_launch_(int kernel, unsigned long n, HipKernelArg_** params) {
     unsigned long blocks = (n + (unsigned long)ROCM_BLOCK - 1UL) / (unsigned long)ROCM_BLOCK;
     if (blocks > ROCM_MAX_BLOCKS) blocks = ROCM_MAX_BLOCKS;
     if (blocks == 0UL) blocks = 1UL;
     unsafe {
         return hipModuleLaunchKernel(g_rocm_fn[kernel], (unsigned int)blocks, 1U, 1U,
                                      ROCM_BLOCK, 1U, 1U, 0U, g_rocm_stream,
-                                     (void**)params, (void**)0) == ROCM_HIP_OK;
+                                     params, (HipKernelArg_**)0) == ROCM_HIP_OK;
     }
 }
 
@@ -1857,13 +1812,13 @@ static int rocm_binary_(int kernel, struct RocmBuf a, struct RocmBuf b, struct R
     if (!rocm_ensure_() || !rocm_fits_(a, n) || !rocm_fits_(b, n) || !rocm_fits_(out, n) ||
         n > 4294967295UL) return 0;
     unsafe {
-        void* pa = (void*)a.dev;
-        void* pb = (void*)b.dev;
-        void* po = (void*)out.dev;
+        HipDevPtr_* pa = (HipDevPtr_*)a.dev;
+        HipDevPtr_* pb = (HipDevPtr_*)b.dev;
+        HipDevPtr_* po = (HipDevPtr_*)out.dev;
         unsigned int nn = (unsigned int)n;
-        void* params[4];
-        params[0] = (void*)&pa; params[1] = (void*)&pb; params[2] = (void*)&po; params[3] = (void*)&nn;
-        return rocm_launch_(kernel, n, (&void)&params[0]);
+        HipKernelArg_* params[4];
+        params[0] = (HipKernelArg_*)&pa; params[1] = (HipKernelArg_*)&pb; params[2] = (HipKernelArg_*)&po; params[3] = (HipKernelArg_*)&nn;
+        return rocm_launch_(kernel, n, &params[0]);
     }
 }
 
@@ -1871,13 +1826,13 @@ static int rocm_unary_(int kernel, struct RocmBuf a, float k, struct RocmBuf out
     unsigned long n = out.len;
     if (!rocm_ensure_() || !rocm_fits_(a, n) || !rocm_fits_(out, n) || n > 4294967295UL) return 0;
     unsafe {
-        void* pa = (void*)a.dev;
-        void* po = (void*)out.dev;
+        HipDevPtr_* pa = (HipDevPtr_*)a.dev;
+        HipDevPtr_* po = (HipDevPtr_*)out.dev;
         unsigned int nn = (unsigned int)n;
         float kk = k;
-        void* params[4];
-        params[0] = (void*)&pa; params[1] = (void*)&po; params[2] = (void*)&nn; params[3] = (void*)&kk;
-        return rocm_launch_(kernel, n, (&void)&params[0]);
+        HipKernelArg_* params[4];
+        params[0] = (HipKernelArg_*)&pa; params[1] = (HipKernelArg_*)&po; params[2] = (HipKernelArg_*)&nn; params[3] = (HipKernelArg_*)&kk;
+        return rocm_launch_(kernel, n, &params[0]);
     }
 }
 
@@ -1915,9 +1870,9 @@ static int rocm_gemm_ex_call_(int opA, int opB, int m, int n, int k,
     float one = 1.0f;
     float zero = 0.0f;
     unsafe {
-        return rocblas_gemm_ex(g_rocm_blas, opA, opB, m, n, k, (const void*)&one,
-                               (const void*)a, aType, lda, (const void*)b, aType, ldb,
-                               (const void*)&zero, (const void*)c, cType, ldc, (void*)c, cType, ldc,
+        return rocblas_gemm_ex(g_rocm_blas, opA, opB, m, n, k, (const float*)&one,
+                               (const HipDevPtr_*)a, aType, lda, (const HipDevPtr_*)b, aType, ldb,
+                               (const float*)&zero, (const HipDevPtr_*)c, cType, ldc, (HipDevPtr_*)c, cType, ldc,
                                ROCM_BLAS_F32, sol == 0 ? ROCM_BLAS_ALGO_STANDARD : ROCM_BLAS_ALGO_INDEX,
                                sol, 0U) == 0;
     }
@@ -1959,9 +1914,9 @@ static int rocm_gemm_ex_(int opA, int opB, int m, int n, int k,
     float one = 1.0f;
     float zero = 0.0f;
     unsafe {
-        if (rocblas_gemm_ex_get_solutions(g_rocm_blas, opA, opB, m, n, k, (const void*)&one,
-                                          (const void*)a, aType, lda, (const void*)b, aType, ldb,
-                                          (const void*)&zero, (const void*)c, cType, ldc, (void*)c, cType, ldc,
+        if (rocblas_gemm_ex_get_solutions(g_rocm_blas, opA, opB, m, n, k, (const float*)&one,
+                                          (const HipDevPtr_*)a, aType, lda, (const HipDevPtr_*)b, aType, ldb,
+                                          (const float*)&zero, (const HipDevPtr_*)c, cType, ldc, (HipDevPtr_*)c, cType, ldc,
                                           ROCM_BLAS_F32, ROCM_BLAS_ALGO_INDEX, 0U,
                                           &g_gplan_list[0], &count) != 0) count = 0;
     }
@@ -2023,15 +1978,15 @@ int rocm_rmsnorm(struct RocmBuf x, struct RocmBuf w, struct RocmBuf y, unsigned 
     if (!rocm_fits_(x, rows * n) || !rocm_fits_(y, rows * n)) return 0;
     if (w.dev != 0UL && w.len < n) return 0;
     unsafe {
-        void* px = (void*)x.dev;
-        void* pw = (void*)w.dev;
-        void* py = (void*)y.dev;
+        HipDevPtr_* px = (HipDevPtr_*)x.dev;
+        HipDevPtr_* pw = (HipDevPtr_*)w.dev;
+        HipDevPtr_* py = (HipDevPtr_*)y.dev;
         unsigned int nn = (unsigned int)n;
         float e = eps;
-        void* params[5];
-        params[0] = (void*)&px; params[1] = (void*)&pw; params[2] = (void*)&py; params[3] = (void*)&nn; params[4] = (void*)&e;
+        HipKernelArg_* params[5];
+        params[0] = (HipKernelArg_*)&px; params[1] = (HipKernelArg_*)&pw; params[2] = (HipKernelArg_*)&py; params[3] = (HipKernelArg_*)&nn; params[4] = (HipKernelArg_*)&e;
         return hipModuleLaunchKernel(g_rocm_fn[K_RMSNORM], (unsigned int)rows, 1U, 1U, ROCM_BLOCK, 1U, 1U, 0U,
-                                     g_rocm_stream, &params[0], (void**)0) == ROCM_HIP_OK;
+                                     g_rocm_stream, &params[0], (HipKernelArg_**)0) == ROCM_HIP_OK;
     }
 }
 
@@ -2049,7 +2004,7 @@ struct RocmHalfBuf RocmHalfBuf::alloc(unsigned long n, int dtype) {
     b.dtype = dtype;
     if (n == 0UL || !rocm_half_dtype_ok_(dtype) || !rocm_ensure_()) return b;
     unsafe {
-        void* p = (void*)0;
+        HipDevPtr_* p = (HipDevPtr_*)0;
         if (hipMalloc(&p, checked_mul_size(n, 2UL)) != ROCM_HIP_OK) return b;
         b.dev = (unsigned long)p;
     }
@@ -2058,7 +2013,7 @@ struct RocmHalfBuf RocmHalfBuf::alloc(unsigned long n, int dtype) {
 }
 
 void RocmHalfBuf::free() {
-    if (self.dev != 0UL) { unsafe { hipFree((void*)self.dev); } }
+    if (self.dev != 0UL) { unsafe { hipFree((HipDevPtr_*)self.dev); } }
     self.dev = 0UL;
     self.len = 0UL;
 }
@@ -2066,7 +2021,7 @@ void RocmHalfBuf::free() {
 int rocm_half_write_n_(struct RocmHalfBuf dst, const &unsigned short bits, unsigned long n) {
     if (dst.dev == 0UL || n > dst.len || !rocm_ensure_()) return 0;
     unsafe {
-        return hipMemcpyAsync((void*)dst.dev, (const void*)bits, n * 2UL, ROCM_H2D, g_rocm_stream) == ROCM_HIP_OK;
+        return hipMemcpyAsync((unsigned char*)dst.dev, (const unsigned char*)bits, n * 2UL, ROCM_H2D, g_rocm_stream) == ROCM_HIP_OK;
     }
 }
 
@@ -2081,7 +2036,7 @@ int rocm_half_write(struct RocmHalfBuf dst, []const unsigned short bits_s) {
 int rocm_half_read_n_(struct RocmHalfBuf src, &unsigned short bits, unsigned long n) {
     if (src.dev == 0UL || n > src.len || !rocm_ensure_()) return 0;
     unsafe {
-        if (hipMemcpyAsync((void*)bits, (const void*)src.dev, n * 2UL, ROCM_D2H, g_rocm_stream) != ROCM_HIP_OK)
+        if (hipMemcpyAsync((unsigned char*)bits, (const unsigned char*)src.dev, n * 2UL, ROCM_D2H, g_rocm_stream) != ROCM_HIP_OK)
             return 0;
         return hipStreamSynchronize(g_rocm_stream) == ROCM_HIP_OK;
     }
@@ -2098,13 +2053,13 @@ int rocm_half_read(struct RocmHalfBuf src, []unsigned short bits_s) {
 static int rocm_convert_(int kernel, unsigned long a, unsigned long o, unsigned long n, int bf) {
     if (n == 0UL || n > 4294967295UL) return 0;
     unsafe {
-        void* pa = (void*)a;
-        void* po = (void*)o;
+        HipDevPtr_* pa = (HipDevPtr_*)a;
+        HipDevPtr_* po = (HipDevPtr_*)o;
         unsigned int nn = (unsigned int)n;
         int b = bf;
-        void* params[4];
-        params[0] = (void*)&pa; params[1] = (void*)&po; params[2] = (void*)&nn; params[3] = (void*)&b;
-        return rocm_launch_(kernel, n, (&void)&params[0]);
+        HipKernelArg_* params[4];
+        params[0] = (HipKernelArg_*)&pa; params[1] = (HipKernelArg_*)&po; params[2] = (HipKernelArg_*)&nn; params[3] = (HipKernelArg_*)&b;
+        return rocm_launch_(kernel, n, &params[0]);
     }
 }
 
@@ -2170,15 +2125,15 @@ int rocm_half_sgd(struct RocmHalfBuf w, struct RocmHalfBuf g, float lr) {
     if (!rocm_ensure_() || !rocm_half_fits_(w, n) || !rocm_half_fits_(g, n) || w.dtype != g.dtype ||
         n > 4294967295UL) return 0;
     unsafe {
-        void* pw = (void*)w.dev;
-        void* pg = (void*)g.dev;
+        HipDevPtr_* pw = (HipDevPtr_*)w.dev;
+        HipDevPtr_* pg = (HipDevPtr_*)g.dev;
         float l = lr;
         unsigned int nn = (unsigned int)n;
         int bf = w.dtype == ROCM_BF16 ? 1 : 0;
-        void* params[5];
-        params[0] = (void*)&pw; params[1] = (void*)&pg; params[2] = (void*)&l; params[3] = (void*)&nn;
-        params[4] = (void*)&bf;
-        return rocm_launch_(K_HALF_SGD, n, (&void)&params[0]);
+        HipKernelArg_* params[5];
+        params[0] = (HipKernelArg_*)&pw; params[1] = (HipKernelArg_*)&pg; params[2] = (HipKernelArg_*)&l; params[3] = (HipKernelArg_*)&nn;
+        params[4] = (HipKernelArg_*)&bf;
+        return rocm_launch_(K_HALF_SGD, n, &params[0]);
     }
 }
 
@@ -2187,13 +2142,13 @@ int rocm_half_relu(struct RocmHalfBuf a, struct RocmHalfBuf out) {
     if (!rocm_ensure_() || !rocm_half_fits_(a, n) || !rocm_half_fits_(out, n) || a.dtype != out.dtype ||
         n > 4294967295UL) return 0;
     unsafe {
-        void* pa = (void*)a.dev;
-        void* po = (void*)out.dev;
+        HipDevPtr_* pa = (HipDevPtr_*)a.dev;
+        HipDevPtr_* po = (HipDevPtr_*)out.dev;
         unsigned int nn = (unsigned int)n;
         int bf = a.dtype == ROCM_BF16 ? 1 : 0;
-        void* params[4];
-        params[0] = (void*)&pa; params[1] = (void*)&po; params[2] = (void*)&nn; params[3] = (void*)&bf;
-        return rocm_launch_(K_HALF_RELU, n, (&void)&params[0]);
+        HipKernelArg_* params[4];
+        params[0] = (HipKernelArg_*)&pa; params[1] = (HipKernelArg_*)&po; params[2] = (HipKernelArg_*)&nn; params[3] = (HipKernelArg_*)&bf;
+        return rocm_launch_(K_HALF_RELU, n, &params[0]);
     }
 }
 
@@ -2201,17 +2156,17 @@ int rocm_half_gemv(struct RocmHalfBuf w, struct RocmBuf x, struct RocmBuf y, uns
     if (!rocm_ensure_() || n == 0UL || k == 0UL || n > 2147483647UL || k > 4294967295UL) return 0;
     if (!rocm_half_fits_(w, n * k) || !rocm_fits_(x, k) || !rocm_fits_(y, n)) return 0;
     unsafe {
-        void* pw = (void*)w.dev;
-        void* px = (void*)x.dev;
-        void* py = (void*)y.dev;
+        HipDevPtr_* pw = (HipDevPtr_*)w.dev;
+        HipDevPtr_* px = (HipDevPtr_*)x.dev;
+        HipDevPtr_* py = (HipDevPtr_*)y.dev;
         unsigned int nn = (unsigned int)n;
         unsigned int kk = (unsigned int)k;
         int bf = w.dtype == ROCM_BF16 ? 1 : 0;
-        void* params[6];
-        params[0] = (void*)&pw; params[1] = (void*)&px; params[2] = (void*)&py; params[3] = (void*)&nn;
-        params[4] = (void*)&kk; params[5] = (void*)&bf;
+        HipKernelArg_* params[6];
+        params[0] = (HipKernelArg_*)&pw; params[1] = (HipKernelArg_*)&px; params[2] = (HipKernelArg_*)&py; params[3] = (HipKernelArg_*)&nn;
+        params[4] = (HipKernelArg_*)&kk; params[5] = (HipKernelArg_*)&bf;
         return hipModuleLaunchKernel(g_rocm_fn[K_GEMV_HALF], (unsigned int)((n + 3UL) / 4UL), 1U, 1U, ROCM_BLOCK, 1U, 1U, 0U,
-                                     g_rocm_stream, &params[0], (void**)0) == ROCM_HIP_OK;
+                                     g_rocm_stream, &params[0], (HipKernelArg_**)0) == ROCM_HIP_OK;
     }
 }
 
@@ -2229,15 +2184,15 @@ int rocm_half_relu_grad(struct RocmHalfBuf z, struct RocmHalfBuf g, struct RocmH
     if (!rocm_ensure_() || !rocm_half_fits_(z, n) || !rocm_half_fits_(g, n) || !rocm_half_fits_(out, n) ||
         z.dtype != g.dtype || z.dtype != out.dtype || n > 4294967295UL) return 0;
     unsafe {
-        void* pz = (void*)z.dev;
-        void* pg = (void*)g.dev;
-        void* po = (void*)out.dev;
+        HipDevPtr_* pz = (HipDevPtr_*)z.dev;
+        HipDevPtr_* pg = (HipDevPtr_*)g.dev;
+        HipDevPtr_* po = (HipDevPtr_*)out.dev;
         unsigned int nn = (unsigned int)n;
         int bf = z.dtype == ROCM_BF16 ? 1 : 0;
-        void* params[5];
-        params[0] = (void*)&pz; params[1] = (void*)&pg; params[2] = (void*)&po; params[3] = (void*)&nn;
-        params[4] = (void*)&bf;
-        return rocm_launch_(K_HALF_RELUG, n, (&void)&params[0]);
+        HipKernelArg_* params[5];
+        params[0] = (HipKernelArg_*)&pz; params[1] = (HipKernelArg_*)&pg; params[2] = (HipKernelArg_*)&po; params[3] = (HipKernelArg_*)&nn;
+        params[4] = (HipKernelArg_*)&bf;
+        return rocm_launch_(K_HALF_RELUG, n, &params[0]);
     }
 }
 
@@ -2246,17 +2201,17 @@ int rocm_half_mse_grad(struct RocmHalfBuf y, struct RocmHalfBuf t, struct RocmHa
     if (!rocm_ensure_() || !rocm_half_fits_(y, n) || !rocm_half_fits_(t, n) || !rocm_half_fits_(dy, n) ||
         y.dtype != t.dtype || y.dtype != dy.dtype || !rocm_fits_(loss1, 1UL) || n > 4294967295UL) return 0;
     unsafe {
-        if (hipMemsetAsync((void*)loss1.dev, 0, sizeof(float), g_rocm_stream) != ROCM_HIP_OK) return 0;
-        void* py = (void*)y.dev;
-        void* pt = (void*)t.dev;
-        void* pd = (void*)dy.dev;
-        void* pl = (void*)loss1.dev;
+        if (hipMemsetAsync((HipDevPtr_*)loss1.dev, 0, sizeof(float), g_rocm_stream) != ROCM_HIP_OK) return 0;
+        HipDevPtr_* py = (HipDevPtr_*)y.dev;
+        HipDevPtr_* pt = (HipDevPtr_*)t.dev;
+        HipDevPtr_* pd = (HipDevPtr_*)dy.dev;
+        HipDevPtr_* pl = (HipDevPtr_*)loss1.dev;
         unsigned int nn = (unsigned int)n;
         int bf = y.dtype == ROCM_BF16 ? 1 : 0;
-        void* params[6];
-        params[0] = (void*)&py; params[1] = (void*)&pt; params[2] = (void*)&pd;
-        params[3] = (void*)&pl; params[4] = (void*)&nn; params[5] = (void*)&bf;
-        return rocm_launch_(K_HALF_MSE, n, (&void)&params[0]);
+        HipKernelArg_* params[6];
+        params[0] = (HipKernelArg_*)&py; params[1] = (HipKernelArg_*)&pt; params[2] = (HipKernelArg_*)&pd;
+        params[3] = (HipKernelArg_*)&pl; params[4] = (HipKernelArg_*)&nn; params[5] = (HipKernelArg_*)&bf;
+        return rocm_launch_(K_HALF_MSE, n, &params[0]);
     }
 }
 
@@ -2268,19 +2223,19 @@ int rocm_half_sgd2(struct RocmHalfBuf w1, struct RocmHalfBuf g1, struct RocmHalf
         !rocm_half_fits_(g2, n2) || w1.dtype != g1.dtype || w1.dtype != w2.dtype || w1.dtype != g2.dtype ||
         n1 + n2 > 4294967295UL) return 0;
     unsafe {
-        void* pw1 = (void*)w1.dev;
-        void* pg1 = (void*)g1.dev;
-        void* pw2 = (void*)w2.dev;
-        void* pg2 = (void*)g2.dev;
+        HipDevPtr_* pw1 = (HipDevPtr_*)w1.dev;
+        HipDevPtr_* pg1 = (HipDevPtr_*)g1.dev;
+        HipDevPtr_* pw2 = (HipDevPtr_*)w2.dev;
+        HipDevPtr_* pg2 = (HipDevPtr_*)g2.dev;
         unsigned int nn1 = (unsigned int)n1;
         unsigned int nn2 = (unsigned int)n2;
         float rate = lr;
         int bf = w1.dtype == ROCM_BF16 ? 1 : 0;
-        void* params[8];
-        params[0] = (void*)&pw1; params[1] = (void*)&pg1; params[2] = (void*)&nn1;
-        params[3] = (void*)&pw2; params[4] = (void*)&pg2; params[5] = (void*)&nn2;
-        params[6] = (void*)&rate; params[7] = (void*)&bf;
-        return rocm_launch_(K_HALF_SGD2, n1 + n2, (&void)&params[0]);
+        HipKernelArg_* params[8];
+        params[0] = (HipKernelArg_*)&pw1; params[1] = (HipKernelArg_*)&pg1; params[2] = (HipKernelArg_*)&nn1;
+        params[3] = (HipKernelArg_*)&pw2; params[4] = (HipKernelArg_*)&pg2; params[5] = (HipKernelArg_*)&nn2;
+        params[6] = (HipKernelArg_*)&rate; params[7] = (HipKernelArg_*)&bf;
+        return rocm_launch_(K_HALF_SGD2, n1 + n2, &params[0]);
     }
 }
 
@@ -2290,16 +2245,16 @@ int rocm_concat(struct RocmBuf a, unsigned long na, struct RocmBuf c, unsigned l
     if (!rocm_ensure_() || batch == 0UL || na == 0UL || nc == 0UL || total > 4294967295UL ||
         !rocm_fits_(a, batch * na) || !rocm_fits_(c, batch * nc) || !rocm_fits_(out, total)) return 0;
     unsafe {
-        void* pa = (void*)a.dev;
-        void* pc = (void*)c.dev;
-        void* po = (void*)out.dev;
+        HipDevPtr_* pa = (HipDevPtr_*)a.dev;
+        HipDevPtr_* pc = (HipDevPtr_*)c.dev;
+        HipDevPtr_* po = (HipDevPtr_*)out.dev;
         unsigned int nb = (unsigned int)batch;
         unsigned int n1 = (unsigned int)na;
         unsigned int n2 = (unsigned int)nc;
-        void* params[6];
-        params[0] = (void*)&pa; params[1] = (void*)&pc; params[2] = (void*)&po;
-        params[3] = (void*)&nb; params[4] = (void*)&n1; params[5] = (void*)&n2;
-        return rocm_launch_(K_CONCAT, total, (&void)&params[0]);
+        HipKernelArg_* params[6];
+        params[0] = (HipKernelArg_*)&pa; params[1] = (HipKernelArg_*)&pc; params[2] = (HipKernelArg_*)&po;
+        params[3] = (HipKernelArg_*)&nb; params[4] = (HipKernelArg_*)&n1; params[5] = (HipKernelArg_*)&n2;
+        return rocm_launch_(K_CONCAT, total, &params[0]);
     }
 }
 
@@ -2312,18 +2267,18 @@ int rocm_upsample2x_concat(struct RocmBuf x, unsigned long xChannels, struct Roc
         !rocm_fits_(x, batch * xChannels * h * w) || !rocm_fits_(skip, batch * skipChannels * plane) ||
         !rocm_fits_(out, total)) return 0;
     unsafe {
-        void* px = (void*)x.dev;
-        void* ps = (void*)skip.dev;
-        void* po = (void*)out.dev;
+        HipDevPtr_* px = (HipDevPtr_*)x.dev;
+        HipDevPtr_* ps = (HipDevPtr_*)skip.dev;
+        HipDevPtr_* po = (HipDevPtr_*)out.dev;
         unsigned int nb = (unsigned int)batch;
         unsigned int ncx = (unsigned int)xChannels;
         unsigned int ncs = (unsigned int)skipChannels;
         unsigned int nh = (unsigned int)h;
         unsigned int nw = (unsigned int)w;
-        void* params[8];
-        params[0] = (void*)&px; params[1] = (void*)&ps; params[2] = (void*)&po; params[3] = (void*)&nb;
-        params[4] = (void*)&ncx; params[5] = (void*)&ncs; params[6] = (void*)&nh; params[7] = (void*)&nw;
-        return rocm_launch_(K_UPCAT, total, (&void)&params[0]);
+        HipKernelArg_* params[8];
+        params[0] = (HipKernelArg_*)&px; params[1] = (HipKernelArg_*)&ps; params[2] = (HipKernelArg_*)&po; params[3] = (HipKernelArg_*)&nb;
+        params[4] = (HipKernelArg_*)&ncx; params[5] = (HipKernelArg_*)&ncs; params[6] = (HipKernelArg_*)&nh; params[7] = (HipKernelArg_*)&nw;
+        return rocm_launch_(K_UPCAT, total, &params[0]);
     }
 }
 
@@ -2333,15 +2288,15 @@ int rocm_upsample2x_nearest(struct RocmBuf in, struct RocmBuf out,
     if (!rocm_ensure_() || total == 0UL || total > 4294967295UL ||
         !rocm_fits_(in, planes * h * w) || !rocm_fits_(out, total)) return 0;
     unsafe {
-        void* px = (void*)in.dev;
-        void* py = (void*)out.dev;
+        HipDevPtr_* px = (HipDevPtr_*)in.dev;
+        HipDevPtr_* py = (HipDevPtr_*)out.dev;
         unsigned int np = (unsigned int)planes;
         unsigned int nh = (unsigned int)h;
         unsigned int nw = (unsigned int)w;
-        void* params[5];
-        params[0] = (void*)&px; params[1] = (void*)&py; params[2] = (void*)&np;
-        params[3] = (void*)&nh; params[4] = (void*)&nw;
-        return rocm_launch_(K_UPSAMPLE2X, total, (&void)&params[0]);
+        HipKernelArg_* params[5];
+        params[0] = (HipKernelArg_*)&px; params[1] = (HipKernelArg_*)&py; params[2] = (HipKernelArg_*)&np;
+        params[3] = (HipKernelArg_*)&nh; params[4] = (HipKernelArg_*)&nw;
+        return rocm_launch_(K_UPSAMPLE2X, total, &params[0]);
     }
 }
 
@@ -2351,16 +2306,16 @@ int rocm_bias_channels(struct RocmBuf y, struct RocmBuf bias, unsigned long batc
     if (!rocm_ensure_() || total == 0UL || total > 4294967295UL ||
         !rocm_fits_(y, total) || !rocm_fits_(bias, channels)) return 0;
     unsafe {
-        void* py = (void*)y.dev;
-        void* pb = (void*)bias.dev;
+        HipDevPtr_* py = (HipDevPtr_*)y.dev;
+        HipDevPtr_* pb = (HipDevPtr_*)bias.dev;
         unsigned int nt = (unsigned int)total;
         unsigned int npl = (unsigned int)plane;
         unsigned int nc = (unsigned int)channels;
         int r = relu ? 1 : 0;
-        void* params[6];
-        params[0] = (void*)&py; params[1] = (void*)&pb; params[2] = (void*)&nt;
-        params[3] = (void*)&npl; params[4] = (void*)&nc; params[5] = (void*)&r;
-        return rocm_launch_(K_BIAS_ACT, total, (&void)&params[0]);
+        HipKernelArg_* params[6];
+        params[0] = (HipKernelArg_*)&py; params[1] = (HipKernelArg_*)&pb; params[2] = (HipKernelArg_*)&nt;
+        params[3] = (HipKernelArg_*)&npl; params[4] = (HipKernelArg_*)&nc; params[5] = (HipKernelArg_*)&r;
+        return rocm_launch_(K_BIAS_ACT, total, &params[0]);
     }
 }
 
@@ -2368,13 +2323,13 @@ int rocm_sgd(struct RocmBuf w, struct RocmBuf g, float lr) {
     unsigned long n = w.len;
     if (!rocm_ensure_() || !rocm_fits_(w, n) || !rocm_fits_(g, n) || n > 4294967295UL) return 0;
     unsafe {
-        void* pw = (void*)w.dev;
-        void* pg = (void*)g.dev;
+        HipDevPtr_* pw = (HipDevPtr_*)w.dev;
+        HipDevPtr_* pg = (HipDevPtr_*)g.dev;
         float rate = lr;
         unsigned int nn = (unsigned int)n;
-        void* params[4];
-        params[0] = (void*)&pw; params[1] = (void*)&pg; params[2] = (void*)&rate; params[3] = (void*)&nn;
-        return rocm_launch_(K_SGD, n, (&void)&params[0]);
+        HipKernelArg_* params[4];
+        params[0] = (HipKernelArg_*)&pw; params[1] = (HipKernelArg_*)&pg; params[2] = (HipKernelArg_*)&rate; params[3] = (HipKernelArg_*)&nn;
+        return rocm_launch_(K_SGD, n, &params[0]);
     }
 }
 
@@ -2382,13 +2337,13 @@ int rocm_sum(struct RocmBuf a, struct RocmBuf out1) {
     unsigned long n = a.len;
     if (!rocm_ensure_() || !rocm_fits_(a, n) || !rocm_fits_(out1, 1UL) || n > 4294967295UL) return 0;
     unsafe {
-        if (hipMemsetAsync((void*)out1.dev, 0, sizeof(float), g_rocm_stream) != ROCM_HIP_OK) return 0;
-        void* pa = (void*)a.dev;
-        void* po = (void*)out1.dev;
+        if (hipMemsetAsync((HipDevPtr_*)out1.dev, 0, sizeof(float), g_rocm_stream) != ROCM_HIP_OK) return 0;
+        HipDevPtr_* pa = (HipDevPtr_*)a.dev;
+        HipDevPtr_* po = (HipDevPtr_*)out1.dev;
         unsigned int nn = (unsigned int)n;
-        void* params[3];
-        params[0] = (void*)&pa; params[1] = (void*)&po; params[2] = (void*)&nn;
-        return rocm_launch_(K_SUM, n, (&void)&params[0]);
+        HipKernelArg_* params[3];
+        params[0] = (HipKernelArg_*)&pa; params[1] = (HipKernelArg_*)&po; params[2] = (HipKernelArg_*)&nn;
+        return rocm_launch_(K_SUM, n, &params[0]);
     }
 }
 
@@ -2397,16 +2352,16 @@ int rocm_mse_grad(struct RocmBuf y, struct RocmBuf t, struct RocmBuf dy, struct 
     if (!rocm_ensure_() || !rocm_fits_(t, n) || !rocm_fits_(dy, n) || !rocm_fits_(loss1, 1UL) ||
         n > 4294967295UL) return 0;
     unsafe {
-        if (hipMemsetAsync((void*)loss1.dev, 0, sizeof(float), g_rocm_stream) != ROCM_HIP_OK) return 0;
-        void* py = (void*)y.dev;
-        void* pt = (void*)t.dev;
-        void* pd = (void*)dy.dev;
-        void* pl = (void*)loss1.dev;
+        if (hipMemsetAsync((HipDevPtr_*)loss1.dev, 0, sizeof(float), g_rocm_stream) != ROCM_HIP_OK) return 0;
+        HipDevPtr_* py = (HipDevPtr_*)y.dev;
+        HipDevPtr_* pt = (HipDevPtr_*)t.dev;
+        HipDevPtr_* pd = (HipDevPtr_*)dy.dev;
+        HipDevPtr_* pl = (HipDevPtr_*)loss1.dev;
         unsigned int nn = (unsigned int)n;
-        void* params[5];
-        params[0] = (void*)&py; params[1] = (void*)&pt; params[2] = (void*)&pd;
-        params[3] = (void*)&pl; params[4] = (void*)&nn;
-        return rocm_launch_(K_MSE, n, (&void)&params[0]);
+        HipKernelArg_* params[5];
+        params[0] = (HipKernelArg_*)&py; params[1] = (HipKernelArg_*)&pt; params[2] = (HipKernelArg_*)&pd;
+        params[3] = (HipKernelArg_*)&pl; params[4] = (HipKernelArg_*)&nn;
+        return rocm_launch_(K_MSE, n, &params[0]);
     }
 }
 
@@ -2426,11 +2381,11 @@ struct RocmGraph rocm_capture_end() {
     g.exec = 0UL;
     if (!rocm_ensure_()) return g;
     unsafe {
-        void* graph = (void*)0;
+        HipGraph_* graph = null;
         g_rocm_capturing = 0;
         if (hipStreamEndCapture(g_rocm_stream, &graph) != ROCM_HIP_OK) return g;
-        void* exec = (void*)0;
-        int ok = hipGraphInstantiate(&exec, graph, (void*)0, (char*)0, 0UL) == ROCM_HIP_OK;
+        HipGraphExec_* exec = null;
+        int ok = hipGraphInstantiate(&exec, graph, null, (char*)0, 0UL) == ROCM_HIP_OK;
         hipGraphDestroy(graph);
         if (ok) g.exec = (unsigned long)exec;
     }
@@ -2439,11 +2394,11 @@ struct RocmGraph rocm_capture_end() {
 
 int rocm_graph_launch(struct RocmGraph g) {
     if (g.exec == 0UL || !rocm_ensure_()) return 0;
-    unsafe { return hipGraphLaunch((void*)g.exec, g_rocm_stream) == ROCM_HIP_OK; }
+    unsafe { return hipGraphLaunch((HipGraphExec_*)g.exec, g_rocm_stream) == ROCM_HIP_OK; }
 }
 
 void RocmGraph::free() {
-    if (self.exec != 0UL) { unsafe { hipGraphExecDestroy((void*)self.exec); } }
+    if (self.exec != 0UL) { unsafe { hipGraphExecDestroy((HipGraphExec_*)self.exec); } }
     self.exec = 0UL;
 }
 
@@ -2636,16 +2591,16 @@ int rocm_sum_f32([]const float a_s, &float out1) {
 
 // ── Attention ────────────────────────────────────────────────────────────────
 
-static int rocm_launch_grid3_(int kernel, unsigned long gx, unsigned long gy, unsigned long gz, &void params) {
+static int rocm_launch_grid3_(int kernel, unsigned long gx, unsigned long gy, unsigned long gz, HipKernelArg_** params) {
     if (gx == 0UL || gy == 0UL || gz == 0UL || gx > 2147483647UL || gy > 65535UL || gz > 65535UL) return 0;
     unsafe {
         return hipModuleLaunchKernel(g_rocm_fn[kernel], (unsigned int)gx, (unsigned int)gy, (unsigned int)gz,
                                      ROCM_BLOCK, 1U, 1U, 0U, g_rocm_stream,
-                                     (void**)params, (void**)0) == ROCM_HIP_OK;
+                                     params, (HipKernelArg_**)0) == ROCM_HIP_OK;
     }
 }
 
-static int rocm_launch_grid_(int kernel, unsigned long gx, unsigned long gy, &void params) {
+static int rocm_launch_grid_(int kernel, unsigned long gx, unsigned long gy, HipKernelArg_** params) {
     return rocm_launch_grid3_(kernel, gx, gy, 1UL, params);
 }
 
@@ -2663,26 +2618,26 @@ int rocm_flash_attention(struct RocmBuf q, struct RocmBuf k, struct RocmBuf v, s
     if (!rocm_ensure_() || !rocm_attn_shape_ok_(q, k, v, out, heads, seqLen, kvLen, headDim)) return 0;
     if (causal && kvLen < seqLen) return 0;
     unsafe {
-        void* pq = (void*)q.dev;
-        void* pk = (void*)k.dev;
-        void* pv = (void*)v.dev;
-        void* po = (void*)out.dev;
+        HipDevPtr_* pq = (HipDevPtr_*)q.dev;
+        HipDevPtr_* pk = (HipDevPtr_*)k.dev;
+        HipDevPtr_* pv = (HipDevPtr_*)v.dev;
+        HipDevPtr_* po = (HipDevPtr_*)out.dev;
         unsigned int s = (unsigned int)seqLen;
         unsigned int kn = (unsigned int)kvLen;
         unsigned int d = (unsigned int)headDim;
         float sc = scale > 0.0f ? scale : (float)(1.0 / sqrt_d((double)headDim));
         int ca = causal ? 1 : 0;
-        void* params[9];
-        params[0] = (void*)&pq; params[1] = (void*)&pk; params[2] = (void*)&pv; params[3] = (void*)&po;
-        params[4] = (void*)&s; params[5] = (void*)&kn; params[6] = (void*)&d; params[7] = (void*)&sc;
-        params[8] = (void*)&ca;
+        HipKernelArg_* params[9];
+        params[0] = (HipKernelArg_*)&pq; params[1] = (HipKernelArg_*)&pk; params[2] = (HipKernelArg_*)&pv; params[3] = (HipKernelArg_*)&po;
+        params[4] = (HipKernelArg_*)&s; params[5] = (HipKernelArg_*)&kn; params[6] = (HipKernelArg_*)&d; params[7] = (HipKernelArg_*)&sc;
+        params[8] = (HipKernelArg_*)&ca;
         if (g_rocm_mfma) {
             // matrix cores: grid (heads, query blocks of 128 / 64 rows)
-            if (headDim <= 64UL) return rocm_launch_grid_(K_FLASH_M64, heads, (seqLen + 127UL) / 128UL, (&void)&params[0]);
-            return rocm_launch_grid_(K_FLASH_M128, heads, (seqLen + 63UL) / 64UL, (&void)&params[0]);
+            if (headDim <= 64UL) return rocm_launch_grid_(K_FLASH_M64, heads, (seqLen + 127UL) / 128UL, &params[0]);
+            return rocm_launch_grid_(K_FLASH_M128, heads, (seqLen + 63UL) / 64UL, &params[0]);
         }
         return rocm_launch_grid_(headDim <= 64UL ? K_FLASH64 : K_FLASH128, (seqLen + 63UL) / 64UL, heads,
-                                 (&void)&params[0]);
+                                 &params[0]);
     }
 }
 
@@ -2719,21 +2674,21 @@ static int rocm_linear_attention_mfma_(struct RocmBuf q, struct RocmBuf k, struc
         unsigned long recs = heads * ncc * 2UL * rs;
         if (!rocm_lin_scratch_(recs + heads * ncc + 1UL)) return 0;
         unsafe {
-            void* pq = (void*)q.dev;
-            void* pk = (void*)k.dev;
-            void* pv = (void*)v.dev;
-            void* po = (void*)out.dev;
-            void* pr = (void*)g_rocm_lin_scratch.dev;
-            void* pf = (void*)(g_rocm_lin_scratch.dev + recs * 4UL);
+            HipDevPtr_* pq = (HipDevPtr_*)q.dev;
+            HipDevPtr_* pk = (HipDevPtr_*)k.dev;
+            HipDevPtr_* pv = (HipDevPtr_*)v.dev;
+            HipDevPtr_* po = (HipDevPtr_*)out.dev;
+            HipDevPtr_* pr = (HipDevPtr_*)g_rocm_lin_scratch.dev;
+            HipDevPtr_* pf = (HipDevPtr_*)(g_rocm_lin_scratch.dev + recs * 4UL);
             if (hipMemsetAsync(pf, 0, (heads * ncc + 1UL) * 4UL, g_rocm_stream) != ROCM_HIP_OK) return 0;
             unsigned int s = (unsigned int)seqLen;
             unsigned int hn = (unsigned int)heads;
             unsigned int d = (unsigned int)headDim;
             unsigned int nc = (unsigned int)ncc;
-            void* pc[10];
-            pc[0] = (void*)&pq; pc[1] = (void*)&pk; pc[2] = (void*)&pv; pc[3] = (void*)&pr; pc[4] = (void*)&pf;
-            pc[5] = (void*)&po; pc[6] = (void*)&s; pc[7] = (void*)&hn; pc[8] = (void*)&d; pc[9] = (void*)&nc;
-            return rocm_launch_grid_(K_LA_CAUSAL64, ncc * heads, 1UL, (&void)&pc[0]);
+            HipKernelArg_* pc[10];
+            pc[0] = (HipKernelArg_*)&pq; pc[1] = (HipKernelArg_*)&pk; pc[2] = (HipKernelArg_*)&pv; pc[3] = (HipKernelArg_*)&pr; pc[4] = (HipKernelArg_*)&pf;
+            pc[5] = (HipKernelArg_*)&po; pc[6] = (HipKernelArg_*)&s; pc[7] = (HipKernelArg_*)&hn; pc[8] = (HipKernelArg_*)&d; pc[9] = (HipKernelArg_*)&nc;
+            return rocm_launch_grid_(K_LA_CAUSAL64, ncc * heads, 1UL, &pc[0]);
         }
     }
     unsigned long rows = 128UL;
@@ -2742,34 +2697,34 @@ static int rocm_linear_attention_mfma_(struct RocmBuf q, struct RocmBuf k, struc
     if (!rocm_lin_scratch_(heads * nchunks * dm * (dm + 1UL))) return 0;
     int big = dm == 128UL;
     unsafe {
-        void* pq = (void*)q.dev;
-        void* pk = (void*)k.dev;
-        void* pv = (void*)v.dev;
-        void* po = (void*)out.dev;
-        void* pw = (void*)g_rocm_lin_scratch.dev;
-        void* pz = (void*)(g_rocm_lin_scratch.dev + heads * nchunks * dm * dm * 4UL);
+        HipDevPtr_* pq = (HipDevPtr_*)q.dev;
+        HipDevPtr_* pk = (HipDevPtr_*)k.dev;
+        HipDevPtr_* pv = (HipDevPtr_*)v.dev;
+        HipDevPtr_* po = (HipDevPtr_*)out.dev;
+        HipDevPtr_* pw = (HipDevPtr_*)g_rocm_lin_scratch.dev;
+        HipDevPtr_* pz = (HipDevPtr_*)(g_rocm_lin_scratch.dev + heads * nchunks * dm * dm * 4UL);
         unsigned int s = (unsigned int)seqLen;
         unsigned int kn = (unsigned int)kvLen;
         unsigned int d = (unsigned int)headDim;
         unsigned int rw = (unsigned int)rows;
         unsigned int nc = (unsigned int)nchunks;
         int ca = causal ? 1 : 0;
-        void* p1[8];
-        p1[0] = (void*)&pk; p1[1] = (void*)&pv; p1[2] = (void*)&pw; p1[3] = (void*)&pz; p1[4] = (void*)&kn;
-        p1[5] = (void*)&d; p1[6] = (void*)&rw; p1[7] = (void*)&nc;
-        if (!rocm_launch_grid_(big ? K_LA_STATE128 : K_LA_STATE64, nchunks, heads, (&void)&p1[0])) return 0;
+        HipKernelArg_* p1[8];
+        p1[0] = (HipKernelArg_*)&pk; p1[1] = (HipKernelArg_*)&pv; p1[2] = (HipKernelArg_*)&pw; p1[3] = (HipKernelArg_*)&pz; p1[4] = (HipKernelArg_*)&kn;
+        p1[5] = (HipKernelArg_*)&d; p1[6] = (HipKernelArg_*)&rw; p1[7] = (HipKernelArg_*)&nc;
+        if (!rocm_launch_grid_(big ? K_LA_STATE128 : K_LA_STATE64, nchunks, heads, &p1[0])) return 0;
         if (causal || nchunks > 1UL) {
-            void* p2[4];
-            p2[0] = (void*)&pw; p2[1] = (void*)&pz; p2[2] = (void*)&nc; p2[3] = (void*)&ca;
+            HipKernelArg_* p2[4];
+            p2[0] = (HipKernelArg_*)&pw; p2[1] = (HipKernelArg_*)&pz; p2[2] = (HipKernelArg_*)&nc; p2[3] = (HipKernelArg_*)&ca;
             if (!rocm_launch_grid_(big ? K_LA_SCAN128 : K_LA_SCAN64, (dm * dm + dm + 255UL) / 256UL, heads,
-                                   (&void)&p2[0])) return 0;
+                                   &p2[0])) return 0;
         }
-        void* p3[11];
-        p3[0] = (void*)&pq; p3[1] = (void*)&pk; p3[2] = (void*)&pv; p3[3] = (void*)&pw; p3[4] = (void*)&pz;
-        p3[5] = (void*)&po; p3[6] = (void*)&s; p3[7] = (void*)&kn; p3[8] = (void*)&d; p3[9] = (void*)&nc;
-        p3[10] = (void*)&ca;
+        HipKernelArg_* p3[11];
+        p3[0] = (HipKernelArg_*)&pq; p3[1] = (HipKernelArg_*)&pk; p3[2] = (HipKernelArg_*)&pv; p3[3] = (HipKernelArg_*)&pw; p3[4] = (HipKernelArg_*)&pz;
+        p3[5] = (HipKernelArg_*)&po; p3[6] = (HipKernelArg_*)&s; p3[7] = (HipKernelArg_*)&kn; p3[8] = (HipKernelArg_*)&d; p3[9] = (HipKernelArg_*)&nc;
+        p3[10] = (HipKernelArg_*)&ca;
         return rocm_launch_grid3_(big ? K_LA_OUT128 : K_LA_OUT64, (seqLen + 127UL) / 128UL, heads, dm / 64UL,
-                                  (&void)&p3[0]);
+                                  &p3[0]);
     }
 }
 
@@ -2782,28 +2737,28 @@ int rocm_linear_attention(struct RocmBuf q, struct RocmBuf k, struct RocmBuf v, 
     unsigned long nchunks = (kvLen + 31UL) / 32UL;
     if (!rocm_lin_scratch_(heads * nchunks * headDim * (headDim + 1UL))) return 0;
     unsafe {
-        void* pq = (void*)q.dev;
-        void* pk = (void*)k.dev;
-        void* pv = (void*)v.dev;
-        void* po = (void*)out.dev;
-        void* ps = (void*)g_rocm_lin_scratch.dev;
+        HipDevPtr_* pq = (HipDevPtr_*)q.dev;
+        HipDevPtr_* pk = (HipDevPtr_*)k.dev;
+        HipDevPtr_* pv = (HipDevPtr_*)v.dev;
+        HipDevPtr_* po = (HipDevPtr_*)out.dev;
+        HipDevPtr_* ps = (HipDevPtr_*)g_rocm_lin_scratch.dev;
         unsigned int s = (unsigned int)seqLen;
         unsigned int kn = (unsigned int)kvLen;
         unsigned int d = (unsigned int)headDim;
         unsigned int nc = (unsigned int)nchunks;
         int ca = causal ? 1 : 0;
-        void* p1[6];
-        p1[0] = (void*)&pk; p1[1] = (void*)&pv; p1[2] = (void*)&ps; p1[3] = (void*)&kn; p1[4] = (void*)&d;
-        p1[5] = (void*)&nc;
-        if (!rocm_launch_grid_(K_LIN_STATE, nchunks, heads, (&void)&p1[0])) return 0;
-        void* p2[4];
-        p2[0] = (void*)&ps; p2[1] = (void*)&d; p2[2] = (void*)&nc; p2[3] = (void*)&ca;
+        HipKernelArg_* p1[6];
+        p1[0] = (HipKernelArg_*)&pk; p1[1] = (HipKernelArg_*)&pv; p1[2] = (HipKernelArg_*)&ps; p1[3] = (HipKernelArg_*)&kn; p1[4] = (HipKernelArg_*)&d;
+        p1[5] = (HipKernelArg_*)&nc;
+        if (!rocm_launch_grid_(K_LIN_STATE, nchunks, heads, &p1[0])) return 0;
+        HipKernelArg_* p2[4];
+        p2[0] = (HipKernelArg_*)&ps; p2[1] = (HipKernelArg_*)&d; p2[2] = (HipKernelArg_*)&nc; p2[3] = (HipKernelArg_*)&ca;
         unsigned long elems = headDim * (headDim + 1UL);
-        if (!rocm_launch_grid_(K_LIN_PREFIX, (elems + 255UL) / 256UL, heads, (&void)&p2[0])) return 0;
-        void* p3[10];
-        p3[0] = (void*)&pq; p3[1] = (void*)&pk; p3[2] = (void*)&pv; p3[3] = (void*)&ps; p3[4] = (void*)&po;
-        p3[5] = (void*)&s; p3[6] = (void*)&kn; p3[7] = (void*)&d; p3[8] = (void*)&nc; p3[9] = (void*)&ca;
-        return rocm_launch_grid_(K_LIN_OUT, (seqLen + 31UL) / 32UL, heads, (&void)&p3[0]);
+        if (!rocm_launch_grid_(K_LIN_PREFIX, (elems + 255UL) / 256UL, heads, &p2[0])) return 0;
+        HipKernelArg_* p3[10];
+        p3[0] = (HipKernelArg_*)&pq; p3[1] = (HipKernelArg_*)&pk; p3[2] = (HipKernelArg_*)&pv; p3[3] = (HipKernelArg_*)&ps; p3[4] = (HipKernelArg_*)&po;
+        p3[5] = (HipKernelArg_*)&s; p3[6] = (HipKernelArg_*)&kn; p3[7] = (HipKernelArg_*)&d; p3[8] = (HipKernelArg_*)&nc; p3[9] = (HipKernelArg_*)&ca;
+        return rocm_launch_grid_(K_LIN_OUT, (seqLen + 31UL) / 32UL, heads, &p3[0]);
     }
 }
 
@@ -2850,19 +2805,19 @@ int rocm_matmul_f32_n_(const &float a, const &float b, &float out,
     int ok = da.dev != 0UL && db.dev != 0UL && dc.dev != 0UL;
     if (ok) {
         unsafe {
-            void* pa = (void*)da.dev;
-            void* pb = (void*)db.dev;
-            void* pc = (void*)dc.dev;
+            HipDevPtr_* pa = (HipDevPtr_*)da.dev;
+            HipDevPtr_* pb = (HipDevPtr_*)db.dev;
+            HipDevPtr_* pc = (HipDevPtr_*)dc.dev;
             int m = (int)M;
             int n = (int)N;
             int k = (int)K;
-            void* params[6];
-            params[0] = (void*)&pa; params[1] = (void*)&pb; params[2] = (void*)&pc;
-            params[3] = (void*)&m; params[4] = (void*)&n; params[5] = (void*)&k;
+            HipKernelArg_* params[6];
+            params[0] = (HipKernelArg_*)&pa; params[1] = (HipKernelArg_*)&pb; params[2] = (HipKernelArg_*)&pc;
+            params[3] = (HipKernelArg_*)&m; params[4] = (HipKernelArg_*)&n; params[5] = (HipKernelArg_*)&k;
             ok = hipModuleLaunchKernel(g_rocm_fn[K_SGEMM],
                                        (unsigned int)((N + 63UL) / 64UL), (unsigned int)((M + 63UL) / 64UL), 1U,
                                        ROCM_BLOCK, 1U, 1U, 0U, g_rocm_stream,
-                                       &params[0], (void**)0) == ROCM_HIP_OK;
+                                       &params[0], (HipKernelArg_**)0) == ROCM_HIP_OK;
         }
         ok = ok && rocm_read_n_(dc, out, M * N);
     }
@@ -2915,12 +2870,12 @@ int rocm_matmul_f32_blas([]const float a_s, []const float b_s, []float out_s, un
 
 // ── Mixed precision ──────────────────────────────────────────────────────────
 
-extern void* malloc(unsigned long size);
+extern unsigned char* malloc(unsigned long size);
 extern void  free(unsigned char* ptr);
 
 int rocm_zero(struct RocmBuf b) {
     if (!rocm_ensure_() || b.dev == 0UL) return 0;
-    unsafe { return hipMemsetAsync((void*)b.dev, 0, b.len * sizeof(float), g_rocm_stream) == ROCM_HIP_OK; }
+    unsafe { return hipMemsetAsync((HipDevPtr_*)b.dev, 0, b.len * sizeof(float), g_rocm_stream) == ROCM_HIP_OK; }
 }
 
 int rocm_half_convert(struct RocmHalfBuf src, struct RocmHalfBuf dst) {
@@ -2928,7 +2883,7 @@ int rocm_half_convert(struct RocmHalfBuf src, struct RocmHalfBuf dst) {
     if (!rocm_ensure_() || !rocm_half_fits_(src, n) || !rocm_half_fits_(dst, n) || n > 4294967295UL) return 0;
     if (src.dtype == dst.dtype) {
         unsafe {
-            return hipMemcpyAsync((void*)dst.dev, (const void*)src.dev, n * 2UL, ROCM_D2D, g_rocm_stream) == ROCM_HIP_OK;
+            return hipMemcpyAsync((unsigned char*)dst.dev, (const unsigned char*)src.dev, n * 2UL, ROCM_D2D, g_rocm_stream) == ROCM_HIP_OK;
         }
     }
     return rocm_convert_(K_HALF_CVT, src.dev, dst.dev, n, dst.dtype == ROCM_BF16);
@@ -2964,12 +2919,12 @@ static int rocm_cvt_many_(const unsigned long* src, const unsigned long* dst, co
             int m = mode;
             int b = bf;
             float sc = scale;
-            void* pf = (void*)flag;
-            void* params[5];
-            params[0] = (void*)&t; params[1] = (void*)&m; params[2] = (void*)&b; params[3] = (void*)&sc;
-            params[4] = (void*)&pf;
+            HipDevPtr_* pf = (HipDevPtr_*)flag;
+            HipKernelArg_* params[5];
+            params[0] = (HipKernelArg_*)&t; params[1] = (HipKernelArg_*)&m; params[2] = (HipKernelArg_*)&b; params[3] = (HipKernelArg_*)&sc;
+            params[4] = (HipKernelArg_*)&pf;
             if (hipModuleLaunchKernel(g_rocm_fn[K_CVT_MANY], (unsigned int)blocks, (unsigned int)c, 1U, ROCM_BLOCK, 1U, 1U,
-                                      0U, g_rocm_stream, &params[0], (void**)0) != ROCM_HIP_OK) return 0;
+                                      0U, g_rocm_stream, &params[0], (HipKernelArg_**)0) != ROCM_HIP_OK) return 0;
         }
         base = base + c;
     }
@@ -3105,21 +3060,21 @@ int rocm_mp_sgd(struct RocmBuf w, struct RocmBuf g, struct RocmBuf vel, struct R
     if (vel.dev != 0UL && !rocm_fits_(vel, n)) return 0;
     if (wHalf.dev != 0UL && !rocm_half_fits_(wHalf, n)) return 0;
     unsafe {
-        void* pw = (void*)w.dev;
-        void* pg = (void*)g.dev;
-        void* pv = (void*)vel.dev;
-        void* ph = (void*)wHalf.dev;
-        void* ps = (void*)skip.dev;
+        HipDevPtr_* pw = (HipDevPtr_*)w.dev;
+        HipDevPtr_* pg = (HipDevPtr_*)g.dev;
+        HipDevPtr_* pv = (HipDevPtr_*)vel.dev;
+        HipDevPtr_* ph = (HipDevPtr_*)wHalf.dev;
+        HipDevPtr_* ps = (HipDevPtr_*)skip.dev;
         float l = lr;
         float mo = momentum;
         float wd = weightDecay;
         unsigned int nn = (unsigned int)n;
         int bf = wHalf.dtype == ROCM_BF16 ? 1 : 0;
-        void* params[10];
-        params[0] = (void*)&pw; params[1] = (void*)&pg; params[2] = (void*)&pv; params[3] = (void*)&ph;
-        params[4] = (void*)&l; params[5] = (void*)&mo; params[6] = (void*)&wd; params[7] = (void*)&nn;
-        params[8] = (void*)&bf; params[9] = (void*)&ps;
-        return rocm_launch_(K_MP_SGD, n, (&void)&params[0]);
+        HipKernelArg_* params[10];
+        params[0] = (HipKernelArg_*)&pw; params[1] = (HipKernelArg_*)&pg; params[2] = (HipKernelArg_*)&pv; params[3] = (HipKernelArg_*)&ph;
+        params[4] = (HipKernelArg_*)&l; params[5] = (HipKernelArg_*)&mo; params[6] = (HipKernelArg_*)&wd; params[7] = (HipKernelArg_*)&nn;
+        params[8] = (HipKernelArg_*)&bf; params[9] = (HipKernelArg_*)&ps;
+        return rocm_launch_(K_MP_SGD, n, &params[0]);
     }
 }
 
@@ -3133,23 +3088,23 @@ int rocm_mp_adam(struct RocmBuf w, struct RocmBuf m, struct RocmBuf v, struct Ro
     float bc1 = (float)1.0 - pow_f(beta1, (float)step);
     float bc2 = (float)1.0 - pow_f(beta2, (float)step);
     unsafe {
-        void* pw = (void*)w.dev;
-        void* pm = (void*)m.dev;
-        void* pv = (void*)v.dev;
-        void* pg = (void*)g.dev;
-        void* ph = (void*)wHalf.dev;
-        void* ps = (void*)skip.dev;
+        HipDevPtr_* pw = (HipDevPtr_*)w.dev;
+        HipDevPtr_* pm = (HipDevPtr_*)m.dev;
+        HipDevPtr_* pv = (HipDevPtr_*)v.dev;
+        HipDevPtr_* pg = (HipDevPtr_*)g.dev;
+        HipDevPtr_* ph = (HipDevPtr_*)wHalf.dev;
+        HipDevPtr_* ps = (HipDevPtr_*)skip.dev;
         float l = lr; float b1 = beta1; float b2 = beta2; float e = eps; float wd = weightDecay;
         float c1 = bc1; float c2 = bc2;
         int dec = decoupled ? 1 : 0;
         unsigned int nn = (unsigned int)n;
         int bf = wHalf.dtype == ROCM_BF16 ? 1 : 0;
-        void* params[16];
-        params[0] = (void*)&pw; params[1] = (void*)&pm; params[2] = (void*)&pv; params[3] = (void*)&pg;
-        params[4] = (void*)&ph; params[5] = (void*)&l; params[6] = (void*)&b1; params[7] = (void*)&b2;
-        params[8] = (void*)&e; params[9] = (void*)&wd; params[10] = (void*)&c1; params[11] = (void*)&c2;
-        params[12] = (void*)&dec; params[13] = (void*)&nn; params[14] = (void*)&bf; params[15] = (void*)&ps;
-        return rocm_launch_(K_MP_ADAM, n, (&void)&params[0]);
+        HipKernelArg_* params[16];
+        params[0] = (HipKernelArg_*)&pw; params[1] = (HipKernelArg_*)&pm; params[2] = (HipKernelArg_*)&pv; params[3] = (HipKernelArg_*)&pg;
+        params[4] = (HipKernelArg_*)&ph; params[5] = (HipKernelArg_*)&l; params[6] = (HipKernelArg_*)&b1; params[7] = (HipKernelArg_*)&b2;
+        params[8] = (HipKernelArg_*)&e; params[9] = (HipKernelArg_*)&wd; params[10] = (HipKernelArg_*)&c1; params[11] = (HipKernelArg_*)&c2;
+        params[12] = (HipKernelArg_*)&dec; params[13] = (HipKernelArg_*)&nn; params[14] = (HipKernelArg_*)&bf; params[15] = (HipKernelArg_*)&ps;
+        return rocm_launch_(K_MP_ADAM, n, &params[0]);
     }
 }
 
@@ -3159,17 +3114,17 @@ static int rocm_half_ew_(struct RocmHalfBuf a, struct RocmHalfBuf b, struct Rocm
         n > 4294967295UL) return 0;
     if (op != 3 && (!rocm_half_fits_(b, n) || b.dtype != a.dtype)) return 0;
     unsafe {
-        void* pa = (void*)a.dev;
-        void* pb = (void*)b.dev;
-        void* po = (void*)out.dev;
+        HipDevPtr_* pa = (HipDevPtr_*)a.dev;
+        HipDevPtr_* pb = (HipDevPtr_*)b.dev;
+        HipDevPtr_* po = (HipDevPtr_*)out.dev;
         float kk = k;
         unsigned int nn = (unsigned int)n;
         int o = op;
         int bf = a.dtype == ROCM_BF16 ? 1 : 0;
-        void* params[7];
-        params[0] = (void*)&pa; params[1] = (void*)&pb; params[2] = (void*)&po; params[3] = (void*)&kk;
-        params[4] = (void*)&nn; params[5] = (void*)&o; params[6] = (void*)&bf;
-        return rocm_launch_(K_HALF_EW, n, (&void)&params[0]);
+        HipKernelArg_* params[7];
+        params[0] = (HipKernelArg_*)&pa; params[1] = (HipKernelArg_*)&pb; params[2] = (HipKernelArg_*)&po; params[3] = (HipKernelArg_*)&kk;
+        params[4] = (HipKernelArg_*)&nn; params[5] = (HipKernelArg_*)&o; params[6] = (HipKernelArg_*)&bf;
+        return rocm_launch_(K_HALF_EW, n, &params[0]);
     }
 }
 
@@ -3187,17 +3142,17 @@ int rocm_half_bias(struct RocmHalfBuf y, struct RocmHalfBuf bias, unsigned long 
     if (!rocm_ensure_() || total == 0UL || total > 4294967295UL || !rocm_half_fits_(y, total) ||
         !rocm_half_fits_(bias, channels) || y.dtype != bias.dtype) return 0;
     unsafe {
-        void* py = (void*)y.dev;
-        void* pb = (void*)bias.dev;
+        HipDevPtr_* py = (HipDevPtr_*)y.dev;
+        HipDevPtr_* pb = (HipDevPtr_*)bias.dev;
         unsigned int t = (unsigned int)total;
         unsigned int c = (unsigned int)channels;
         unsigned int p = (unsigned int)plane;
         int r = relu ? 1 : 0;
         int bf = y.dtype == ROCM_BF16 ? 1 : 0;
-        void* params[7];
-        params[0] = (void*)&py; params[1] = (void*)&pb; params[2] = (void*)&t; params[3] = (void*)&c;
-        params[4] = (void*)&p; params[5] = (void*)&r; params[6] = (void*)&bf;
-        return rocm_launch_(K_HALF_BIAS, total, (&void)&params[0]);
+        HipKernelArg_* params[7];
+        params[0] = (HipKernelArg_*)&py; params[1] = (HipKernelArg_*)&pb; params[2] = (HipKernelArg_*)&t; params[3] = (HipKernelArg_*)&c;
+        params[4] = (HipKernelArg_*)&p; params[5] = (HipKernelArg_*)&r; params[6] = (HipKernelArg_*)&bf;
+        return rocm_launch_(K_HALF_BIAS, total, &params[0]);
     }
 }
 
@@ -3212,19 +3167,19 @@ static int rocm_half_pool_(struct RocmHalfBuf x, struct RocmHalfBuf y, unsigned 
     if (total == 0UL || total > 4294967295UL || height * width > 4294967295UL ||
         !rocm_half_fits_(x, rows * height * width) || !rocm_half_fits_(y, total)) return 0;
     unsafe {
-        void* px = (void*)x.dev;
-        void* py = (void*)y.dev;
+        HipDevPtr_* px = (HipDevPtr_*)x.dev;
+        HipDevPtr_* py = (HipDevPtr_*)y.dev;
         unsigned int r = (unsigned int)rows;
         unsigned int hh = (unsigned int)height; unsigned int ww = (unsigned int)width;
         unsigned int ohh = (unsigned int)oh; unsigned int oww = (unsigned int)ow;
         unsigned int kk = (unsigned int)kernel; unsigned int ss = (unsigned int)stride;
         int a = avg;
         int bf = x.dtype == ROCM_BF16 ? 1 : 0;
-        void* params[11];
-        params[0] = (void*)&px; params[1] = (void*)&py; params[2] = (void*)&r; params[3] = (void*)&hh;
-        params[4] = (void*)&ww; params[5] = (void*)&ohh; params[6] = (void*)&oww; params[7] = (void*)&kk;
-        params[8] = (void*)&ss; params[9] = (void*)&a; params[10] = (void*)&bf;
-        return rocm_launch_(K_HALF_POOL, total, (&void)&params[0]);
+        HipKernelArg_* params[11];
+        params[0] = (HipKernelArg_*)&px; params[1] = (HipKernelArg_*)&py; params[2] = (HipKernelArg_*)&r; params[3] = (HipKernelArg_*)&hh;
+        params[4] = (HipKernelArg_*)&ww; params[5] = (HipKernelArg_*)&ohh; params[6] = (HipKernelArg_*)&oww; params[7] = (HipKernelArg_*)&kk;
+        params[8] = (HipKernelArg_*)&ss; params[9] = (HipKernelArg_*)&a; params[10] = (HipKernelArg_*)&bf;
+        return rocm_launch_(K_HALF_POOL, total, &params[0]);
     }
 }
 

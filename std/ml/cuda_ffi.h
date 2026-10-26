@@ -7,6 +7,7 @@
 // its own marker struct here, so one kind of handle can't be passed where
 // another is expected. None is ever constructed or read; only the libraries
 // they come from look behind them.
+#include <std/stddef.h>
 #include <std/ml/gpu_cuda.h>
 
 namespace std {
