@@ -5,11 +5,18 @@
 # instead fail to compile with exactly those errors (see filecheck.py for
 # line-tied vs. free-floating directives).
 #
-#   SAFEC_BIN=path/to/safec compiler/tests/run.sh
+#   // SAFEC-ARGS: <flags>  extra compiler flags; '%root' is the repository
+#                           root ('-I %root' for '#include <std/...>')
+#   // SAFEC-RUN            also link the IR with $CLANG_BIN and run it: the
+#                           program must exit 0 (skipped without a clang)
+#
+#   SAFEC_BIN=path/to/safec [CLANG_BIN=clang] compiler/tests/run.sh
 set -uo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 SAFEC_BIN="${SAFEC_BIN:-$HERE/../build/safec}"
+CLANG_BIN="${CLANG_BIN:-clang}"
+ROOT="$(cd "$HERE/../.." && pwd)"
 OUT="$(mktemp -d)"
 trap 'rm -rf "$OUT"' EXIT
 
@@ -18,9 +25,11 @@ FAIL=0
 while IFS= read -r -d '' t; do
     name="${t#"$HERE"/}"
     ll="$OUT/$(echo "$name" | tr '/' '_').ll"
+    # '// SAFEC-ARGS: <flags>' adds compiler flags (e.g. --target <triple>).
+    read -r -a args <<<"$(sed -n 's|^// SAFEC-ARGS: *||p' "$t" | head -1 | sed "s|%root|$ROOT|g")"
     if grep -q 'EXPECT-ERROR:' "$t"; then
         # Negative test: must be rejected with exactly the expected errors.
-        if "$SAFEC_BIN" "$t" --emit-llvm -o "$ll" >"$OUT/err.txt" 2>&1; then
+        if "$SAFEC_BIN" "$t" --emit-llvm ${args[@]+"${args[@]}"} -o "$ll" >"$OUT/err.txt" 2>&1; then
             echo "  [FAIL] $name (compiled, expected errors)"
             FAIL=$((FAIL + 1))
         elif ! python3 "$HERE/filecheck.py" --errors "$t" "$OUT/err.txt" >"$OUT/check.txt" 2>&1; then
@@ -50,8 +59,6 @@ while IFS= read -r -d '' t; do
         fi
         continue
     fi
-    # '// SAFEC-ARGS: <flags>' adds compiler flags (e.g. --target <triple>).
-    read -r -a args <<<"$(sed -n 's|^// SAFEC-ARGS: *||p' "$t" | head -1)"
     if ! "$SAFEC_BIN" "$t" -O2 --emit-llvm ${args[@]+"${args[@]}"} -o "$ll" >"$OUT/err.txt" 2>&1; then
         echo "  [FAIL] $name (compile)"
         sed 's/^/      /' "$OUT/err.txt"
@@ -60,6 +67,21 @@ while IFS= read -r -d '' t; do
         echo "  [FAIL] $name"
         sed 's/^/      /' "$OUT/check.txt"
         FAIL=$((FAIL + 1))
+    elif grep -q '^// SAFEC-RUN' "$t" && command -v "$CLANG_BIN" >/dev/null 2>&1; then
+        # '// SAFEC-RUN': the linked program must also exit 0.
+        exe="${ll%.ll}"
+        if ! "$CLANG_BIN" -Wno-override-module "$ll" -o "$exe" >"$OUT/err.txt" 2>&1; then
+            echo "  [FAIL] $name (link)"
+            sed 's/^/      /' "$OUT/err.txt"
+            FAIL=$((FAIL + 1))
+        elif "$exe" >"$OUT/run.txt" 2>&1; rc=$?; [[ "$rc" -ne 0 ]]; then
+            echo "  [FAIL] $name (run: exit $rc)"
+            sed 's/^/      /' "$OUT/run.txt"
+            FAIL=$((FAIL + 1))
+        else
+            echo "  [PASS] $name (ran)"
+            PASS=$((PASS + 1))
+        fi
     else
         echo "  [PASS] $name"
         PASS=$((PASS + 1))

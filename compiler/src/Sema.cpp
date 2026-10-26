@@ -4145,10 +4145,12 @@ TypePtr Sema::checkMember(MemberExpr &e) {
 
     // Auto-dereference references for dot access (SafeC references are non-null
     // and always valid — dot access on a reference implicitly dereferences it)
+    bool derefMut = false;
     if (!e.isArrow && baseTy->kind == TypeKind::Reference) {
         auto &rt = static_cast<ReferenceType &>(*baseTy);
         checkNullabilityDeref(baseTy, e.loc);
         e.isLValue = rt.mut;
+        derefMut = rt.mut;
         baseTy = rt.base;
     }
 
@@ -4211,7 +4213,10 @@ TypePtr Sema::checkMember(MemberExpr &e) {
         diag_.error(e.loc, "struct '" + st->name + "' has no field '" + e.field + "'");
         return makeError();
     }
-    if (!e.isArrow) e.isLValue = e.base->isLValue;
+    // Through a mutable reference the field is the referent's storage even
+    // when the base itself isn't an lvalue: 'v.at(i).field' (a call
+    // returning '&T') designates the element's field, not a copy of it.
+    if (!e.isArrow) e.isLValue = e.base->isLValue || derefMut;
     return fd->type;
 }
 
@@ -4344,22 +4349,26 @@ TypePtr Sema::checkAssign(AssignExpr &e) {
     if (rhsTy && rhsTy->kind == TypeKind::Reference) {
         auto &rt = static_cast<ReferenceType &>(*rhsTy);
         VarDecl *baseVd = nullptr;
+        // 'f().field = r': the storage a returned reference designates
+        // outlives every scope of this function, like an outermost variable.
+        bool callRoot = false;
         for (Expr *cur = e.lhs.get(); cur; ) {
             if (cur->kind == ExprKind::Ident) { baseVd = static_cast<IdentExpr *>(cur)->resolved; break; }
             if (cur->kind == ExprKind::Member) { cur = static_cast<MemberExpr *>(cur)->base.get(); continue; }
+            callRoot = cur != e.lhs.get() && cur->kind == ExprKind::Call;
             break;
         }
-        if (rt.region == Region::Stack && baseVd) {
-            if (baseVd->scopeDepth < scopeDepth_) {
+        if (rt.region == Region::Stack && (baseVd || callRoot)) {
+            if (callRoot || baseVd->scopeDepth < scopeDepth_) {
                 diag_.error(e.loc,
                     "cannot assign '&stack " + rt.base->str() +
                     "' to variable in outer scope: reference would escape");
             }
         }
-        if (rt.region == Region::Arena && baseVd) {
+        if (rt.region == Region::Arena && (baseVd || callRoot)) {
             auto it = regionRegistry_.find(rt.arenaName);
             int minDepth = (it != regionRegistry_.end()) ? it->second->declScopeDepth : 0;
-            if (baseVd->scopeDepth < minDepth) {
+            if ((callRoot ? 0 : baseVd->scopeDepth) < minDepth) {
                 diag_.error(e.loc,
                     "cannot assign '&arena<" + rt.arenaName + "> " + rt.base->str() +
                     "' to variable in outer scope: arena reference would escape");

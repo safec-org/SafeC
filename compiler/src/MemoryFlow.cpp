@@ -1671,8 +1671,21 @@ EV Walker::evalCall(CallExpr &e) {
     return applySummary(e, callee, *s, args);
 }
 
+// The site key of a fresh object (or mark) a call's summary names: the
+// callee's own key under this call site. Through a call back into the
+// current recursive component the key would grow by one call-site prefix
+// per fixpoint iteration, so there it keeps only the part after the last
+// recursive call site's 'rec/' — still one object per allocation site in
+// the callee (a Vec's new buffer and a map's new arrays stay apart, so
+// freeing one doesn't dangle the other), merged only across recursion
+// depths.
 std::string Walker::calleeSite(const Expr &call, FunctionDecl *callee, const std::string &key) {
-    std::string k = drv_.sameScc(&fn_, callee) ? "rec" : key;
+    std::string k = key;
+    if (drv_.sameScc(&fn_, callee)) {
+        size_t at = k.rfind("/rec/");
+        if (at != std::string::npos) k = k.substr(at + 5);
+        k = "rec/" + k;
+    }
     std::string s = "c" + ptrKey(&call) + "/" + k;
     if (s.size() > 160) s = "c" + ptrKey(&call) + "/deep";
     return s;
