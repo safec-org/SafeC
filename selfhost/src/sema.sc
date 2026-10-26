@@ -84,6 +84,7 @@ void msg_type(int t) {
     if (k == TY_ERROR) { msg_lit("<error>"); return; }
     if (k == TY_PTR) {
         if ((g_ty[t].flags & TYF_CONST) != 0) { msg_lit("const "); }
+        if ((g_ty[t].flags & TYF_VOLATILE) != 0) { msg_lit("volatile "); }
         msg_type(g_ty[t].base);
         msg_lit("*");
         return;
@@ -96,10 +97,12 @@ void msg_type(int t) {
         else if (r == R_HEAP) { msg_lit("heap "); }
         else if (r == R_STATIC) { msg_lit("static "); }
         if ((g_ty[t].flags & TYF_CONST) != 0) { msg_lit("const "); }
+        if ((g_ty[t].flags & TYF_VOLATILE) != 0) { msg_lit("volatile "); }
         msg_type(g_ty[t].base);
         return;
     }
     if (k == TY_ARRAY) {
+        if ((g_ty[t].flags & TYF_VOLATILE) != 0 && g_ty[g_ty[t].base].kind != TY_ARRAY) { msg_lit("volatile "); }
         msg_type(g_ty[t].base);
         if (g_ty[t].n < 0) { msg_lit("[]"); }
         else { msg_lit("["); msg_int((long)g_ty[t].n); msg_lit("]"); }
@@ -402,7 +405,7 @@ int resolve_type(int t) {
                 n = 1;
             }
         }
-        return ty_array(resolve_type(g_ty[t].base), n);
+        return ty_array_f(resolve_type(g_ty[t].base), n, g_ty[t].flags);
     }
     if (k == TY_SLICE) { return ty_slice(resolve_type(g_ty[t].base)); }
     if (k == TY_OPT) { return ty_opt(resolve_type(g_ty[t].base)); }
@@ -549,9 +552,40 @@ int instantiate_struct(int tmpl_node, int mark) {
 int ty_equal(int a, int b) {
     if (a == b) { return 1; }
     // structural equality of interned types: identical ids, except the
-    // const flag on pointers is ignored (PointerType::equals)
-    if (g_ty[a].kind == TY_PTR && g_ty[b].kind == TY_PTR) { return ty_equal(g_ty[a].base, g_ty[b].base); }
+    // const flag on pointers is ignored (PointerType::equals), and volatile
+    // is ignored everywhere (conversions check it with drops_volatile)
+    int ka = g_ty[a].kind;
+    if (ka == TY_PTR && g_ty[b].kind == TY_PTR) { return ty_equal(g_ty[a].base, g_ty[b].base); }
+    if ((ka == TY_REF || ka == TY_ARRAY) && g_ty[b].kind == ka && g_ty[a].n == g_ty[b].n && g_ty[a].sid == g_ty[b].sid &&
+        (g_ty[a].flags & ~TYF_VOLATILE) == (g_ty[b].flags & ~TYF_VOLATILE) && g_ty[a].flags != g_ty[b].flags) {
+        return ty_equal(g_ty[a].base, g_ty[b].base);
+    }
     return 0;
+}
+
+// the type with its arrays' elements volatile (Type.cpp withVolatileElements)
+int with_volatile_elements(int t) {
+    if (t == 0 || g_ty[t].kind != TY_ARRAY) { return t; }
+    return ty_array_f(with_volatile_elements(g_ty[t].base), g_ty[t].n, g_ty[t].flags | TYF_VOLATILE);
+}
+
+int pointee_volatile(int t) {
+    int k = g_ty[t].kind;
+    if (k == TY_PTR || k == TY_REF || k == TY_ARRAY) { return (g_ty[t].flags & TYF_VOLATILE) != 0; }
+    return 0;
+}
+
+// would converting from -> to drop a volatile qualifier (Type.cpp dropsVolatile)
+int drops_volatile(int from, int to) {
+    if (from == 0 || to == 0) { return 0; }
+    int fk = g_ty[from].kind;
+    int tk = g_ty[to].kind;
+    if ((fk != TY_PTR && fk != TY_REF && fk != TY_ARRAY) || (tk != TY_PTR && tk != TY_REF && tk != TY_ARRAY)) { return 0; }
+    if (pointee_volatile(from) == 1 && pointee_volatile(to) == 0) { return 1; }
+    int fb = g_ty[from].base;
+    int tb = g_ty[to].base;
+    if (g_ty[fb].kind == TY_ARRAY || g_ty[tb].kind == TY_ARRAY) { return 0; }
+    return drops_volatile(fb, tb);
 }
 
 int is8(int t) { int k = g_ty[t].kind; return k == TY_CHAR || k == TY_I8 || k == TY_U8; }
@@ -583,6 +617,7 @@ int same_slot(int a, int b) {
 int can_convert(int from, int to) {
     if (from == 0 || to == 0) { return 0; }
     if (is_err(from) == 1 || is_err(to) == 1) { return 1; }
+    if (drops_volatile(from, to) == 1) { return 0; }
     if (ty_equal(from, to) == 1) { return 1; }
     int fk = g_ty[from].kind;
     int tk = g_ty[to].kind;
@@ -704,6 +739,7 @@ int float_lit_fits(int e, int to) {
 
 int ref_to_ptr_arg(int from, int to) {
     if (g_ty[from].kind != TY_REF || g_ty[to].kind != TY_PTR) { return 0; }
+    if (drops_volatile(from, to) == 1) { return 0; }
     if (ty_equal(g_ty[from].base, g_ty[to].base) == 1) { return 1; }
     return is8(g_ty[from].base) == 1 && is8(g_ty[to].base) == 1;
 }
@@ -1054,6 +1090,7 @@ void collect_struct_members(int sd, int node) {
         int m = g_list[g_node[node].list + i];
         if (g_node[m].kind == D_FIELD) {
             int ft = resolve_type(g_node[m].c);
+            if ((g_node[m].flags & NF_VOLATILE) != 0) { ft = with_volatile_elements(ft); }
             g_field[fi].ty = ft;
             fi = fi + 1;
         }
@@ -1244,6 +1281,7 @@ void collect_global(int n) {
             g_glob[g0].node = n;
             g_glob[g0].flags = g_node[n].flags;
             g_glob[g0].ty = resolve_type(g_node[n].c);
+            if ((g_node[n].flags & NF_VOLATILE) != 0) { g_glob[g0].ty = with_volatile_elements(g_glob[g0].ty); }
         }
         return;
     }
@@ -1253,6 +1291,7 @@ void collect_global(int n) {
     g_glob[g].sid = name;
     g_glob[g].node = n;
     g_glob[g].ty = resolve_type(g_node[n].c);
+    if ((g_node[n].flags & NF_VOLATILE) != 0) { g_glob[g].ty = with_volatile_elements(g_glob[g].ty); }
     g_glob[g].flags = g_node[n].flags;
     g_glob[g].addr = 0;
     g_glob[g].done = 0;

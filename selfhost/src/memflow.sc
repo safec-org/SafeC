@@ -24,9 +24,10 @@
 #define MF_V 256        // tracked locals per function (one more: the call temp)
 #define MF_C 384        // cells per function
 #define MF_T 64         // tokens per function
-#define MF_D 48         // saved states: a stack, and two slots per loop/switch target at the top
+#define MF_D 56         // saved states: a stack; then label states; two slots per loop/switch target at the top
 #define MF_TG 8         // nested break/continue targets tracked
-#define MF_SL (MF_D - 2 * MF_TG)
+#define MF_LB 8         // goto labels tracked (one more slot: the entry state)
+#define MF_SL (MF_D - 2 * MF_TG - MF_LB - 1)
 #define MF_DEF 64       // pending defers
 #define MF_S 8          // summary entries of each kind
 
@@ -471,6 +472,37 @@ void mf_jump(int is_break, int label) {
         i = i - 1;
     }
     g_mf_live = 0;
+}
+
+// goto labels: the state reaching each one (from gotos), in its own slot
+int g_ml_node[MF_LB];
+int g_ml_n = 0;
+int mf_slot_label(int i) { return MF_SL + i; }
+int mf_slot_entry() { return MF_SL + MF_LB; }
+
+void mf_collect_labels(int s) {
+    if (s == 0) { return; }
+    int k = g_node[s].kind;
+    if (k == S_LABEL) {
+        if (g_ml_n < MF_LB) { g_ml_node[g_ml_n] = s; g_ml_n = g_ml_n + 1; }
+        mf_collect_labels(g_node[s].a);
+    } else if (k == S_BLOCK || k == S_MULTI) {
+        int i = 0;
+        while (i < g_node[s].nlist) { mf_collect_labels(g_list[g_node[s].list + i]); i = i + 1; }
+    } else if (k == S_IF) { mf_collect_labels(g_node[s].b); mf_collect_labels(g_node[s].c); }
+    else if (k == S_WHILE || k == S_DO) { mf_collect_labels(g_node[s].b); }
+    else if (k == S_FOR) { mf_collect_labels(g_node[s].d); }
+    else if (k == S_UNSAFE) { mf_collect_labels(g_node[s].a); }
+    else if (k == S_SWITCH) {
+        int i = 0;
+        while (i < g_node[s].nlist) { mf_collect_labels(g_node[g_list[g_node[s].list + i]].b); i = i + 1; }
+    }
+}
+
+int mf_label_index(int sid) {
+    int i = 0;
+    while (i < g_ml_n) { if (g_node[g_ml_node[i]].sid == sid) { return i; } i = i + 1; }
+    return -1;
 }
 
 // overwrites saved slot dst with saved slot src
@@ -1600,7 +1632,18 @@ void mf_stmt(int s) {
         mf_pop(sv);
         return;
     }
-    if (k == S_LABEL) { mf_stmt(g_node[s].a); return; }
+    if (k == S_LABEL) {
+        int li = mf_label_index(g_node[s].sid);
+        if (li >= 0 && g_ml_node[li] == s) { mf_join(mf_slot_label(li)); }
+        mf_stmt(g_node[s].a);
+        return;
+    }
+    if (k == S_GOTO) {
+        int li = mf_label_index(g_node[s].sid);
+        if (li >= 0) { mf_join_into(mf_slot_label(li)); }
+        g_mf_live = 0;
+        return;
+    }
 }
 
 // ── driver ───────────────────────────────────────────────────────────────────
@@ -1629,10 +1672,44 @@ void memflow_function(int f) {
     g_ntg = 0;
     g_mfd_n = 0;
     g_mf_rkind = -1;
-    mf_stmt(body);
-    if (g_mf_live == 1) {
-        // falling off the end
-        mf_note_exit();
+    g_ml_n = 0;
+    mf_collect_labels(body);
+    if (g_ml_n == 0) {
+        mf_stmt(body);
+        if (g_mf_live == 1) { mf_note_exit(); }   // falling off the end
+    } else {
+        // gotos: walk the body until the states reaching the labels settle
+        i = 0;
+        while (i < g_ml_n) { mf_slot_clear(mf_slot_label(i)); i = i + 1; }
+        mf_save_at(mf_slot_entry());
+        int pass = 0;
+        while (pass < 6) {
+            long before = 0L;
+            i = 0;
+            while (i < g_ml_n) { before = before * 31L + (long)g_s_nc[mf_slot_label(i)] + (long)g_s_live[mf_slot_label(i)] * 7L + g_s_dead[mf_slot_label(i)]; i = i + 1; }
+            int j = 0;
+            while (j < g_ml_n) {
+                int sl = mf_slot_label(j);
+                int c = 0;
+                while (c < g_s_nc[sl]) { before = before * 131L + g_s_tok[sl * MF_C + c] + g_s_dang[sl * MF_C + c] * 3L; c = c + 1; }
+                j = j + 1;
+            }
+            mf_restore(mf_slot_entry());
+            mf_stmt(body);
+            if (g_mf_live == 1) { mf_note_exit(); }
+            long after = 0L;
+            i = 0;
+            while (i < g_ml_n) { after = after * 31L + (long)g_s_nc[mf_slot_label(i)] + (long)g_s_live[mf_slot_label(i)] * 7L + g_s_dead[mf_slot_label(i)]; i = i + 1; }
+            j = 0;
+            while (j < g_ml_n) {
+                int sl = mf_slot_label(j);
+                int c = 0;
+                while (c < g_s_nc[sl]) { after = after * 131L + g_s_tok[sl * MF_C + c] + g_s_dang[sl * MF_C + c] * 3L; c = c + 1; }
+                j = j + 1;
+            }
+            if (after == before) { break; }
+            pass = pass + 1;
+        }
     }
     if (g_mf_rkind < 0) { g_mf_rkind = 0; }
     if (g_sm_ret[f] != g_mf_rkind) { g_sm_ret[f] = g_mf_rkind; g_mf_changed = 1; }

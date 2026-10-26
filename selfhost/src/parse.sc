@@ -357,16 +357,32 @@ int parse_array_suffix(int base) {
     return base;
 }
 
+// volatile (C++ Parser::parseTypeDeclarator): a 'volatile' qualifies what
+// sits to its left: the base type for the first '*' (pointer to volatile),
+// the previous pointer for each later one, or after the last '*' the
+// declared object itself (reported in g_type_vol)
+int g_base_vol = 0;     // the last base type was qualified volatile
+int g_type_vol = 0;     // the last type parsed declares a volatile object
+int g_vol_td[64];       // typedef names of volatile types
+int g_nvol_td = 0;
+
 int parse_declarator(int base) {
+    int vol = g_base_vol;
+    g_base_vol = 0;
     while (cur() == T_STAR) {
         advance();
         int fl = 0;
+        int next_vol = 0;
         while (cur() == K_CONST || cur() == K_RESTRICT || cur() == K_VOLATILE) {
             if (cur() == K_CONST) { fl = TYF_CONST; }
+            if (cur() == K_VOLATILE) { next_vol = 1; }
             advance();
         }
+        if (vol == 1) { fl = fl | TYF_VOLATILE; }
         base = ty_ptr(base, fl);
+        vol = next_vol;
     }
+    g_type_vol = vol;
     return parse_array_suffix(base);
 }
 
@@ -395,8 +411,10 @@ int parse_base_type() {
     int is_unsigned = 0;
     int has_sign = 0;
     g_base_const = 0;
+    int vol = 0;
     while (cur() == K_CONST || cur() == K_VOLATILE || cur() == K_RESTRICT || cur() == K_REGISTER) {
         if (cur() == K_CONST) { g_base_const = 1; }
+        if (cur() == K_VOLATILE) { vol = 1; }
         advance();
     }
     if (cur() == K_UNSIGNED) { advance(); is_unsigned = 1; has_sign = 1; }
@@ -509,8 +527,14 @@ int parse_base_type() {
     }
     while (cur() == K_CONST || cur() == K_VOLATILE) {
         if (cur() == K_CONST) { g_base_const = 1; }
+        if (cur() == K_VOLATILE) { vol = 1; }
         advance();
     }
+    if (t != 0 && g_ty[t].kind == TY_NAMED) {
+        int i = 0;
+        while (i < g_nvol_td) { if (g_vol_td[i] == g_ty[t].sid) { vol = 1; } i = i + 1; }
+    }
+    g_base_vol = vol;
     return t;
 }
 
@@ -543,7 +567,7 @@ int at_region() {
 }
 
 // after '&' / '?&'
-int parse_ref_type(int nullable, int lead_const) {
+int parse_ref_type(int nullable, int lead_const, int lead_vol) {
     int arn = 0;
     int rgn = R_EXTERN;
     if (at_region() == 1) {
@@ -558,33 +582,39 @@ int parse_ref_type(int nullable, int lead_const) {
         base = parse_base_type();
         if (g_base_const == 1) { is_const = 1; }
     }
+    if (g_ty[base].kind == TY_REF) { g_base_vol = 0; }
     base = parse_declarator(base);
     int fl = 0;
     if (nullable == 1) { fl = fl | TYF_NULL; }
     if (is_const == 1) { fl = fl | TYF_CONST; }
+    // '&volatile T' / '&stack T* volatile': the referenced object is volatile
+    if (lead_vol == 1 || g_type_vol == 1) { fl = fl | TYF_VOLATILE; }
+    g_type_vol = 0;
     return ty_ref(base, rgn, arn, fl);
 }
 
 int parse_type() {
+    g_type_vol = 0;
+    g_base_vol = 0;
     if (cur() == K_CONST && (peek(1) == T_AMP || peek(1) == T_QAMP)) {
         advance();
         int nul = 0;
         if (cur() == T_QAMP) { nul = 1; }
         advance();
-        return parse_ref_type(nul, 1);
+        return parse_ref_type(nul, 1, 0);
     }
     if (cur() == K_VOLATILE && (peek(1) == T_AMP || peek(1) == T_QAMP)) {
         advance();
         int nul = 0;
         if (cur() == T_QAMP) { nul = 1; }
         advance();
-        return parse_ref_type(nul, 0);
+        return parse_ref_type(nul, 0, 1);
     }
-    if (cur() == T_QAMP) { advance(); return parse_ref_type(1, 0); }
-    if (cur() == T_AMP) { advance(); return parse_ref_type(0, 0); }
+    if (cur() == T_QAMP) { advance(); return parse_ref_type(1, 0, 0); }
+    if (cur() == T_AMP) { advance(); return parse_ref_type(0, 0, 0); }
     if (cur() == T_ANDAND) {
         advance();
-        int inner = parse_ref_type(0, 0);
+        int inner = parse_ref_type(0, 0, 0);
         return ty_ref(inner, R_EXTERN, 0, 0);
     }
     if (cur() == T_QUESTION) {
@@ -1310,6 +1340,11 @@ int strip_arrays(int t) {
     return t;
 }
 
+int mk_var_v(int v, int vol) {
+    if (vol == 1) { g_node[v].flags = g_node[v].flags | NF_VOLATILE; }
+    return v;
+}
+
 int mk_var(int name, int ty, int init, int tok, int is_const, int is_static) {
     int v = new_node(S_VAR, tok);
     g_node[v].sid = name;
@@ -1334,6 +1369,7 @@ int parse_var_decl(int is_const, int is_static) {
         return mk_var(name, 0, init, t, is_const, is_static);
     }
     int base = parse_type();
+    int vol = g_type_vol;
     int ty = base;
     int name = 0;
     int fp = try_fnptr_declarator(base);
@@ -1347,11 +1383,11 @@ int parse_var_decl(int is_const, int is_static) {
     if (accept(T_ASSIGN) == 1) { init = parse_assign(); }
     if (cur() != T_COMMA) {
         expect_msg(T_SEMI, "expected ';' after variable declaration");
-        return mk_var(name, ty, init, t, is_const, is_static);
+        return mk_var_v(mk_var(name, ty, init, t, is_const, is_static), vol);
     }
     int multi = new_node(S_MULTI, t);
     int mark = list_begin();
-    list_push(mk_var(name, ty, init, t, is_const, is_static));
+    list_push(mk_var_v(mk_var(name, ty, init, t, is_const, is_static), vol));
     while (accept(T_COMMA) == 1) {
         int dt = g_p;
         int n2 = 0;
@@ -1360,7 +1396,7 @@ int parse_var_decl(int is_const, int is_static) {
         int t2 = parse_array_suffix(base);
         int i2 = 0;
         if (accept(T_ASSIGN) == 1) { i2 = parse_assign(); }
-        list_push(mk_var(n2, t2, i2, dt, is_const, is_static));
+        list_push(mk_var_v(mk_var(n2, t2, i2, dt, is_const, is_static), vol));
     }
     expect_msg(T_SEMI, "expected ';' after variable declaration");
     list_end(mark, multi);
@@ -1587,6 +1623,7 @@ void parse_params(int fnn) {
         if (cur() == T_ELLIPSIS) { advance(); g_node[fnn].flags = g_node[fnn].flags | NF_VARIADIC; break; }
         int p = new_node(D_PARAM, g_p);
         int pt = parse_type();
+        int pvol = g_type_vol;
         int fp = try_fnptr_declarator(pt);
         if (fp != 0) { pt = fp; g_node[p].sid = g_fp_name; }
         else {
@@ -1595,6 +1632,7 @@ void parse_params(int fnn) {
             pt = parse_array_suffix(pt);
         }
         g_node[p].c = pt;
+        if (pvol == 1) { g_node[p].flags = g_node[p].flags | NF_VOLATILE; }
         list_push(p);
         if (accept(T_COMMA) == 0) { break; }
     }
@@ -1631,6 +1669,7 @@ int parse_struct(int is_union, int gparams) {
         int is_static = 0;
         if (cur() == K_STATIC) { advance(); is_static = 1; }
         int ty = parse_type();
+        int fvol = g_type_vol;
         int fp = try_fnptr_declarator(ty);
         if (fp != 0) {
             int f = new_node(D_FIELD, mt);
@@ -1673,6 +1712,7 @@ int parse_struct(int is_union, int gparams) {
                 ty = parse_array_suffix(ty);
             }
             g_node[f].c = ty;
+            if (fvol == 1) { g_node[f].flags = g_node[f].flags | NF_VOLATILE; }
             // 'int a, b;' — several fields of one type
             while (cur() == T_COMMA && peek(1) == T_IDENT) {
                 list_push(f);
@@ -1681,6 +1721,7 @@ int parse_struct(int is_union, int gparams) {
                 g_node[f].sid = cur_sid();
                 advance();
                 g_node[f].c = parse_array_suffix(ty);
+                if (fvol == 1) { g_node[f].flags = g_node[f].flags | NF_VOLATILE; }
             }
             expect_msg(T_SEMI, "expected ';' after struct field");
             list_push(f);
@@ -1874,6 +1915,7 @@ void parse_top() {
         } else {
             ty = parse_type();
         }
+        int td_vol = g_type_vol;
         if (anon != 0 && cur() == T_IDENT) {
             // the anonymous type takes the typedef's name
             g_node[anon].sid = cur_sid();
@@ -1889,6 +1931,7 @@ void parse_top() {
         else { perr("expected typedef name"); }
         g_node[n].c = ty;
         g_typename[g_node[n].sid] = 1;
+        if (td_vol == 1 && g_nvol_td < 64) { g_vol_td[g_nvol_td] = g_node[n].sid; g_nvol_td = g_nvol_td + 1; }
         expect_semi();
         add_top(n);
         return;
@@ -1928,7 +1971,6 @@ void parse_top() {
         if (cur() == K_NORETURN) { advance(); flags = flags | NF_NORETURN; continue; }
         if (cur() == K_PURE) { advance(); flags = flags | NF_PURE; continue; }
         if (cur() == K_MUST_USE) { advance(); flags = flags | NF_MUSTUSE; continue; }
-        if (cur() == K_VOLATILE) { advance(); continue; }
         break;
     }
     int export_sid = g_attr_export;
@@ -1944,6 +1986,7 @@ void parse_top() {
         return;
     }
     int ty = parse_type();
+    int gvol = g_type_vol;
     int is_const_obj = 0;
     if ((flags & NF_CONST) != 0) { is_const_obj = 1; }
     int fp = try_fnptr_declarator(ty);
@@ -2013,6 +2056,7 @@ void parse_top() {
         int gt = parse_array_suffix(ty);
         g_node[g].c = gt;
         g_node[g].flags = flags & ~NF_CONST;
+        if (gvol == 1) { g_node[g].flags = g_node[g].flags | NF_VOLATILE; }
         if (is_const_obj == 1 && g_ty[strip_arrays(gt)].kind != TY_PTR) { g_node[g].flags = g_node[g].flags | NF_CONST; }
         g_node[g].op = g_ns;
         parse_attributes();

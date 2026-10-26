@@ -187,6 +187,34 @@ void check_nullable_deref(int t, int e) {
     }
 }
 
+// '&x' of a volatile lvalue is a reference to volatile (C++ isVolatileLValue)
+int is_volatile_lval(int e) {
+    int k = g_node[e].kind;
+    if (k == E_IDENT) {
+        if (g_node[e].c == SYM_LOCAL) { return (g_local[g_node[e].d].flags & LF_VOLATILE) != 0; }
+        if (g_node[e].c == SYM_GLOBAL) { return (g_glob[g_node[e].d].flags & NF_VOLATILE) != 0; }
+        return 0;
+    }
+    if (k == E_DEREF || k == E_FORCE) { return pointee_volatile(g_node[g_node[e].a].ty); }
+    if (k == E_INDEX) {
+        int bt = g_node[g_node[e].a].ty;
+        if (pointee_volatile(bt) == 1) { return 1; }
+        return g_ty[bt].kind == TY_ARRAY && is_volatile_lval(g_node[e].a) == 1;
+    }
+    if (k == E_MEMBER) {
+        int b = g_node[e].a;
+        int bt = g_node[b].ty;
+        int indirect = g_ty[bt].kind == TY_PTR || g_ty[bt].kind == TY_REF || (g_node[e].flags & NF_ARROW) != 0;
+        if (indirect == 1 && pointee_volatile(bt) == 1) { return 1; }
+        if (g_node[e].d == MK_FIELD) {
+            int fi = g_node[e].c;
+            if (fi >= 0 && fi < g_nfield && g_field[fi].node != 0 && (g_node[g_field[fi].node].flags & NF_VOLATILE) != 0) { return 1; }
+        }
+        if (indirect == 0) { return is_volatile_lval(b); }
+    }
+    return 0;
+}
+
 int check_addr(int e) {
     int op = g_node[e].a;
     int ot = check_expr(op);
@@ -237,6 +265,7 @@ int check_addr(int e) {
     }
     int fl = 0;
     if (is_mut == 0) { fl = TYF_CONST; }
+    if (is_volatile_lval(op) == 1) { fl = fl | TYF_VOLATILE; }
     return ty_ref(ot, rgn, arn, fl);
 }
 

@@ -61,6 +61,10 @@ safec:
   indexing.
 - Definite initialization, as in safec: flow-insensitive, and a global
   read before its declaration counts as "possibly uninitialized".
+- `volatile`: an implicit conversion that would drop it (`volatile T*` to
+  `T*`, `&x` of a volatile object, a volatile array decaying to a pointer)
+  is an error. This is a type check only, because scc emits every memory
+  access as written anyway.
 - `const` correctness, `must_use`, `noreturn`, `pure`, exhaustive `match`,
   trait bounds, and out-of-line method definitions matching their
   declarations.
@@ -91,7 +95,11 @@ gets from the same failures.
   forwarding `args` to another call, and `sizeof...(T)`.
 - Traits, including supertraits and trait bounds.
 - `if`/`else`, `while`, `do`/`while`, `for`, labeled loops with
-  `break label` and `continue label`, `switch` (with fallthrough), and
+  `break label` and `continue label`, and `goto` with statement labels:
+  forward and backward, out of loops, and into loop bodies and `switch`
+  cases, which is how resumable state machines are written. safec's goto
+  rules apply: duplicate labels and jumps over a declaration are errors.
+  `switch` (with fallthrough), and
   `match` on enums, tagged unions, optionals, nullable references and
   integers, as a statement and as an expression.
 - `defer`, `errdefer`, and `try` on optional-returning calls.
@@ -125,7 +133,6 @@ files.
 
 These are rejected with an error that says scc doesn't support them:
 
-- `goto` and statement labels (labeled loops do work).
 - Inline `asm`.
 - Bitfields.
 
@@ -154,10 +161,10 @@ These are not implemented, and the error is a parse or name error:
   `free_to` through a passed mark). It is smaller than safec's: it tracks
   at most 64 objects and 384 cells per function, and paths 4 deep. Past
   those limits it stops tracking rather than guess, so it can miss an
-  error but does not invent one. It also does not model `goto`. On safec's
-  own `compiler/tests/lifetimes` suite, the two compilers agree on accept
-  or reject for every test, and scc reports exactly safec's diagnostics on
-  every `EXPECT-ERROR` test except the one that uses `goto`.
+  error but does not invent one. A backward `goto` is treated as a loop.
+  On safec's own `compiler/tests/lifetimes` suite, the two compilers agree
+  on accept or reject for every test, and scc reports exactly safec's
+  diagnostics on every `EXPECT-ERROR` test.
 - **Undefined functions**: a function that is declared but never defined,
   and isn't in the runtime, is a compile error (`undefined function 'f'`)
   when the program calls it. Natively that would be a link error.

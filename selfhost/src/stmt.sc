@@ -6,6 +6,179 @@
 
 void check_stmt(int s);
 
+// ── goto and labels (C++ Sema: collectLabels, checkGotoJumps) ────────────────
+// the goto targets of the function being checked: labels outside 'match'
+// arms and 'for' initializers
+#define GL_MAX 256
+int g_fl_sid[GL_MAX];
+int g_fl_n = 0;
+
+int fn_has_label(int sid) {
+    int i = 0;
+    while (i < g_fl_n) { if (g_fl_sid[i] == sid) { return 1; } i = i + 1; }
+    return 0;
+}
+
+void collect_labels(int s) {
+    if (s == 0) { return; }
+    int k = g_node[s].kind;
+    if (k == S_LABEL) {
+        if (g_fl_n < GL_MAX) { g_fl_sid[g_fl_n] = g_node[s].sid; g_fl_n = g_fl_n + 1; }
+        collect_labels(g_node[s].a);
+    } else if (k == S_BLOCK) {
+        int i = 0;
+        while (i < g_node[s].nlist) { collect_labels(g_list[g_node[s].list + i]); i = i + 1; }
+    } else if (k == S_IF) {
+        collect_labels(g_node[s].b);
+        collect_labels(g_node[s].c);
+    } else if (k == S_WHILE || k == S_DO) {
+        collect_labels(g_node[s].b);
+    } else if (k == S_FOR) {
+        collect_labels(g_node[s].d);
+    } else if (k == S_UNSAFE) {
+        collect_labels(g_node[s].a);
+    } else if (k == S_SWITCH) {
+        int i = 0;
+        while (i < g_node[s].nlist) { collect_labels(g_node[g_list[g_node[s].list + i]].b); i = i + 1; }
+    }
+}
+
+// scopes: the non-static declarations in scope while walking
+#define GJ_MAX 4096
+int g_gs_var[GJ_MAX];
+int g_gs_n = 0;
+int g_jl_sid[GL_MAX];      // labels seen: name, node, scope snapshot
+int g_jl_node[GL_MAX];
+int g_jl_start[GL_MAX];
+int g_jl_len[GL_MAX];
+int g_jl_n = 0;
+int g_jg_node[GL_MAX];     // gotos: node, scope snapshot
+int g_jg_start[GL_MAX];
+int g_jg_len[GL_MAX];
+int g_jg_n = 0;
+int g_jv[GJ_MAX * 4];      // snapshot storage
+int g_jv_n = 0;
+
+int jump_snapshot() {
+    int start = g_jv_n;
+    int i = 0;
+    while (i < g_gs_n && g_jv_n < GJ_MAX * 4) { g_jv[g_jv_n] = g_gs_var[i]; g_jv_n = g_jv_n + 1; i = i + 1; }
+    return start;
+}
+
+void jump_walk(int s) {
+    if (s == 0) { return; }
+    int mark = g_gs_n;
+    int k = g_node[s].kind;
+    if (k == S_BLOCK) {
+        int i = 0;
+        while (i < g_node[s].nlist) { jump_walk(g_list[g_node[s].list + i]); i = i + 1; }
+        g_gs_n = mark;
+    } else if (k == S_VAR) {
+        if ((g_node[s].flags & NF_STATIC) == 0 && g_gs_n < GJ_MAX) { g_gs_var[g_gs_n] = s; g_gs_n = g_gs_n + 1; }
+    } else if (k == S_MULTI) {
+        int i = 0;
+        while (i < g_node[s].nlist) { jump_walk(g_list[g_node[s].list + i]); i = i + 1; }
+    } else if (k == S_IF || k == S_IFCONST) {
+        if (g_node[s].b != 0) { jump_walk(g_node[s].b); g_gs_n = mark; }
+        if (g_node[s].c != 0) { jump_walk(g_node[s].c); g_gs_n = mark; }
+    } else if (k == S_WHILE || k == S_DO) {
+        jump_walk(g_node[s].b);
+        g_gs_n = mark;
+    } else if (k == S_FOR) {
+        jump_walk(g_node[s].a);
+        jump_walk(g_node[s].d);
+        g_gs_n = mark;
+    } else if (k == S_UNSAFE) {
+        jump_walk(g_node[s].a);
+        g_gs_n = mark;
+    } else if (k == S_SWITCH) {
+        int i = 0;
+        while (i < g_node[s].nlist) {
+            int c = g_list[g_node[s].list + i];
+            int b = g_node[c].b;
+            int j = 0;
+            while (b != 0 && j < g_node[b].nlist) { jump_walk(g_list[g_node[b].list + j]); j = j + 1; }
+            g_gs_n = mark;
+            i = i + 1;
+        }
+    } else if (k == S_MATCH) {
+        int i = 0;
+        while (i < g_node[s].nlist) {
+            jump_walk(g_node[g_list[g_node[s].list + i]].a);
+            g_gs_n = mark;
+            i = i + 1;
+        }
+    } else if (k == S_LABEL) {
+        int sid = g_node[s].sid;
+        int i = 0;
+        int dup = -1;
+        while (i < g_jl_n) { if (g_jl_sid[i] == sid) { dup = i; } i = i + 1; }
+        if (dup >= 0) {
+            msg_reset();
+            msg_lit("duplicate label '");
+            msg_str(sid);
+            msg_lit("' (first defined at line ");
+            msg_int((long)g_tok[g_node[g_jl_node[dup]].tok].line);
+            msg_lit(")");
+            error_node(s);
+        } else if (g_jl_n < GL_MAX) {
+            g_jl_sid[g_jl_n] = sid;
+            g_jl_node[g_jl_n] = s;
+            g_jl_start[g_jl_n] = jump_snapshot();
+            g_jl_len[g_jl_n] = g_gs_n;
+            g_jl_n = g_jl_n + 1;
+        }
+        jump_walk(g_node[s].a);
+    } else if (k == S_GOTO) {
+        if (g_jg_n < GL_MAX) {
+            g_jg_node[g_jg_n] = s;
+            g_jg_start[g_jg_n] = jump_snapshot();
+            g_jg_len[g_jg_n] = g_gs_n;
+            g_jg_n = g_jg_n + 1;
+        }
+    }
+}
+
+void check_goto_jumps(int body) {
+    g_gs_n = 0;
+    g_jl_n = 0;
+    g_jg_n = 0;
+    g_jv_n = 0;
+    jump_walk(body);
+    int g = 0;
+    while (g < g_jg_n) {
+        int gn = g_jg_node[g];
+        int li = -1;
+        int i = 0;
+        while (i < g_jl_n) { if (g_jl_sid[i] == g_node[gn].sid) { li = i; } i = i + 1; }
+        if (li >= 0) {
+            i = 0;
+            while (i < g_jl_len[li]) {
+                int vd = g_jv[g_jl_start[li] + i];
+                int seen = 0;
+                int j = 0;
+                while (j < g_jg_len[g]) { if (g_jv[g_jg_start[g] + j] == vd) { seen = 1; } j = j + 1; }
+                if (seen == 0) {
+                    msg_reset();
+                    msg_lit("goto '");
+                    msg_str(g_node[gn].sid);
+                    msg_lit("' jumps over the declaration of '");
+                    msg_str(g_node[vd].sid);
+                    msg_lit("' (line ");
+                    msg_int((long)g_tok[g_node[vd].tok].line);
+                    msg_lit("), which is still in scope at the label but would never be initialized; ");
+                    msg_lit("declare it before the goto, or in a block that ends before the label");
+                    error_node(gn);
+                    break;
+                }
+                i = i + 1;
+            }
+        }
+        g = g + 1;
+    }
+}
+
 void check_block_list(int s) {
     int i = 0;
     while (i < g_node[s].nlist) { check_stmt(g_list[g_node[s].list + i]); i = i + 1; }
@@ -35,6 +208,7 @@ int strip_arr(int t) {
 void check_var(int s) {
     int dt = 0;
     if (g_node[s].c != 0) { dt = resolve_type(g_node[s].c); }
+    if ((g_node[s].flags & NF_VOLATILE) != 0) { dt = with_volatile_elements(dt); }
     int init = g_node[s].a;
     int it = 0;
     int is_static = (g_node[s].flags & NF_STATIC) != 0;
@@ -91,6 +265,7 @@ void check_var(int s) {
     if (init != 0 || aggregate == 1 || is_static == 1) { initialized = 1; flags = LF_INIT; }
     if ((g_node[s].flags & NF_CONST) != 0) { flags = flags | LF_CONST; }
     if (is_static == 1) { flags = flags | LF_STATIC; }
+    if ((g_node[s].flags & NF_VOLATILE) != 0) { flags = flags | LF_VOLATILE; }
     int l = new_local(g_node[s].sid, dt, flags, s);
     g_node[s].d = l;
     g_node[s].ty = dt;
@@ -311,11 +486,17 @@ void check_stmt(int s) {
     if (k == S_MATCH) { check_match_stmt(s); return; }
     if (k == S_SWITCH) { check_switch(s); return; }
     if (k == S_STATIC_ASSERT) { check_static_assert(s); return; }
-    if (k == S_GOTO || k == S_LABEL) {
-        err_at(s, "goto and statement labels are not supported by scc (labeled loops are)");
-        if (k == S_LABEL) { check_stmt(g_node[s].a); }
+    if (k == S_GOTO) {
+        if (fn_has_label(g_node[s].sid) == 0) {
+            msg_reset();
+            msg_lit("use of undeclared label '");
+            msg_str(g_node[s].sid);
+            msg_lit("'");
+            error_node(s);
+        }
         return;
     }
+    if (k == S_LABEL) { check_stmt(g_node[s].a); return; }
 }
 
 // ── functions ────────────────────────────────────────────────────────────────
@@ -361,11 +542,18 @@ void check_function(int f) {
     while (i < g_node[fnode].nlist) {
         int p = g_list[g_node[fnode].list + i];
         int pt = g_tyl[g_ty[ft].list + pi + i];
-        int l = new_local(g_node[p].sid, pt, LF_PARAM | LF_INIT, p);
+        int pfl = LF_PARAM | LF_INIT;
+        if ((g_node[p].flags & NF_VOLATILE) != 0) { pfl = pfl | LF_VOLATILE; }
+        int l = new_local(g_node[p].sid, pt, pfl, p);
         if (g_node[p].sid != 0) { define_sym(g_node[p].sid, SYM_LOCAL, l, pt, 1); }
         i = i + 1;
     }
+    int saved_fl = g_fl_n;
+    g_fl_n = 0;
+    collect_labels(body);
+    check_goto_jumps(body);
     check_block(body);
+    g_fl_n = saved_fl;
     pop_scope();
     g_cur_fn = saved_fn;
     g_cur_ret = saved_ret;

@@ -73,3 +73,6 @@ int func_param(int f, int i);
 int deref_struct(int t);
 extern int g_tyloc;
 extern int g_ce_struct;
+int with_volatile_elements(int t);
+int pointee_volatile(int t);
+int drops_volatile(int from, int to);

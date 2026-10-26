@@ -680,6 +680,100 @@ void ctl_close() {
     g_cdepth = g_cdepth - 1;
 }
 
+// ── goto ─────────────────────────────────────────────────────────────────────
+// A function with goto targets runs its body inside a dispatch loop. 'goto L'
+// sets the target local to L's id and branches to the loop's head; the body
+// then runs in "skip mode": each statement whose subtree doesn't hold the
+// target is skipped, one that does is entered without evaluating its
+// condition, and the label itself clears the target. Ids are assigned in
+// preorder, so the labels under any statement form a contiguous id range.
+int g_gt_mode = 0;
+int g_gt_local = 0;
+int g_gt_disp = 0;
+int g_gl_sid[256];
+int g_gl_node[256];
+int g_gl_n = 0;
+int g_gr_node[1024];
+int g_gr_lo[1024];
+int g_gr_hi[1024];
+int g_gr_n = 0;
+int g_rlo = 0;
+int g_rhi = 0;
+
+// assigns label ids under s (goto targets: as Sema's collectLabels)
+void gt_assign(int s) {
+    if (s == 0) { return; }
+    int k = g_node[s].kind;
+    int first = g_gl_n + 1;
+    if (k == S_LABEL) {
+        if (g_gl_n < 256) { g_gl_sid[g_gl_n] = g_node[s].sid; g_gl_node[g_gl_n] = s; g_gl_n = g_gl_n + 1; }
+        gt_assign(g_node[s].a);
+    } else if (k == S_BLOCK) {
+        int i = 0;
+        while (i < g_node[s].nlist) { gt_assign(g_list[g_node[s].list + i]); i = i + 1; }
+    } else if (k == S_IF) {
+        gt_assign(g_node[s].b);
+        gt_assign(g_node[s].c);
+    } else if (k == S_WHILE || k == S_DO) {
+        gt_assign(g_node[s].b);
+    } else if (k == S_FOR) {
+        gt_assign(g_node[s].d);
+    } else if (k == S_UNSAFE) {
+        gt_assign(g_node[s].a);
+    } else if (k == S_SWITCH) {
+        int i = 0;
+        while (i < g_node[s].nlist) { gt_assign(g_node[g_list[g_node[s].list + i]].b); i = i + 1; }
+    } else {
+        return;
+    }
+    if (g_gl_n + 1 > first && g_gr_n < 1024) {
+        g_gr_node[g_gr_n] = s;
+        g_gr_lo[g_gr_n] = first;
+        g_gr_hi[g_gr_n] = g_gl_n;
+        g_gr_n = g_gr_n + 1;
+    }
+}
+
+// 1 (range in g_rlo..g_rhi) if s holds goto targets
+int gt_range(int s) {
+    if (g_gt_mode == 0 || s == 0) { return 0; }
+    int i = 0;
+    while (i < g_gr_n) {
+        if (g_gr_node[i] == s) { g_rlo = g_gr_lo[i]; g_rhi = g_gr_hi[i]; return 1; }
+        i = i + 1;
+    }
+    return 0;
+}
+
+int gt_label_id(int s) {
+    int i = 0;
+    while (i < g_gl_n) { if (g_gl_node[i] == s) { return i + 1; } i = i + 1; }
+    return 0;
+}
+
+int gt_id_of_name(int sid) {
+    int i = 0;
+    while (i < g_gl_n) { if (g_gl_sid[i] == sid) { return i + 1; } i = i + 1; }
+    return 0;
+}
+
+void gt_get() { emit(OP_LOCAL_GET); emitu((long)g_gt_local); }
+
+// pushes (target in s's range) as an i32; 0 if s holds no targets
+void gt_in_range(int s) {
+    if (gt_range(s) == 0) { emit_i32(0); return; }
+    gt_get(); emit_i32(g_rlo); emit(OP_I32_GE_U);
+    gt_get(); emit_i32(g_rhi); emit(OP_I32_LE_U);
+    emit(OP_I32_AND);
+}
+
+// opens 'if (no target)' (skip mode off)
+void gt_open_normal() {
+    gt_get();
+    emit(OP_I32_EQZ);
+    ctl_open(OP_IF);
+}
+
 void gen_return(int s) {
     int v = g_node[s].a;
     int rt = g_gen_ret;
@@ -727,7 +821,19 @@ void gen_try_fail() {
 }
 
 void gen_if(int s) {
-    gen_cond(g_node[s].a);
+    if (gt_range(s) == 1) {
+        // skip mode: enter the branch that holds the target
+        gt_get();
+        emit(OP_I32_EQZ);
+        emit(OP_IF); emit(127);
+        g_cdepth = g_cdepth + 1;
+        gen_cond(g_node[s].a);
+        emit(OP_ELSE);
+        gt_in_range(g_node[s].b);
+        ctl_close();
+    } else {
+        gen_cond(g_node[s].a);
+    }
     ctl_open(OP_IF);
     gen_stmt(g_node[s].b);
     if (g_node[s].c != 0) {
@@ -742,9 +848,12 @@ void gen_while(int s) {
     int brk = g_cdepth;
     ctl_open(OP_LOOP);
     int top = g_cdepth;
+    int skip = gt_range(s);
+    if (skip == 1) { gt_open_normal(); }
     gen_cond(g_node[s].a);
     emit(OP_I32_EQZ);
     emit(OP_BR_IF); emitu((long)(g_cdepth - brk));
+    if (skip == 1) { ctl_close(); }
     push_loop(brk, top, g_node[s].sid, 0);
     gen_stmt(g_node[s].b);
     g_nlp = g_nlp - 1;
@@ -778,9 +887,12 @@ void gen_for(int s) {
     ctl_open(OP_LOOP);
     int top = g_cdepth;
     if (g_node[s].b != 0) {
+        int skip = gt_range(s);
+        if (skip == 1) { gt_open_normal(); }
         gen_cond(g_node[s].b);
         emit(OP_I32_EQZ);
         emit(OP_BR_IF); emitu((long)(g_cdepth - brk));
+        if (skip == 1) { ctl_close(); }
     }
     ctl_open(OP_BLOCK);
     int cont = g_cdepth;
@@ -809,8 +921,11 @@ void gen_switch(int s) {
     int is64 = vt_of(t) == VT_I64;
     int sv = new_wl(VT_I32);
     if (is64 == 1) { sv = new_wl(VT_I64); }
+    int skip = gt_range(s);
+    if (skip == 1) { gt_open_normal(); }
     gen_value_as(g_node[s].a, t);
     emit(OP_LOCAL_SET); emitu((long)sv);
+    if (skip == 1) { ctl_close(); }
     int n = g_node[s].nlist;
     // block structure: block(end) block(case n-1) ... block(case 0) dispatch end body0 end body1 ...
     ctl_open(OP_BLOCK);
@@ -819,6 +934,16 @@ void gen_switch(int s) {
     while (i < n) { ctl_open(OP_BLOCK); i = i + 1; }
     // dispatch: case i's body starts after the end of block depth (brk + 1 + n - 1 - i)... see below
     int def = -1;
+    if (gt_range(s) == 1) {
+        // skip mode: straight into the case that holds the target
+        i = 0;
+        while (i < n) {
+            int c = g_list[g_node[s].list + i];
+            gt_in_range(g_node[c].b);
+            emit(OP_BR_IF); emitu((long)i);
+            i = i + 1;
+        }
+    }
     i = 0;
     while (i < n) {
         int c = g_list[g_node[s].list + i];
@@ -852,9 +977,44 @@ void gen_switch(int s) {
     ctl_close();
 }
 
+void gen_stmt_inner(int s);
+
 void gen_stmt(int s) {
     if (s == 0) { return; }
     int k = g_node[s].kind;
+    if (g_gt_mode == 1 && k != S_BLOCK && k != S_MULTI && k != S_UNSAFE && k != S_DEFER && k != S_EMPTY &&
+        k != S_STATIC_ASSERT) {
+        if (k == S_LABEL) {
+            int id = gt_label_id(s);
+            if (id != 0) {
+                gt_get(); emit_i32(id); emit(OP_I32_EQ);
+                ctl_open(OP_IF);
+                emit_i32(0); emit(OP_LOCAL_SET); emitu((long)g_gt_local);
+                ctl_close();
+            }
+            gen_stmt(g_node[s].a);
+            return;
+        }
+        if (gt_range(s) == 0) {
+            // skipped while looking for the target
+            gt_open_normal();
+            gen_stmt_inner(s);
+            ctl_close();
+            return;
+        }
+    }
+    gen_stmt_inner(s);
+}
+
+void gen_stmt_inner(int s) {
+    int k = g_node[s].kind;
+    if (k == S_LABEL) { gen_stmt(g_node[s].a); return; }
+    if (k == S_GOTO) {
+        int id = gt_id_of_name(g_node[s].sid);
+        emit_i32(id); emit(OP_LOCAL_SET); emitu((long)g_gt_local);
+        emit_br_to(g_gt_disp);
+        return;
+    }
     if (k == S_BLOCK) { gen_block(s); return; }
     if (k == S_MULTI) { gen_block_list(s); return; }
     if (k == S_VAR) { gen_var(s); return; }
@@ -949,7 +1109,21 @@ void gen_function(int f) {
         }
         i = i + 1;
     }
-    gen_block(g_node[fnode].a);
+    g_gt_mode = 0;
+    g_gl_n = 0;
+    g_gr_n = 0;
+    gt_assign(g_node[fnode].a);
+    if (g_gl_n > 0) {
+        g_gt_mode = 1;
+        g_gt_local = new_wl(VT_I32);
+        ctl_open(OP_LOOP);
+        g_gt_disp = g_cdepth;
+        gen_block(g_node[fnode].a);
+        ctl_close();
+        g_gt_mode = 0;
+    } else {
+        gen_block(g_node[fnode].a);
+    }
     // falling off the end
     if (vt_of(g_gen_ret) != 0 && is_agg(g_gen_ret) == 0) { emit_zero(g_gen_ret); }
     emit_epilogue();

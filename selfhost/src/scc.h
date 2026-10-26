@@ -370,6 +370,7 @@ struct Tok {
 #define NF_PAREN    262144  // parenthesized expression
 #define NF_FWD      524288  // forward declaration only
 #define NF_GENERIC  1048576
+#define NF_VOLATILE 16777216   // a declaration of a volatile object (var, param, field, global, typedef)
 
 struct Node {
     int kind;
@@ -422,6 +423,7 @@ struct Node {
 #define TYF_STRUCTKW 8
 #define TYF_UNIONKW  16
 #define TYF_ENUMKW   32
+#define TYF_VOLATILE 64   // pointer/reference: the pointee is volatile; array: the elements are
 
 #define R_EXTERN 0
 #define R_STACK  1
@@ -509,6 +511,7 @@ struct Glob {
 #define LF_INIT   4
 #define LF_CONST  8
 #define LF_STATIC 16  // function-local static: lives in data
+#define LF_VOLATILE 32
 
 struct Local {
     int sid;
@@ -682,6 +685,7 @@ int ty_prim(int kind);
 int ty_ptr(int base, int flags);
 int ty_ref(int base, int rgn, int arn, int flags);
 int ty_array(int base, int n);
+int ty_array_f(int base, int n, int flags);
 int ty_slice(int base);
 int ty_opt(int base);
 int ty_fn(int ret, int mark, int variadic);

@@ -3,7 +3,5 @@
 # listed here fails. Reasons are in SUBSET.md, "Not supported" and
 # "Differences".
 
-# goto and statement labels are not supported
-ctests/goto/resume_points.sc
 # SIMD vector types are not supported
 ctests/simd/vector_align.sc
