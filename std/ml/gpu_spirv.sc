@@ -41,14 +41,16 @@ void SpirvBuf::free() {
     self.handle = 0UL;
 }
 
-int SpirvBuf::read(&void dst, unsigned long bytes) const {
-    if (self.handle == 0UL || bytes > self.bytes || bytes % 4UL != 0UL) return 0;
-    unsafe { return device_download_(DEVICE_VULKAN, (&float)dst, self.handle, bytes / 4UL); }
+int SpirvBuf::read([]unsigned char dst) const {
+    unsigned long bytes = dst.len;
+    if (self.handle == 0UL || bytes > self.bytes || bytes % 4UL != 0UL || bytes == 0UL) return 0;
+    unsafe { return device_download_(DEVICE_VULKAN, (&float)(void*)dst.ptr, self.handle, bytes / 4UL); }
 }
 
-int SpirvBuf::write(const &void src, unsigned long bytes) {
-    if (self.handle == 0UL || bytes > self.bytes || bytes % 4UL != 0UL) return 0;
-    unsafe { return device_upload_(DEVICE_VULKAN, self.handle, (const &float)src, bytes / 4UL); }
+int SpirvBuf::write([]const unsigned char src) {
+    unsigned long bytes = src.len;
+    if (self.handle == 0UL || bytes > self.bytes || bytes % 4UL != 0UL || bytes == 0UL) return 0;
+    unsafe { return device_upload_(DEVICE_VULKAN, self.handle, (const &float)(const void*)src.ptr, bytes / 4UL); }
 }
 
 struct SpirvBuf SpirvBuf::alloc(unsigned long n, int dtype) {
@@ -61,10 +63,18 @@ struct SpirvBuf SpirvBuf::alloc(unsigned long n, int dtype) {
     return b;
 }
 
-struct SpirvBuf SpirvBuf::upload(const &float host, unsigned long n) {
+struct SpirvBuf SpirvBuf::upload_n_(const &float host, unsigned long n) {
     struct SpirvBuf b = SpirvBuf::alloc(n, 0);
     if (b.handle != 0UL && !device_upload_(DEVICE_VULKAN, b.handle, host, n)) b.free();
     return b;
+}
+
+struct SpirvBuf SpirvBuf::upload([]const float host_s) {
+    unsigned long n = host_s.len;
+    float host_d_[1];
+    const &float host = &host_d_[0];
+    if (host_s.len > 0UL) { unsafe { host = (const &float)host_s.ptr; } }
+    return SpirvBuf::upload_n_(host, n);
 }
 
 // Buffer b holds n fp32 values.
@@ -148,11 +158,11 @@ typedef fn int(struct SpirvBuf, struct SpirvBuf, struct SpirvBuf, unsigned long)
 static int spv_host_binary_(SpvBinaryOp op, const &float a, const &float b, &float out, unsigned long n) {
     if (!spirv_available()) return 0;
     if (n == 0UL) return 1;
-    struct SpirvBuf ba = SpirvBuf::upload(a, n);
-    struct SpirvBuf bb = SpirvBuf::upload(b, n);
+    struct SpirvBuf ba = SpirvBuf::upload_n_(a, n);
+    struct SpirvBuf bb = SpirvBuf::upload_n_(b, n);
     struct SpirvBuf bo = SpirvBuf::alloc(n, 0);
     int ok = ba.valid() && bb.valid() && bo.valid() && op(ba, bb, bo, n);
-    if (ok) { unsafe { ok = bo.read((&void)out, 4UL * n); } }
+    if (ok) { unsafe { ok = bo.read(((unsigned char*)out)[0..4UL * n]); } }
     ba.free(); bb.free(); bo.free();
     return ok;
 }
@@ -168,50 +178,211 @@ static int spv_scale2_(struct SpirvBuf a, struct SpirvBuf b, struct SpirvBuf o, 
 static int spv_host_unary_(SpvBinaryOp op, const &float a, &float out, unsigned long n) {
     if (!spirv_available()) return 0;
     if (n == 0UL) return 1;
-    struct SpirvBuf ba = SpirvBuf::upload(a, n);
+    struct SpirvBuf ba = SpirvBuf::upload_n_(a, n);
     struct SpirvBuf bo = SpirvBuf::alloc(n, 0);
     int ok = ba.valid() && bo.valid() && op(ba, ba, bo, n);
-    if (ok) { unsafe { ok = bo.read((&void)out, 4UL * n); } }
+    if (ok) { unsafe { ok = bo.read(((unsigned char*)out)[0..4UL * n]); } }
     ba.free(); bo.free();
     return ok;
 }
 
-int spirv_add_f32(const &float a, const &float b, &float out, unsigned long n) { return spv_host_binary_(spirv_add, a, b, out, n); }
-int spirv_sub_f32(const &float a, const &float b, &float out, unsigned long n) { return spv_host_binary_(spirv_sub, a, b, out, n); }
-int spirv_mul_f32(const &float a, const &float b, &float out, unsigned long n) { return spv_host_binary_(spirv_mul, a, b, out, n); }
-int spirv_div_f32(const &float a, const &float b, &float out, unsigned long n) { return spv_host_binary_(spirv_div, a, b, out, n); }
-int spirv_pow_f32(const &float a, const &float b, &float out, unsigned long n) { return spv_host_binary_(spirv_pow, a, b, out, n); }
-int spirv_relu_f32(const &float a, &float out, unsigned long n) { return spv_host_unary_(spv_relu2_, a, out, n); }
-int spirv_log_f32(const &float a, &float out, unsigned long n) { return spv_host_unary_(spv_log2_, a, out, n); }
-int spirv_exp_f32(const &float a, &float out, unsigned long n) { return spv_host_unary_(spv_exp2_, a, out, n); }
-int spirv_sqrt_f32(const &float a, &float out, unsigned long n) { return spv_host_unary_(spv_sqrt2_, a, out, n); }
+int spirv_add_f32_n_(const &float a, const &float b, &float out, unsigned long n) { return spv_host_binary_(spirv_add, a, b, out, n); }
 
-int spirv_scale_f32(const &float a, float k, &float out, unsigned long n) {
+int spirv_add_f32([]const float a_s, []const float b_s, []float out_s) {
+    unsigned long n = out_s.len;
+    if (a_s.len < n || b_s.len < n) { return 0; }
+    float a_d_[1];
+    const &float a = &a_d_[0];
+    if (a_s.len > 0UL) { unsafe { a = (const &float)a_s.ptr; } }
+    float b_d_[1];
+    const &float b = &b_d_[0];
+    if (b_s.len > 0UL) { unsafe { b = (const &float)b_s.ptr; } }
+    float out_d_[1];
+    &float out = &out_d_[0];
+    if (out_s.len > 0UL) { unsafe { out = (&float)out_s.ptr; } }
+    return spirv_add_f32_n_(a, b, out, n);
+}
+int spirv_sub_f32_n_(const &float a, const &float b, &float out, unsigned long n) { return spv_host_binary_(spirv_sub, a, b, out, n); }
+
+int spirv_sub_f32([]const float a_s, []const float b_s, []float out_s) {
+    unsigned long n = out_s.len;
+    if (a_s.len < n || b_s.len < n) { return 0; }
+    float a_d_[1];
+    const &float a = &a_d_[0];
+    if (a_s.len > 0UL) { unsafe { a = (const &float)a_s.ptr; } }
+    float b_d_[1];
+    const &float b = &b_d_[0];
+    if (b_s.len > 0UL) { unsafe { b = (const &float)b_s.ptr; } }
+    float out_d_[1];
+    &float out = &out_d_[0];
+    if (out_s.len > 0UL) { unsafe { out = (&float)out_s.ptr; } }
+    return spirv_sub_f32_n_(a, b, out, n);
+}
+int spirv_mul_f32_n_(const &float a, const &float b, &float out, unsigned long n) { return spv_host_binary_(spirv_mul, a, b, out, n); }
+
+int spirv_mul_f32([]const float a_s, []const float b_s, []float out_s) {
+    unsigned long n = out_s.len;
+    if (a_s.len < n || b_s.len < n) { return 0; }
+    float a_d_[1];
+    const &float a = &a_d_[0];
+    if (a_s.len > 0UL) { unsafe { a = (const &float)a_s.ptr; } }
+    float b_d_[1];
+    const &float b = &b_d_[0];
+    if (b_s.len > 0UL) { unsafe { b = (const &float)b_s.ptr; } }
+    float out_d_[1];
+    &float out = &out_d_[0];
+    if (out_s.len > 0UL) { unsafe { out = (&float)out_s.ptr; } }
+    return spirv_mul_f32_n_(a, b, out, n);
+}
+int spirv_div_f32_n_(const &float a, const &float b, &float out, unsigned long n) { return spv_host_binary_(spirv_div, a, b, out, n); }
+
+int spirv_div_f32([]const float a_s, []const float b_s, []float out_s) {
+    unsigned long n = out_s.len;
+    if (a_s.len < n || b_s.len < n) { return 0; }
+    float a_d_[1];
+    const &float a = &a_d_[0];
+    if (a_s.len > 0UL) { unsafe { a = (const &float)a_s.ptr; } }
+    float b_d_[1];
+    const &float b = &b_d_[0];
+    if (b_s.len > 0UL) { unsafe { b = (const &float)b_s.ptr; } }
+    float out_d_[1];
+    &float out = &out_d_[0];
+    if (out_s.len > 0UL) { unsafe { out = (&float)out_s.ptr; } }
+    return spirv_div_f32_n_(a, b, out, n);
+}
+int spirv_pow_f32_n_(const &float a, const &float b, &float out, unsigned long n) { return spv_host_binary_(spirv_pow, a, b, out, n); }
+
+int spirv_pow_f32([]const float a_s, []const float b_s, []float out_s) {
+    unsigned long n = out_s.len;
+    if (a_s.len < n || b_s.len < n) { return 0; }
+    float a_d_[1];
+    const &float a = &a_d_[0];
+    if (a_s.len > 0UL) { unsafe { a = (const &float)a_s.ptr; } }
+    float b_d_[1];
+    const &float b = &b_d_[0];
+    if (b_s.len > 0UL) { unsafe { b = (const &float)b_s.ptr; } }
+    float out_d_[1];
+    &float out = &out_d_[0];
+    if (out_s.len > 0UL) { unsafe { out = (&float)out_s.ptr; } }
+    return spirv_pow_f32_n_(a, b, out, n);
+}
+int spirv_relu_f32_n_(const &float a, &float out, unsigned long n) { return spv_host_unary_(spv_relu2_, a, out, n); }
+
+int spirv_relu_f32([]const float a_s, []float out_s) {
+    unsigned long n = out_s.len;
+    if (a_s.len < n) { return 0; }
+    float a_d_[1];
+    const &float a = &a_d_[0];
+    if (a_s.len > 0UL) { unsafe { a = (const &float)a_s.ptr; } }
+    float out_d_[1];
+    &float out = &out_d_[0];
+    if (out_s.len > 0UL) { unsafe { out = (&float)out_s.ptr; } }
+    return spirv_relu_f32_n_(a, out, n);
+}
+int spirv_log_f32_n_(const &float a, &float out, unsigned long n) { return spv_host_unary_(spv_log2_, a, out, n); }
+
+int spirv_log_f32([]const float a_s, []float out_s) {
+    unsigned long n = out_s.len;
+    if (a_s.len < n) { return 0; }
+    float a_d_[1];
+    const &float a = &a_d_[0];
+    if (a_s.len > 0UL) { unsafe { a = (const &float)a_s.ptr; } }
+    float out_d_[1];
+    &float out = &out_d_[0];
+    if (out_s.len > 0UL) { unsafe { out = (&float)out_s.ptr; } }
+    return spirv_log_f32_n_(a, out, n);
+}
+int spirv_exp_f32_n_(const &float a, &float out, unsigned long n) { return spv_host_unary_(spv_exp2_, a, out, n); }
+
+int spirv_exp_f32([]const float a_s, []float out_s) {
+    unsigned long n = out_s.len;
+    if (a_s.len < n) { return 0; }
+    float a_d_[1];
+    const &float a = &a_d_[0];
+    if (a_s.len > 0UL) { unsafe { a = (const &float)a_s.ptr; } }
+    float out_d_[1];
+    &float out = &out_d_[0];
+    if (out_s.len > 0UL) { unsafe { out = (&float)out_s.ptr; } }
+    return spirv_exp_f32_n_(a, out, n);
+}
+int spirv_sqrt_f32_n_(const &float a, &float out, unsigned long n) { return spv_host_unary_(spv_sqrt2_, a, out, n); }
+
+int spirv_sqrt_f32([]const float a_s, []float out_s) {
+    unsigned long n = out_s.len;
+    if (a_s.len < n) { return 0; }
+    float a_d_[1];
+    const &float a = &a_d_[0];
+    if (a_s.len > 0UL) { unsafe { a = (const &float)a_s.ptr; } }
+    float out_d_[1];
+    &float out = &out_d_[0];
+    if (out_s.len > 0UL) { unsafe { out = (&float)out_s.ptr; } }
+    return spirv_sqrt_f32_n_(a, out, n);
+}
+
+int spirv_scale_f32_n_(const &float a, float k, &float out, unsigned long n) {
     g_spv_k = k;
     return spv_host_unary_(spv_scale2_, a, out, n);
 }
 
-int spirv_sum_f32(const &float a, &float out, unsigned long n) {
+int spirv_scale_f32([]const float a_s, float k, []float out_s) {
+    unsigned long n = out_s.len;
+    if (a_s.len < n) { return 0; }
+    float a_d_[1];
+    const &float a = &a_d_[0];
+    if (a_s.len > 0UL) { unsafe { a = (const &float)a_s.ptr; } }
+    float out_d_[1];
+    &float out = &out_d_[0];
+    if (out_s.len > 0UL) { unsafe { out = (&float)out_s.ptr; } }
+    return spirv_scale_f32_n_(a, k, out, n);
+}
+
+int spirv_sum_f32_n_(const &float a, &float out, unsigned long n) {
     if (!spirv_available()) return 0;
-    struct SpirvBuf ba = SpirvBuf::upload(a, n == 0UL ? 1UL : n);
+    struct SpirvBuf ba = SpirvBuf::upload_n_(a, n == 0UL ? 1UL : n);
     struct SpirvBuf bo = SpirvBuf::alloc(1UL, 0);
     int ok = (n == 0UL || ba.valid()) && bo.valid() && spirv_sum(ba, bo, n);
-    if (ok) { unsafe { ok = bo.read((&void)out, 4UL); } }
+    if (ok) { unsafe { ok = bo.read(((unsigned char*)(void*)(out))[0..4UL]); } }
     ba.free(); bo.free();
     return ok;
 }
 
-int spirv_matmul_f32(const &float a, const &float b, &float out,
+int spirv_sum_f32([]const float a_s, []float out_s) {
+    unsigned long n = a_s.len;
+    if (out_s.len < 1UL) { return 0; }
+    float a_d_[1];
+    const &float a = &a_d_[0];
+    if (a_s.len > 0UL) { unsafe { a = (const &float)a_s.ptr; } }
+    float out_d_[1];
+    &float out = &out_d_[0];
+    if (out_s.len > 0UL) { unsafe { out = (&float)out_s.ptr; } }
+    return spirv_sum_f32_n_(a, out, n);
+}
+
+int spirv_matmul_f32_n_(const &float a, const &float b, &float out,
                       unsigned long M, unsigned long K, unsigned long N) {
     if (!spirv_available()) return 0;
     if (M == 0UL || N == 0UL) return 1;
-    struct SpirvBuf ba = SpirvBuf::upload(a, M * K == 0UL ? 1UL : M * K);
-    struct SpirvBuf bb = SpirvBuf::upload(b, K * N == 0UL ? 1UL : K * N);
+    struct SpirvBuf ba = SpirvBuf::upload_n_(a, M * K == 0UL ? 1UL : M * K);
+    struct SpirvBuf bb = SpirvBuf::upload_n_(b, K * N == 0UL ? 1UL : K * N);
     struct SpirvBuf bo = SpirvBuf::alloc(M * N, 0);
     int ok = ba.valid() && bb.valid() && bo.valid() && spirv_matmul(ba, bb, bo, M, K, N);
-    if (ok) { unsafe { ok = bo.read((&void)out, 4UL * M * N); } }
+    if (ok) { unsafe { ok = bo.read(((unsigned char*)(void*)(out))[0..4UL * M * N]); } }
     ba.free(); bb.free(); bo.free();
     return ok;
+}
+
+int spirv_matmul_f32([]const float a_s, []const float b_s, []float out_s, unsigned long M, unsigned long K, unsigned long N) {
+    if (a_s.len < M * K || b_s.len < K * N || out_s.len < M * N) { return 0; }
+    float a_d_[1];
+    const &float a = &a_d_[0];
+    if (a_s.len > 0UL) { unsafe { a = (const &float)a_s.ptr; } }
+    float b_d_[1];
+    const &float b = &b_d_[0];
+    if (b_s.len > 0UL) { unsafe { b = (const &float)b_s.ptr; } }
+    float out_d_[1];
+    &float out = &out_d_[0];
+    if (out_s.len > 0UL) { unsafe { out = (&float)out_s.ptr; } }
+    return spirv_matmul_f32_n_(a, b, out, M, K, N);
 }
 
 } // namespace std

@@ -6,8 +6,8 @@
 // one stream into another) are written once here. One trait per
 // capability, composed into the roles generic code asks for:
 //
-//   Reader          read(buf, n): File, Pipe, TcpStream, BufReader<R>
-//   Writer          write(buf, n): File, Pipe, TcpStream, BufWriter<W>
+//   Reader          read(buf): File, Pipe, TcpStream, TlsStream, BufReader<R>
+//   Writer          write(buf): File, Pipe, TcpStream, TlsStream, BufWriter<W>
 //   Seekable        seek(off, whence) / tell(): File
 //   Flusher         flush(): File, BufWriter<W>
 //   Stream          Reader + Writer: File, Pipe, TcpStream
@@ -28,7 +28,7 @@
 //   struct Pipe p; p.init();
 //   ...
 //   long long n = copy_stream(f, &p);      // R = File, W = Pipe
-//   if (!write_all(&p, &hdr[0], 16UL)) { ... }
+//   if (!write_all(&p, hdr[0..16])) { ... }
 //
 // Not conforming, on purpose:
 //   WsConn  (http/websocket.h)  message-based: recv() yields whole frames.
@@ -40,15 +40,16 @@
 namespace std {
 
 trait Reader {
-    // Reads at most n bytes into buf. Returns the count read, 0 at end of
-    // stream, -1 on error. May return fewer than n before the end.
-    long long read(&unsigned char buf, unsigned long n);
+    // Reads at most buf.len bytes into buf. Returns the count read, 0 at
+    // end of stream, -1 on error. May return fewer than buf.len before
+    // the end.
+    long long read([]unsigned char buf);
 }
 
 trait Writer {
-    // Writes at most n bytes from buf. Returns the count written (may be
-    // fewer than n), -1 on error.
-    long long write(const &unsigned char buf, unsigned long n);
+    // Writes at most buf.len bytes from buf. Returns the count written
+    // (may be fewer), -1 on error.
+    long long write([]const unsigned char buf);
 }
 
 trait Seekable {
@@ -68,29 +69,27 @@ trait Stream : Reader + Writer {}
 
 trait SeekableStream : Stream + Seekable {}
 
-// Reads exactly n bytes into buf, looping over short reads. 1 when all n
+// Fills buf completely, looping over short reads. 1 when all buf.len bytes
 // arrived; 0 when the stream ended or failed first (buf then holds what did
 // arrive).
 generic<R: Reader>
-int read_exact(&R r, &unsigned char buf, unsigned long n) {
+int read_exact(&R r, []unsigned char buf) {
     unsigned long got = 0UL;
-    while (got < n) {
-        long long k;
-        unsafe { k = r.read((&unsigned char)((unsigned char*)buf + got), n - got); }
+    while (got < buf.len) {
+        long long k = r.read(buf[got..buf.len]);
         if (k <= 0LL) { return 0; }
         got = got + (unsigned long)k;
     }
     return 1;
 }
 
-// Writes all n bytes of buf, looping over short writes. 1 on success, 0 if
-// the stream failed (or accepted nothing) first.
+// Writes all of buf, looping over short writes. 1 on success, 0 if the
+// stream failed (or accepted nothing) first.
 generic<W: Writer>
-int write_all(&W w, const &unsigned char buf, unsigned long n) {
+int write_all(&W w, []const unsigned char buf) {
     unsigned long sent = 0UL;
-    while (sent < n) {
-        long long k;
-        unsafe { k = w.write((const &unsigned char)((const unsigned char*)buf + sent), n - sent); }
+    while (sent < buf.len) {
+        long long k = w.write(buf[sent..buf.len]);
         if (k <= 0LL) { return 0; }
         sent = sent + (unsigned long)k;
     }
@@ -104,10 +103,10 @@ long long copy_stream(&R r, &W w) {
     unsigned char chunk[4096];
     long long total = 0LL;
     while (1) {
-        long long k = r.read(&chunk[0], 4096UL);
+        long long k = r.read(chunk[..]);
         if (k == 0LL) { return total; }
         if (k < 0LL) { return -1LL; }
-        if (!write_all(w, &chunk[0], (unsigned long)k)) { return -1LL; }
+        if (!write_all(w, chunk[0..(unsigned long)k])) { return -1LL; }
         total = total + k;
     }
     return total;

@@ -69,16 +69,23 @@ static void cc_block_(const unsigned char* key, const unsigned char* nonce, unsi
     unsafe {
         while (i < 16) { cc_store32_(out + i * 4, x[i] + s[i]); i = i + 1; }
     }
-    mem_zero_secure(&s[0], 64UL);
-    mem_zero_secure(&x[0], 64UL);
+    mem_zero_secure(s[0..16]);
+    mem_zero_secure(x[0..16]);
 }
 
-void chacha20_block(const &unsigned char key, const &unsigned char nonce, unsigned int counter,
+void chacha20_block_n_(const &unsigned char key, const &unsigned char nonce, unsigned int counter,
                     &unsigned char out) {
     unsafe { cc_block_((const unsigned char*)key, (const unsigned char*)nonce, counter, (unsigned char*)out); }
 }
 
-void chacha20_xor(const &unsigned char key, const &unsigned char nonce, unsigned int counter,
+void chacha20_block([]const unsigned char key_s, []const unsigned char nonce_s, unsigned int counter, []unsigned char out_s) {
+    const &unsigned char key = crypto_in_(key_s, 32UL);
+    const &unsigned char nonce = crypto_in_(nonce_s, 12UL);
+    &unsigned char out = crypto_out_(out_s, 64UL);
+    chacha20_block_n_(key, nonce, counter, out);
+}
+
+void chacha20_xor_n_(const &unsigned char key, const &unsigned char nonce, unsigned int counter,
                   &unsigned char data, unsigned long len) {
     unsigned char ks[64];
     unsigned long off = 0UL;
@@ -93,12 +100,20 @@ void chacha20_xor(const &unsigned char key, const &unsigned char nonce, unsigned
             counter = counter + 1U;
         }
     }
-    mem_zero_secure(&ks[0], 64UL);
+    mem_zero_secure(ks[0..64UL]);
+}
+
+void chacha20_xor([]const unsigned char key_s, []const unsigned char nonce_s, unsigned int counter, []unsigned char data_s) {
+    const &unsigned char key = crypto_in_(key_s, 32UL);
+    const &unsigned char nonce = crypto_in_(nonce_s, 12UL);
+    unsigned long len = data_s.len;
+    &unsigned char data = crypto_out_(data_s, 0UL);
+    chacha20_xor_n_(key, nonce, counter, data, len);
 }
 
 // ── Poly1305 (RFC 8439 §2.5; 26-bit limbs, poly1305-donna's 32-bit form) ─────
 
-struct Poly1305 Poly1305::new(const &unsigned char key) {
+struct Poly1305 Poly1305::new_n_(const &unsigned char key) {
     struct Poly1305 p;
     unsafe {
         const unsigned char* k = (const unsigned char*)key;
@@ -118,6 +133,11 @@ struct Poly1305 Poly1305::new(const &unsigned char key) {
     while (i < 16) { p.buf[i] = (unsigned char)0; i = i + 1; }
     p.buf_len = 0UL;
     return p;
+}
+
+struct Poly1305 Poly1305::new([]const unsigned char key_s) {
+    const &unsigned char key = crypto_in_(key_s, 32UL);
+    return Poly1305::new_n_(key);
 }
 
 // Absorbs one 16-byte block; hibit is 1<<24 for full blocks, 0 for the
@@ -172,7 +192,7 @@ static void poly_block_(&Poly1305 p, const unsigned char* m, unsigned int hibit)
     p.h[0] = h0; p.h[1] = h1; p.h[2] = h2; p.h[3] = h3; p.h[4] = h4;
 }
 
-void Poly1305::update(const &unsigned char data, unsigned long len) {
+void Poly1305::update_n_(const &unsigned char data, unsigned long len) {
     unsafe {
         const unsigned char* m = (const unsigned char*)data;
         unsigned long off = 0UL;
@@ -198,6 +218,12 @@ void Poly1305::update(const &unsigned char data, unsigned long len) {
     }
 }
 
+void Poly1305::update([]const unsigned char data_s) {
+    unsigned long len = data_s.len;
+    const &unsigned char data = crypto_in_(data_s, 0UL);
+    self.update_n_(data, len);
+}
+
 void Poly1305::pad16() {
     if (self.buf_len == 0UL) { return; }
     while (self.buf_len < 16UL) {
@@ -208,7 +234,7 @@ void Poly1305::pad16() {
     self.buf_len = 0UL;
 }
 
-void Poly1305::finish(&unsigned char tag) {
+void Poly1305::finish_n_(&unsigned char tag) {
     if (self.buf_len > 0UL) {
         unsigned long i = self.buf_len;
         self.buf[i] = (unsigned char)1;
@@ -261,16 +287,29 @@ void Poly1305::finish(&unsigned char tag) {
         cc_store32_(t + 8, w2);
         cc_store32_(t + 12, w3);
     }
-    mem_zero_secure(self, sizeof(struct Poly1305));
+    mem_zero_secure_obj(self);
 }
 
-void poly1305(const &unsigned char key, const ?&unsigned char msg, unsigned long len, &unsigned char tag) {
-    struct Poly1305 p = Poly1305::new(key);
+void Poly1305::finish([]unsigned char tag_s) {
+    &unsigned char tag = crypto_out_(tag_s, 16UL);
+    self.finish_n_(tag);
+}
+
+void poly1305_n_(const &unsigned char key, const ?&unsigned char msg, unsigned long len, &unsigned char tag) {
+    struct Poly1305 p = Poly1305::new_n_(key);
     match (msg) {
-        case some(m): { p.update(m, len); }
+        case some(m): { p.update_n_(m, len); }
         case null: { }
     }
-    p.finish(tag);
+    p.finish_n_(tag);
+}
+
+void poly1305([]const unsigned char key_s, []const unsigned char msg_s, []unsigned char tag_s) {
+    const &unsigned char key = crypto_in_(key_s, 32UL);
+    unsigned long len = msg_s.len;
+    const ?&unsigned char msg = crypto_opt_(msg_s);
+    &unsigned char tag = crypto_out_(tag_s, 16UL);
+    poly1305_n_(key, msg, len, tag);
 }
 
 // ── AEAD_CHACHA20_POLY1305 (RFC 8439 §2.8) ────────────────────────────────────
@@ -280,14 +319,14 @@ static void aead_tag_(const unsigned char* key, const unsigned char* nonce,
                       const unsigned char* ct, unsigned long len, unsigned char* tag) {
     unsigned char block0[64];
     unsafe { cc_block_(key, nonce, 0U, &block0[0]); }
-    struct Poly1305 p = Poly1305::new(&block0[0]);
-    mem_zero_secure(&block0[0], 64UL);
+    struct Poly1305 p = Poly1305::new_n_(&block0[0]);
+    mem_zero_secure(block0[0..64UL]);
     match (aad) {
-        case some(a): { if (aad_len > 0UL) { p.update(a, aad_len); } }
+        case some(a): { if (aad_len > 0UL) { p.update_n_(a, aad_len); } }
         case null: { }
     }
     p.pad16();
-    unsafe { if (len > 0UL) { p.update(ct, len); } }
+    unsafe { if (len > 0UL) { p.update_n_(ct, len); } }
     p.pad16();
     unsigned char lens[16];
     unsigned long long al = (unsigned long long)aad_len;
@@ -298,21 +337,32 @@ static void aead_tag_(const unsigned char* key, const unsigned char* nonce,
         lens[8 + i] = (unsigned char)((cl >> (unsigned long long)(8 * i)) & 0xFFULL);
         i = i + 1;
     }
-    p.update(&lens[0], 16UL);
-    unsafe { p.finish(tag); }
+    p.update_n_(&lens[0], 16UL);
+    unsafe { p.finish_n_(tag); }
 }
 
-void chacha20_poly1305_seal(const &unsigned char key, const &unsigned char nonce,
+void chacha20_poly1305_seal_n_(const &unsigned char key, const &unsigned char nonce,
                             const ?&unsigned char aad, unsigned long aad_len,
                             &unsigned char data, unsigned long len, &unsigned char tag) {
-    chacha20_xor(key, nonce, 1U, data, len);
+    chacha20_xor_n_(key, nonce, 1U, data, len);
     unsafe {
         aead_tag_((const unsigned char*)key, (const unsigned char*)nonce, aad, aad_len,
                   (const unsigned char*)data, len, (unsigned char*)tag);
     }
 }
 
-int chacha20_poly1305_open(const &unsigned char key, const &unsigned char nonce,
+void chacha20_poly1305_seal([]const unsigned char key_s, []const unsigned char nonce_s, []const unsigned char aad_s, []unsigned char data_s, []unsigned char tag_s) {
+    const &unsigned char key = crypto_in_(key_s, 32UL);
+    const &unsigned char nonce = crypto_in_(nonce_s, 12UL);
+    unsigned long aad_len = aad_s.len;
+    const ?&unsigned char aad = crypto_opt_(aad_s);
+    unsigned long len = data_s.len;
+    &unsigned char data = crypto_out_(data_s, 0UL);
+    &unsigned char tag = crypto_out_(tag_s, 16UL);
+    chacha20_poly1305_seal_n_(key, nonce, aad, aad_len, data, len, tag);
+}
+
+int chacha20_poly1305_open_n_(const &unsigned char key, const &unsigned char nonce,
                            const ?&unsigned char aad, unsigned long aad_len,
                            &unsigned char data, unsigned long len, const &unsigned char tag) {
     unsigned char want[16];
@@ -320,11 +370,22 @@ int chacha20_poly1305_open(const &unsigned char key, const &unsigned char nonce,
         aead_tag_((const unsigned char*)key, (const unsigned char*)nonce, aad, aad_len,
                   (const unsigned char*)data, len, &want[0]);
     }
-    int good = ct_eq(&want[0], tag, 16UL);
-    mem_zero_secure(&want[0], 16UL);
+    int good = ct_eq_n_(&want[0], tag, 16UL);
+    mem_zero_secure(want[0..16UL]);
     if (!good) { return 0; }
-    chacha20_xor(key, nonce, 1U, data, len);
+    chacha20_xor_n_(key, nonce, 1U, data, len);
     return 1;
+}
+
+int chacha20_poly1305_open([]const unsigned char key_s, []const unsigned char nonce_s, []const unsigned char aad_s, []unsigned char data_s, []const unsigned char tag_s) {
+    const &unsigned char key = crypto_in_(key_s, 32UL);
+    const &unsigned char nonce = crypto_in_(nonce_s, 12UL);
+    unsigned long aad_len = aad_s.len;
+    const ?&unsigned char aad = crypto_opt_(aad_s);
+    unsigned long len = data_s.len;
+    &unsigned char data = crypto_out_(data_s, 0UL);
+    const &unsigned char tag = crypto_in_(tag_s, 16UL);
+    return chacha20_poly1305_open_n_(key, nonce, aad, aad_len, data, len, tag);
 }
 
 } // namespace std

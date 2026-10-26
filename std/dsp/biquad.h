@@ -41,7 +41,7 @@ struct Biquad {
 
     // process() over a block: out[i] = filter(in[i]), keeping the state in
     // registers for the whole block. in == out is allowed. Real-time safe.
-    void   process_block(const &double in, &double out, unsigned long n);
+    void   process_block([]const double in, []double out);
 
     // Z-domain frequency response at 'freqHz' (evaluates H(e^{j*omega}),
     // omega = 2*pi*freqHz/fs) — magnitude (linear, not dB) and phase (radians).
@@ -92,7 +92,7 @@ struct Biquad32 {
 
     float process(float x);
     void  reset();
-    void  process_block(const &float in, &float out, unsigned long n);
+    void  process_block([]const float in, []float out);
 
     static struct Biquad32 new(float b0, float b1, float b2, float a1, float a2);
     // 'bq' rounded to float, coefficients and state:
@@ -114,7 +114,7 @@ struct FBiquad {
 
     Fixed process(Fixed x);
     void  reset();
-    void  process_block(const &Fixed in, &Fixed out, unsigned long n);
+    void  process_block([]const Fixed in, []Fixed out);
 
     // 'bq''s coefficients quantized to Q8.24, with zero state.
     static struct FBiquad from(struct Biquad bq);

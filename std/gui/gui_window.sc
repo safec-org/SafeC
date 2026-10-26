@@ -256,8 +256,10 @@ struct GuiWindow GuiWindow::create_with(const &GuiWindowOptions opts) {
     st.queue = Vec::new();
     st.qhead = 0UL;
     unsafe {
-        if (opts.title != (const char*)0) { st.title = String::from(opts.title); }
-        else { st.title = String::new(); }
+        match (opts.title) {
+            case some(t): st.title = String::from(t);
+            case null: st.title = String::new();
+        }
     }
     st.x = opts.x;
     st.y = opts.y;

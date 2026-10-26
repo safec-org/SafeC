@@ -321,6 +321,8 @@ int parse_attributes() {
 // ── types ────────────────────────────────────────────────────────────────────
 int is_type_start_tok(int i) {
     int k = tok_kind(i);
+    // '[]T' (a slice type) starts a declaration too, as in safec
+    if (k == T_LBRACKET && tok_kind(i + 1) == T_RBRACKET) { return 1; }
     if (k == K_INT || k == K_VOID || k == K_CHAR || k == K_FLOAT || k == K_DOUBLE ||
         k == K_BOOL || k == K_LONG || k == K_SHORT || k == K_UNSIGNED || k == K_SIGNED ||
         k == K_STRUCT || k == K_UNION || k == K_ENUM || k == K_CONST || k == K_VOLATILE ||
@@ -623,12 +625,26 @@ int parse_type() {
     }
     if (cur() == T_QUESTION) {
         advance();
+        // '?[]T': an optional slice
+        if (cur() == T_LBRACKET && peek(1) == T_RBRACKET) { return ty_opt(parse_type()); }
+        // '?fn R(Args)': a nullable function reference, the '?&' form of the
+        // reference a 'fn' type is (safec's Parser::parseType)
+        if (cur() == K_FN) {
+            int f = parse_type();
+            if (g_ty[f].kind == TY_REF) { return ty_ref(g_ty[f].base, g_ty[f].n, g_ty[f].sid, g_ty[f].flags | TYF_NULL); }
+            return ty_opt(f);
+        }
         int inner = parse_declarator(parse_base_type());
         return ty_opt(inner);
     }
     if (cur() == T_LBRACKET && peek(1) == T_RBRACKET) {
         advance(); advance();
-        return ty_slice(parse_type());
+        // '[]const T': a read-only view; '[]T' converts to it, not back
+        int sfl = 0;
+        if (cur() == K_CONST && peek(1) != T_AMP && peek(1) != T_QAMP) { advance(); sfl = TYF_CONST; }
+        int el = parse_type();
+        g_type_vol = 0;
+        return ty_slice_f(el, sfl);
     }
     int base = parse_base_type();
     return parse_declarator(base);
@@ -1350,6 +1366,7 @@ int looks_like_var_decl() {
         k == K_LONG || k == K_SHORT || k == K_UNSIGNED || k == K_SIGNED || k == K_STRUCT ||
         k == K_UNION || k == K_ENUM || k == K_TUPLE || k == K_FN || k == K_TYPEOF || k == K_AUTO ||
         k == T_AMP || k == T_QAMP || k == T_QUESTION) { return 1; }
+    if (k == T_LBRACKET && peek(1) == T_RBRACKET) { return 1; }
     if (k == T_IDENT && peek(1) == T_IDENT) { return 1; }
     if (k == T_IDENT && peek(1) == T_STAR && peek(2) == T_IDENT) { return 1; }
     if (k == T_IDENT && peek(1) == T_LT && g_typename[cur_sid()] == 1) { return 1; }

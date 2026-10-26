@@ -5,20 +5,28 @@
 namespace std {
 
 unsigned long str_len(const &char s);
+// The bytes of a NUL-terminated string (without the NUL) as a slice — the
+// way to hand a literal or C string to an API taking []const char /
+// []const unsigned char:  base64_encode(str_bytes("foobar"))
+[]const char  str_bytes(const &char s);
 int           str_cmp(const &char a, const &char b);
 int           str_ncmp(const &char a, const &char b, unsigned long n);
 int           str_eq(const &char a, const &char b);
 
 // ── Copy ──────────────────────────────────────────────────────────────────────
-// Copy src into dst — at most `n` bytes including NUL.  dst must hold ≥ n bytes.
-void          str_copy(&char dst, const &char src, unsigned long n);
+// Copy src into dst — at most dst.len-1 bytes, then a NUL (when dst is not
+// empty). Returns 1 when all of src fit, 0 when it was truncated.
+int           str_copy([]char dst, const &char src);
 
 // ── Concatenation ─────────────────────────────────────────────────────────────
-// Append src to the NUL-terminated string at dst.  dst must have room.
-void          str_cat(&char dst, const &char src);
+// Append src to the NUL-terminated string in dst, within dst.len (always
+// NUL-terminated). Returns 1 when all of src fit, 0 when it was truncated
+// (or dst held no NUL).
+int           str_cat([]char dst, const &char src);
 
-// Append at most `n` bytes of src to dst and always NUL-terminate.
-void          str_ncat(&char dst, const &char src, unsigned long n);
+// Append at most `n` bytes of src to the string in dst, within dst.len, and
+// NUL-terminate. Returns 1 when those bytes fit, 0 when truncated.
+int           str_ncat([]char dst, const &char src, unsigned long n);
 
 // ── Search ────────────────────────────────────────────────────────────────────
 // Find first occurrence of needle in haystack.  Returns pointer or NULL.
@@ -49,8 +57,8 @@ unsigned long str_cspan(const &char s, const &char reject);
 ?&char        str_tok(?&char s, const &char delim, &?&char saveptr);
 
 // ── Memory search ─────────────────────────────────────────────────────────────
-// Return pointer to first occurrence of byte `c` in the `n`-byte block at `s`.
-const ?&unsigned char mem_chr(const &unsigned char s, int c, unsigned long n);
+// The first byte == `c` in `s`, or null.
+const ?&unsigned char mem_chr([]const unsigned char s, int c);
 
 // ── Allocation / duplication ──────────────────────────────────────────────────
 // Return a heap-allocated NUL-terminated copy of `s`.  Caller must call dealloc().

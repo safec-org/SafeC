@@ -23,18 +23,21 @@ struct AudioBuffer {
     // Frames available to write.
     unsigned long writable_frames() const;
 
-    // Write `n` interleaved frames from `src`.  Returns frames written.
-    unsigned long write_frames(&Fixed src, unsigned long n);
+    // Buffers are interleaved frames: a slice of k * channels samples
+    // holds k frames (a partial frame at the end is ignored).
 
-    // Read `n` interleaved frames into `dst`.  Returns frames read.
-    unsigned long read_frames(&Fixed dst, unsigned long n);
+    // Write the frames in `src` (as many as fit).  Returns frames written.
+    unsigned long write_frames([]const Fixed src);
 
-    // Peek at `n` frames without consuming.
-    unsigned long peek_frames(&Fixed dst, unsigned long n) const;
+    // Read up to dst.len / channels frames into `dst`.  Returns frames read.
+    unsigned long read_frames([]Fixed dst);
 
-    // Mix (add) `n` frames from `src` into the next writable frames.
-    // Used for audio mixing; does not advance head.
-    void  mix_frames(&Fixed src, unsigned long n);
+    // Like read_frames, without consuming.
+    unsigned long peek_frames([]Fixed dst) const;
+
+    // Mix (add) the frames in `src` into the next writable frames.
+    // Used for audio mixing; does not advance head. Returns frames mixed.
+    unsigned long mix_frames([]const Fixed src);
 
     // Clear (zero) all frames.
     void  clear();

@@ -16,18 +16,17 @@ inline struct Mailbox Mailbox::new(int owner_pid) {
     return mb;
 }
 
-inline int Mailbox::send(int sender_pid, int type, const ?&unsigned char payload, unsigned long size) {
+inline int Mailbox::send(int sender_pid, int type, []const unsigned char payload) {
     if (self.count >= 64) { return 0; } // full
+    unsigned long size = payload.len;
     if (size > (unsigned long)256) { size = (unsigned long)256; } // truncate
 
     int idx = self.head;
     self.messages[idx].sender_pid = sender_pid;
     self.messages[idx].type       = type;
     self.messages[idx].size       = size;
-    if (payload.is_null()) { size = 0UL; }
-    self.messages[idx].size = size;
     if (size > 0UL) {
-        unsafe { memcpy((void*)self.messages[idx].payload, (const void*)payload, size); }
+        unsafe { memcpy((void*)self.messages[idx].payload, (const void*)payload.ptr, size); }
     }
 
     self.head  = (self.head + 1) & 63;

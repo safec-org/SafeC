@@ -7,11 +7,13 @@
 
 namespace std {
 
-inline struct DmaBuffer DmaBuffer::wrap(&unsigned char virt, unsigned long phys, unsigned long size) {
+inline struct DmaBuffer DmaBuffer::wrap([]unsigned char virt, unsigned long phys) {
     struct DmaBuffer buf;
-    buf.virt  = virt;
-    buf.phys  = (phys != (unsigned long)0) ? phys : (unsigned long)virt;
-    buf.size  = size;
+    unsafe { buf.virt = (&unsigned char)virt.ptr; }
+    unsigned long va;
+    unsafe { va = (unsigned long)virt.ptr; }
+    buf.phys  = (phys != (unsigned long)0) ? phys : va;
+    buf.size  = virt.len;
     buf.owner = 0;  // CPU owns initially
     return buf;
 }

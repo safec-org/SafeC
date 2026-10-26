@@ -6,17 +6,17 @@
 // Freestanding-safe.
 //
 //   static int g_buf[32];
-//   struct StaticVec<int> v = std::StaticVec::over(&g_buf[0], 32UL);
+//   struct StaticVec<int> v = std::StaticVec::over(g_buf[0..32]);
 //   v.push(42);
 //   ?int top = v.pop();
 //
 //   static struct StaticMapSlot<int> g_slots[64];
-//   struct StaticMap<int> m = std::StaticMap::over(&g_slots[0], 64UL);
+//   struct StaticMap<int> m = std::StaticMap::over(g_slots[0..64]);
 //   m.insert(5UL, 100);
 //   int x = m.get(5UL).default(0);
 //
-// The container holds a region-less reference to the storage: keep the
-// backing array alive at least as long as the container.
+// The container holds a slice of the storage: keep the backing array alive
+// at least as long as the container.
 #pragma once
 
 namespace std {
@@ -25,11 +25,11 @@ namespace std {
 
 generic<T>
 struct StaticVec {
-    &T            data;   // caller's storage, 'cap' elements
+    []T           data;   // caller's storage
     unsigned long len;
-    unsigned long cap;
+    unsigned long cap;    // data.len
 
-    static struct StaticVec<T> over(&T storage, unsigned long cap);  // empty, over cap elements
+    static struct StaticVec<T> over([]T storage);  // empty, over the storage's elements
 
     int           push(T val);                  // 0 if full
     ?T            pop();                        // null if empty
@@ -42,11 +42,11 @@ struct StaticVec {
 };
 
 generic<T>
-struct StaticVec<T> StaticVec::over(&T storage, unsigned long cap) {
+struct StaticVec<T> StaticVec::over([]T storage) {
     struct StaticVec<T> v;
     v.data = storage;
     v.len = 0UL;
-    v.cap = cap;
+    v.cap = storage.len;
     return v;
 }
 
@@ -100,11 +100,11 @@ struct StaticMapSlot {
 
 generic<V>
 struct StaticMap {
-    &StaticMapSlot<V> slots;   // caller's storage, 'cap' slots
-    unsigned long     cap;
+    []StaticMapSlot<V> slots;  // caller's storage
+    unsigned long     cap;     // slots.len
     unsigned long     count;
 
-    static struct StaticMap<V> over(&StaticMapSlot<V> storage, unsigned long cap);  // empty, over cap slots
+    static struct StaticMap<V> over([]StaticMapSlot<V> storage);  // empty, over the storage's slots
 
     int           insert(unsigned long key, V val);   // insert or update; 0 if full
     ?&V           get(unsigned long key) const;       // null if missing
@@ -115,10 +115,10 @@ struct StaticMap {
 };
 
 generic<V>
-struct StaticMap<V> StaticMap::over(&StaticMapSlot<V> storage, unsigned long cap) {
+struct StaticMap<V> StaticMap::over([]StaticMapSlot<V> storage) {
     struct StaticMap<V> m;
     m.slots = storage;
-    m.cap = cap;
+    m.cap = storage.len;
     m.count = 0UL;
     m.clear();
     return m;

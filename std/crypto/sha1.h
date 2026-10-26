@@ -9,6 +9,7 @@
 // computation is defined in terms of SHA-1, with no alternative). Prefer
 // std::sha256/std::sha512 (see sha256.h/sha512.h) for anything else.
 #pragma once
+#include <std/crypto/buf.h>
 // Sha1Ctx conforms to hash.h's Hasher and BlockHash (generic hashing, Hmac).
 
 #define SHA1_DIGEST_SIZE  20   // bytes
@@ -25,10 +26,14 @@ struct Sha1Ctx {
     static struct Sha1Ctx new();
 
     // Feed `len` bytes of data into the hash.
-    void update(const &unsigned char data, unsigned long len);
+    void update([]const unsigned char data);
+    // internal: the (reference, length) core of update()
+    void update_n_(const &unsigned char data, unsigned long len);
 
     // Finalise and write the 20-byte digest.
-    void finish(&unsigned char digest);
+    void finish([]unsigned char digest);
+    // internal: the (reference, length) core of finish()
+    void finish_n_(&unsigned char digest);
 
     // SHA1_DIGEST_SIZE / SHA1_BLOCK_SIZE (hash.h's BlockHash).
     unsigned long digest_size() const;
@@ -36,7 +41,9 @@ struct Sha1Ctx {
 };
 
 // Convenience: hash `len` bytes and write the 20-byte digest.
-void sha1(const &unsigned char data, unsigned long len,
+void sha1([]const unsigned char data, []unsigned char digest);
+// internal: the (reference, length) core of sha1()
+void sha1_n_(const &unsigned char data, unsigned long len,
           &unsigned char digest);
 
 } // namespace std

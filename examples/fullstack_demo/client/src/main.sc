@@ -24,7 +24,7 @@ static void save(?&Signal<int> s) {
     match (s) {
         case some(c): {
             char buf[24];
-            std::wasm_itoa((long long)c.get(), &buf[0], 24UL);
+            std::wasm_itoa((long long)c.get(), buf[..]);
             std::dom_storage_set(DOM_STORAGE_LOCAL, "fullstack_demo.count", &buf[0]);
         }
         case null: { }
@@ -85,7 +85,7 @@ __attribute__((export_name)) int hydrate_init() {
 
     int countHandle = std::dom_get_element("#count");
     char buf[24];
-    std::wasm_itoa((long long)start, &buf[0], 24UL);
+    std::wasm_itoa((long long)start, buf[..]);
     std::dom_set_text(countHandle, &buf[0]);
     std::hydrate_bind_text_int_handle(&gCounter, countHandle);
     unsafe {

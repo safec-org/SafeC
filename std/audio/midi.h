@@ -38,7 +38,7 @@
 // also carries the time since the previous delivered message.
 #pragma once
 #include <std/audio/audio_error.h>
-#include <std/collections/slice.h>
+#include <std/erased.h>
 #include <std/result.h>
 
 #define MIDI_API_UNSPECIFIED 0
@@ -101,8 +101,10 @@ struct MidiMsg {
     static struct MidiMsg song_select(int song);
     // A one-byte system message: MIDI_CLOCK, MIDI_START, MIDI_STOP, ...
     static struct MidiMsg system(int status);
-    // The first 1..3 bytes of 'bytes' as a message (len 0 if n is 0 or > 3).
-    static struct MidiMsg of(const &unsigned char bytes, unsigned long n);
+    // 'bytes' (1..3 of them) as a message (len 0 if it's empty or longer).
+    static struct MidiMsg of([]const unsigned char bytes);
+    // The message's bytes (data[0..len]).
+    []const unsigned char bytes() const;
 
     int status() const;       // the status byte (0 for an empty message)
     int type() const;         // status & 0xF0 for channel messages, else the status
@@ -122,7 +124,7 @@ int midi_message_length(int status);
 int midi_is_realtime(int status);
 // F0 <payload> F7 into 'out'; the length written, or -1 if it doesn't fit
 // or the payload has a byte >= 0x80.
-long midi_build_sysex(&unsigned char out, unsigned long cap, const &unsigned char payload, unsigned long n);
+long midi_build_sysex([]unsigned char out, []const unsigned char payload);
 // 14-bit value from LSB/MSB data bytes, and back.
 int  midi_14bit(int lsb, int msb);
 
@@ -135,18 +137,20 @@ struct MidiParser {
     int           have;         // bytes in msg
     int           need;         // bytes msg needs
     struct MidiMsg last;        // the last complete short message
-    ?&unsigned char sysex;      // sysex buffer (may be null: sysex dropped)
-    unsigned long sysex_cap;
+    []unsigned char sysex;      // sysex buffer (empty: sysex dropped)
     unsigned long sysex_len;
     int           in_sysex;
     int           sysex_overflow;
 
-    // 'sysex_buf'/'cap' receive reassembled sysex messages (F0 .. F7).
-    static struct MidiParser new(?&unsigned char sysex_buf, unsigned long cap);
+    // 'sysex_buf' receives reassembled sysex messages (F0 .. F7); pass an
+    // empty slice to drop them.
+    static struct MidiParser new([]unsigned char sysex_buf);
     // One byte in; MIDI_PARSE_*.
     int  feed(int byte);
     struct MidiMsg message() const;
     unsigned long sysex_length() const;
+    // The last complete sysex (after MIDI_PARSE_SYSEX): sysex[0..sysex_len].
+    []const unsigned char sysex_message() const;
     void reset();
 };
 
@@ -157,8 +161,8 @@ struct MidiEncoder {
     int           use_running_status;
 
     static struct MidiEncoder new(int use_running_status);
-    // Bytes written to 'out', or -1 if 'cap' is too small.
-    long encode(const &unsigned char msg, unsigned long len, &unsigned char out, unsigned long cap);
+    // Bytes written to 'out', or -1 if it is too small.
+    long encode([]const unsigned char msg, []unsigned char out);
     void reset();
 };
 
@@ -167,7 +171,7 @@ struct MidiEncoder {
 struct MidiEvent {
     double                     timestamp;   // seconds since the port was opened
     double                     delta;       // seconds since the previous message
-    struct Slice<unsigned char> bytes;      // the complete message
+    []const unsigned char      bytes;       // the complete message
 
     int            status() const;
     // The message as a MidiMsg (len 0 for sysex).
@@ -179,12 +183,12 @@ struct MidiPortInfo {
     char         name[MIDI_PORT_NAME_MAX];
 };
 
-// The input callback.
-typedef fn void(&MidiEvent, void*) MidiCallbackRaw_;
+// The input callback, erased (see std/erased.h).
+typedef fn void(&MidiEvent, ?&Erased) MidiCallbackRaw_;
 
 struct MidiIn {
     int    api_id;
-    ?&void impl;     // std-private; null when closed
+    ?&struct MidiPortState_ impl;     // std-private; null when closed
 
     // A client of 'api' (MIDI_API_UNSPECIFIED: midi_default_api()) named
     // 'client_name' (what other programs see); 'queue_bytes' sizes the
@@ -204,7 +208,7 @@ struct MidiIn {
     int  is_port_open() const;
 
     generic<T> void set_callback(fn void(&MidiEvent, ?&T) callback, ?&T user);
-    void set_callback_raw_(void* callback, void* user);
+    void set_callback_raw_(MidiCallbackRaw_ callback, ?&Erased user);
     // Back to the polling queue.
     void cancel_callback();
     // Which message kinds to drop (non-zero = drop): sysex, clock/time code, active sensing.
@@ -213,7 +217,7 @@ struct MidiIn {
     // Polling: copies the next queued message into 'buf' and returns its
     // length (its timestamp into 'timestamp'); 0 when the queue is empty;
     // -(length) when 'buf' is too small (the message stays queued).
-    long get_message(&unsigned char buf, unsigned long cap, &double timestamp);
+    long get_message([]unsigned char buf, &double timestamp);
     // Messages lost to a full queue or an oversized sysex.
     unsigned long dropped() const;
     void drop();
@@ -223,7 +227,7 @@ struct MidiIn {
 
 struct MidiOut {
     int    api_id;
-    ?&void impl;
+    ?&struct MidiPortState_ impl;     // std-private; null when closed
 
     static struct Result<MidiOut, AudioError> open(int api, const &char client_name);
     static struct MidiOut closed();
@@ -238,7 +242,7 @@ struct MidiOut {
     int  is_port_open() const;
 
     // Sends one complete message (a short message or a whole sysex).
-    struct AudioError send_message(const &unsigned char msg, unsigned long len);
+    struct AudioError send_message([]const unsigned char msg);
     struct AudioError send(struct MidiMsg msg);
     void drop();
 
@@ -247,11 +251,11 @@ struct MidiOut {
 
 generic<T>
 void MidiIn::set_callback(fn void(&MidiEvent, ?&T) callback, ?&T user) {
-    unsafe { self.set_callback_raw_((void*)callback, (void*)user); }
+    unsafe { self.set_callback_raw_((MidiCallbackRaw_)callback, (?&Erased)user); }
 }
 
-// The APIs compiled into this build, in preference order.
-int midi_compiled_apis(&int out, int cap);
+// The APIs compiled into this build, in preference order (up to out.len).
+int midi_compiled_apis([]int out);
 int midi_api_compiled(int api);
 // Core MIDI, WinMM, Web MIDI, ALSA (JACK when its server is running); the
 // SAFEC_MIDI_API environment variable ("alsa", "jack", "dummy", ...) overrides.

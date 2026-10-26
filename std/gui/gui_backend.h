@@ -143,6 +143,7 @@
 // back through exported functions that call gui_backend_post() on the
 // window found with gui_backend_find().
 
+#include <std/erased.h>
 #include <std/gui/gui.h>
 #include <std/collections/vec.h>
 #include <std/collections/string.h>
@@ -175,9 +176,9 @@ struct GuiNativeHandle {
 struct GuiWindowState {
     unsigned int id;              // == GuiWindow.id
     unsigned long long key;       // backend: native window identifier (see window_create)
-    ?&void native;                // backend-private per-window data
-    ?&void presenterData;         // presenter-private per-window data
-    ?&void presenter;             // the attached struct GuiPresenter (gui_window_set_presenter); null = the backend's own window_present
+    ?&Erased native;              // backend-private per-window data (see std/erased.h)
+    ?&Erased presenterData;       // presenter-private per-window data
+    ?&struct GuiPresenter presenter; // the attached presenter (gui_window_set_presenter); null = the backend's own window_present
 
     struct Vec<struct GuiEvent> queue;  // pending events, FIFO from 'qhead'
     unsigned long qhead;
@@ -202,7 +203,7 @@ struct GuiWindowState {
 };
 
 struct GuiBackend {
-    const char* name;
+    const &char name;
     int primaryMod;   // GUI_MOD_META on macOS, GUI_MOD_CTRL elsewhere
 
     fn int() init;
@@ -226,7 +227,7 @@ struct GuiBackend {
 };
 
 struct GuiPresenter {
-    const char* name;
+    const &char name;
     fn int(&GuiWindowState, struct GuiNativeHandle) attach;   // 1 = ok
     fn void(&GuiWindowState, const &unsigned char, int, int, int, int, int, int) present;
     fn void(&GuiWindowState) detach;

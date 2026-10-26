@@ -19,6 +19,7 @@
 // Odd moduli only (every RSA modulus and curve prime/order is odd).
 // Freestanding-safe.
 #pragma once
+#include <std/crypto/buf.h>
 
 #define BN_LIMBS_MAX 130
 
@@ -33,19 +34,25 @@ struct BnMont {
 
     // From a big-endian modulus (leading zero bytes allowed). 0 if it is
     // even, zero or wider than BN_LIMBS_MAX limbs.
-    int init(const &unsigned char mod_be, unsigned long len);
+    int init([]const unsigned char mod_be);
+    // internal: the (reference, length) core of init()
+    int init_n_(const &unsigned char mod_be, unsigned long len);
 };
 
 // out (m.bytes bytes, big-endian) = base^exp mod m, for a public exponent
 // (its bits are looked at: not for private keys). 'base' (big-endian,
 // base_len <= m.bytes) must be < m; 0 if it isn't, 1 otherwise.
-int bn_mod_exp_public(const &BnMont m, const &unsigned char base, unsigned long base_len,
+int bn_mod_exp_public(const &BnMont m, []const unsigned char base, []const unsigned char exp, []unsigned char out);
+// internal: the (reference, length) core of bn_mod_exp_public()
+int bn_mod_exp_public_n_(const &BnMont m, const &unsigned char base, unsigned long base_len,
                       const &unsigned char exp, unsigned long exp_len, &unsigned char out);
 
 // out = base^exp mod m in constant time for a secret exponent (fixed
 // 4-bit windows over every exponent bit, table entries read by masked
 // scans). exp_len bytes of exponent are processed regardless of value.
-int bn_mod_exp_secret(const &BnMont m, const &unsigned char base, unsigned long base_len,
+int bn_mod_exp_secret(const &BnMont m, []const unsigned char base, []const unsigned char exp, []unsigned char out);
+// internal: the (reference, length) core of bn_mod_exp_secret()
+int bn_mod_exp_secret_n_(const &BnMont m, const &unsigned char base, unsigned long base_len,
                       const &unsigned char exp, unsigned long exp_len, &unsigned char out);
 
 // ── raw limbs (std-internal) ─────────────────────────────────────────────────

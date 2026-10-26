@@ -20,8 +20,8 @@ int count_cb(&AudioIo io, ?&Count cp) {
         case some(c): {
             c.calls = c.calls + 1;
             if (io.input_channels > 0) c.in_frames = c.in_frames + (int)(io.input_bytes().len / (unsigned long)(audio_format_bytes(io.format) * io.input_channels));
-            struct Slice<float> o = io.output_f32();
-            for (unsigned long i = 0UL; i < o.len; i = i + 1UL) o.set(i, (float)0.0);
+            []float o = io.output_f32();
+            for (unsigned long i = 0UL; i < o.len; i = i + 1UL) o[i] = (float)0.0;
             if (c.calls >= 8) return AUDIO_CB_STOP;
         }
         case null: {}
@@ -110,7 +110,7 @@ int main() {
         check(out.send(std::MidiMsg::note_on(0, 60, 1)).ok(), "midiOutShortMsg");
         unsigned char sx[6]; sx[0] = (unsigned char)0xF0; sx[1] = (unsigned char)0x7E; sx[2] = (unsigned char)0x7F;
         sx[3] = (unsigned char)0x09; sx[4] = (unsigned char)0x01; sx[5] = (unsigned char)0xF7;   // GM on
-        struct AudioError se = out.send_message(&sx[0], 6UL);
+        struct AudioError se = out.send_message(sx[0..6]);
         printf("      sysex: '%s'\n", se.message);
         out.send(std::MidiMsg::note_off(0, 60, 0));
         out.close_port();

@@ -7,9 +7,10 @@
 namespace std {
 
 // FNV-1a over the bytes up to the NUL, plus a murmur3 finalizer.
-unsigned int map_hash_str_(const char* s) {
+unsigned int map_hash_str_(const &char key) {
     unsigned int h = 2166136261U;
     unsafe {
+        const char* s = key;
         while (*s != 0) {
             h = (h ^ (unsigned int)(unsigned char)(*s)) * 16777619U;
             s = s + 1;

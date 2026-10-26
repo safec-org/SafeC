@@ -3,6 +3,7 @@
 // fallback face and a system font when one is installed. Font fixtures:
 // tests/stdlib/fixtures/fonts (subsets of DejaVu Sans).
 #include <std/test/test.h>
+#include <std/str.h>
 #include <std/mem.h>
 #include <std/gui/gui.h>
 #include <std/gui/gui_text.h>
@@ -93,21 +94,21 @@ void t_gpos_kerning() {
 void t_malformed() {
     &GuiTypeface f = GuiTypeface::fallback();
     // Truncated: the table directory points past the end.
-    const &unsigned char bytes;
-    unsafe { bytes = (const unsigned char*)f.data; }
+    []const unsigned char bytes;
+    unsafe { bytes = ((const unsigned char*)f.data)[0..f.size]; }
     struct GuiTypeface t;
-    ASSERT_FALSE(t.load_memory(bytes, 200UL, 0));
+    ASSERT_FALSE(t.load_memory(bytes[0..200], 0));
     t.free();
     struct GuiTypeface t2;
     unsigned char junk[64];
     int i = 0;
     while (i < 64) { junk[i] = (unsigned char)(i * 37); i = i + 1; }
-    ASSERT_FALSE(t2.load_memory(&junk[0], 64UL, GUI_FONT_COPY));
+    ASSERT_FALSE(t2.load_memory(junk[0..64UL], GUI_FONT_COPY));
     t2.free();
     // A corrupted copy still loads or fails cleanly, and every glyph either
     // has an outline or not, without crashing.
     struct GuiTypeface c;
-    ASSERT_TRUE(c.load_memory(bytes, f.size, GUI_FONT_COPY));
+    ASSERT_TRUE(c.load_memory(bytes, GUI_FONT_COPY));
     unsafe {
         unsigned char* d = (unsigned char*)c.data;
         unsigned long k = (unsigned long)c.tGlyf + 40UL;
@@ -123,13 +124,13 @@ void t_malformed() {
 void t_layout() {
     &GuiTypeface f = GuiTypeface::fallback();
     struct GuiTextLayout l = GuiTextLayout::new();
-    l.build(f, 20.0f, "Hello", (unsigned long)-1, 0.0f, GUI_TEXT_LEFT);
+    l.build(f, 20.0f, str_bytes("Hello"), 0.0f, GUI_TEXT_LEFT);
     ASSERT_EQ(l.lines.len, 1UL);
     ASSERT_EQ(l.glyphs.len, 5UL);
     ASSERT_TRUE(nearf(l.width, f.measure("Hello", 20.0f), 0.01f));
     ASSERT_TRUE(nearf(l.height, f.line_height(20.0f), 0.01f));
     // Hard breaks.
-    l.build(f, 20.0f, "one\ntwo\n", (unsigned long)-1, 0.0f, GUI_TEXT_LEFT);
+    l.build(f, 20.0f, str_bytes("one\ntwo\n"), 0.0f, GUI_TEXT_LEFT);
     ASSERT_EQ(l.lines.len, 3UL);
     ASSERT_EQ(l.lines.at(1UL).byteStart, 4UL);
     ASSERT_EQ(l.lines.at(1UL).byteEnd, 7UL);
@@ -137,35 +138,35 @@ void t_layout() {
     // Word wrap at spaces.
     const &char text = "the quick brown fox jumps over the lazy dog";
     float w = f.measure("the quick brown", 16.0f) + 2.0f;
-    l.build(f, 16.0f, text, (unsigned long)-1, w, GUI_TEXT_LEFT);
+    l.build(f, 16.0f, str_bytes(text), w, GUI_TEXT_LEFT);
     ASSERT_TRUE(l.lines.len >= 3UL);
     ASSERT_EQ(l.lines.at(1UL).byteStart, 16UL);        // "fox ..." starts line 2
     unsigned long li = 0UL;
     while (li < l.lines.len) { ASSERT_TRUE(l.lines.at(li).width <= w + 0.01f); li = li + 1UL; }
     // A word longer than the line breaks inside it.
-    l.build(f, 16.0f, "abcdefghijklmnopqrstuvwxyz", (unsigned long)-1, 60.0f, GUI_TEXT_LEFT);
+    l.build(f, 16.0f, str_bytes("abcdefghijklmnopqrstuvwxyz"), 60.0f, GUI_TEXT_LEFT);
     ASSERT_TRUE(l.lines.len >= 3UL);
     // Alignment.
-    l.build(f, 16.0f, "ab\nabcdef", (unsigned long)-1, 0.0f, GUI_TEXT_RIGHT);
+    l.build(f, 16.0f, str_bytes("ab\nabcdef"), 0.0f, GUI_TEXT_RIGHT);
     ASSERT_TRUE(nearf(l.lines.at(0UL).x + l.lines.at(0UL).width, l.width, 0.01f));
-    l.build(f, 16.0f, "ab", (unsigned long)-1, 100.0f, GUI_TEXT_CENTER);
+    l.build(f, 16.0f, str_bytes("ab"), 100.0f, GUI_TEXT_CENTER);
     ASSERT_TRUE(nearf(l.lines.at(0UL).x, (100.0f - f.measure("ab", 16.0f)) * 0.5f, 0.01f));
     // Carets and hit testing round-trip.
-    l.build(f, 16.0f, "héllo wörld", (unsigned long)-1, 0.0f, GUI_TEXT_LEFT);
+    l.build(f, 16.0f, str_bytes("héllo wörld"), 0.0f, GUI_TEXT_LEFT);
     float cx = 0.0f; float top = 0.0f; float h = 0.0f;
     l.caret(3UL, &cx, &top, &h);                     // after "hé" (é is 2 bytes)
     ASSERT_TRUE(nearf(cx, f.measure("hé", 16.0f), 0.01f));
     ASSERT_EQ(l.hit_test(cx + 0.5f, 5.0f), 3UL);
     ASSERT_EQ(l.hit_test(-5.0f, 5.0f), 0UL);
     ASSERT_EQ(l.hit_test(1000.0f, 5.0f), 13UL);      // the end (13 bytes)
-    l.build(f, 16.0f, "aa bb", (unsigned long)-1, f.measure("aa b", 16.0f), GUI_TEXT_LEFT);
+    l.build(f, 16.0f, str_bytes("aa bb"), f.measure("aa b", 16.0f), GUI_TEXT_LEFT);
     ASSERT_EQ(l.lines.len, 2UL);
     ASSERT_EQ(l.line_of(3UL), 1UL);
     ASSERT_EQ(l.hit_test(2.0f, l.lineHeight + 2.0f), 3UL);
     // Glyphs a face lacks come from the fallback.
     struct GuiTypeface k1;
     ASSERT_TRUE(k1.load_file("fixtures/fonts/gpos_kern1.ttf"));
-    l.build(&k1, 16.0f, "AxV", (unsigned long)-1, 0.0f, GUI_TEXT_LEFT);
+    l.build(&k1, 16.0f, str_bytes("AxV"), 0.0f, GUI_TEXT_LEFT);
     unsafe {
         ASSERT_TRUE((const void*)l.glyphs.at(1UL).face == (const void*)f);
         ASSERT_TRUE((const void*)l.glyphs.at(0UL).face == (const void*)&k1);

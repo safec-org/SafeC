@@ -297,7 +297,7 @@ static int x5_extensions_(const unsigned char* base, struct Asn1_ exts, &X509Par
     return 1;
 }
 
-int x509_parse(const &unsigned char der, unsigned long len, &X509Parsed out) {
+int x509_parse_n_(const &unsigned char der, unsigned long len, &X509Parsed out) {
     unsafe {
         const unsigned char* base = (const unsigned char*)der;
         out.der_len = len;
@@ -376,23 +376,35 @@ int x509_parse(const &unsigned char der, unsigned long len, &X509Parsed out) {
     return 0;
 }
 
+int x509_parse([]const unsigned char der_s, &X509Parsed out) {
+    unsigned long len = der_s.len;
+    const &unsigned char der = crypto_in_(der_s, 0UL);
+    return x509_parse_n_(der, len, out);
+}
+
 static struct Asn1_ x5_view_(const &unsigned char der, const &X509Span s) {
     unsafe { return asn1_view_((const unsigned char*)der + s.off, s.len); }
 }
 
-int x509_issued_by(const &unsigned char der, const &X509Parsed c,
+int x509_issued_by_n_(const &unsigned char der, const &X509Parsed c,
                    const &unsigned char issuer_der, const &X509Parsed issuer) {
     struct Asn1_ a = x5_view_(der, &c.issuer);
     struct Asn1_ b = x5_view_(issuer_der, &issuer.subject);
     return asn1_eq_(&a, &b);
 }
 
-int x509_verify_signed_by(const &unsigned char der, const &X509Parsed c,
+int x509_issued_by([]const unsigned char der_s, const &X509Parsed c, []const unsigned char issuer_der_s, const &X509Parsed issuer) {
+    const &unsigned char der = crypto_in_(der_s, 0UL);
+    const &unsigned char issuer_der = crypto_in_(issuer_der_s, 0UL);
+    return x509_issued_by_n_(der, c, issuer_der, issuer);
+}
+
+int x509_verify_signed_by_n_(const &unsigned char der, const &X509Parsed c,
                           const &unsigned char issuer_der, const &X509Parsed issuer) {
     if (c.sig_hash == DIGEST_NONE || c.sig_hash == DIGEST_SHA1) { return 0; }
     unsigned char h[DIGEST_MAX_SIZE];
     unsigned long hl = 0UL;
-    unsafe { hl = digest(c.sig_hash, (const unsigned char*)der + c.tbs.off, c.tbs.len, &h[0]); }
+    unsafe { hl = digest_n_(c.sig_hash, (const unsigned char*)der + c.tbs.off, c.tbs.len, &h[0]); }
     if (hl == 0UL) { return 0; }
     unsafe {
         const unsigned char* sig = (const unsigned char*)der + c.sig.off;
@@ -400,23 +412,29 @@ int x509_verify_signed_by(const &unsigned char der, const &X509Parsed c,
         if (c.sig_type == X509_SIG_RSA_PKCS1 || c.sig_type == X509_SIG_RSA_PSS) {
             if (issuer.key_type != X509_KEY_RSA) { return 0; }
             struct RsaPublicKey k;
-            if (!k.init_der((const &unsigned char)key, issuer.key.len)) { return 0; }
+            if (!k.init_der_n_((const &unsigned char)key, issuer.key.len)) { return 0; }
             if (c.sig_type == X509_SIG_RSA_PKCS1) {
-                return rsa_verify_pkcs1(&k, c.sig_hash, &h[0], hl, (const &unsigned char)sig, c.sig.len);
+                return rsa_verify_pkcs1_n_(&k, c.sig_hash, &h[0], hl, (const &unsigned char)sig, c.sig.len);
             }
             if (c.pss_salt < 0) { return 0; }
-            return rsa_verify_pss(&k, c.sig_hash, &h[0], hl, (const &unsigned char)sig, c.sig.len, (unsigned long)c.pss_salt);
+            return rsa_verify_pss_n_(&k, c.sig_hash, &h[0], hl, (const &unsigned char)sig, c.sig.len, (unsigned long)c.pss_salt);
         }
         if (c.sig_type == X509_SIG_ECDSA) {
             int curve = 0;
             if (issuer.key_type == X509_KEY_EC_P256) { curve = EC_P256; }
             else if (issuer.key_type == X509_KEY_EC_P384) { curve = EC_P384; }
             else { return 0; }
-            return ecdsa_verify_der(curve, (const &unsigned char)key, issuer.key.len, &h[0], hl,
+            return ecdsa_verify_der_n_(curve, (const &unsigned char)key, issuer.key.len, &h[0], hl,
                                     (const &unsigned char)sig, c.sig.len);
         }
     }
     return 0;
+}
+
+int x509_verify_signed_by([]const unsigned char der_s, const &X509Parsed c, []const unsigned char issuer_der_s, const &X509Parsed issuer) {
+    const &unsigned char der = crypto_in_(der_s, 0UL);
+    const &unsigned char issuer_der = crypto_in_(issuer_der_s, 0UL);
+    return x509_verify_signed_by_n_(der, c, issuer_der, issuer);
 }
 
 // ── Host matching ─────────────────────────────────────────────────────────────
@@ -550,7 +568,7 @@ static int x5_dns_match_(const unsigned char* p, unsigned long pn, const unsigne
     return 1;
 }
 
-int x509_match_host(const &unsigned char der, const &X509Parsed c, const &char host) {
+int x509_match_host_n_(const &unsigned char der, const &X509Parsed c, const &char host) {
     unsigned char h[256];
     unsigned long hn = 0UL;
     unsafe {
@@ -596,6 +614,11 @@ int x509_match_host(const &unsigned char der, const &X509Parsed c, const &char h
     unsafe {
         return x5_dns_match_((const unsigned char*)der + c.subject_cn.off, c.subject_cn.len, (const unsigned char*)&h[0], hn);
     }
+}
+
+int x509_match_host([]const unsigned char der_s, const &X509Parsed c, const &char host) {
+    const &unsigned char der = crypto_in_(der_s, 0UL);
+    return x509_match_host_n_(der, c, host);
 }
 
 } // namespace std

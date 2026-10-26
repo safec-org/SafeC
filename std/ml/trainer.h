@@ -150,7 +150,7 @@ float trainer_evaluate(&T model, fn &FloatTensor(&T, const &FloatTensor, const &
     stepArena.begin();
     while (dl.next(&b)) {
         &FloatTensor loss = lossFn(model, b.x, b.y);
-        unsafe { tensor_host_((void*)loss); sum = sum + (double)loss->data[0] * (double)b.rows; }
+        unsafe { tensor_host_raw_((void*)loss); sum = sum + (double)loss->data[0] * (double)b.rows; }
         rows = rows + b.rows;
         stepArena.reset();
     }

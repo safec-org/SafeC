@@ -57,11 +57,11 @@ struct String http_date_format(long long t) {
     if (wd < 0LL) { wd = wd + 7LL; }
     struct String out = String::with_cap(32UL);
     unsafe {
-        out.push_n(&http_wdays_()[wd * 3LL], 3UL);
+        out.push_n_(&http_wdays_()[wd * 3LL], 3UL);
         out.push(", ");
         http_push2_(&out, (long long)day);
         out.push_char(' ');
-        out.push_n(&http_months_()[(month - 1) * 3], 3UL);
+        out.push_n_(&http_months_()[(month - 1) * 3], 3UL);
         out.push_char(' ');
         out.push_char((char)((int)'0' + (int)(year / 1000LL)));
         out.push_char((char)((int)'0' + (int)(year / 100LL % 10LL)));

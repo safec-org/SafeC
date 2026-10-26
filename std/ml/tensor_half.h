@@ -91,14 +91,18 @@ generic<E> int half_grads_accumulate(const &Vec<&DenseTensor<E>> grads, &Vec<&Fl
 // token, which is bound by reading the weights. Each weight is widened in
 // registers (no float32 copy of the matrix), accumulated in float32,
 // vectorized for the CPU's SIMD tier and split over rows on
-// std/sync/parallel.h's pool. 1 on success, 0 if 'w' isn't 2D.
-int HalfTensor::gemv(const &float x, &float y) const;
-int BF16Tensor::gemv(const &float x, &float y) const;
+// std/sync/parallel.h's pool. 1 on success, 0 if 'w' isn't 2D or x / y
+// are shorter than k / n.
+int HalfTensor::gemv([]const float x, []float y) const;
+int BF16Tensor::gemv([]const float x, []float y) const;
 // The same for m vectors: x is [m][k] and y is [m][n], row-major. The
 // weights are read from memory once for all m (a short prompt's prefill,
 // speculative verification), not once per vector.
-int HalfTensor::gemv_batch(const &float x, unsigned long m, &float y) const;
-int BF16Tensor::gemv_batch(const &float x, unsigned long m, &float y) const;
+int HalfTensor::gemv_batch([]const float x, unsigned long m, []float y) const;
+int BF16Tensor::gemv_batch([]const float x, unsigned long m, []float y) const;
+// Internal: the unchecked core of gemv_batch.
+int HalfTensor::gemv_batch_n_(const &float x, unsigned long m, &float y) const;
+int BF16Tensor::gemv_batch_n_(const &float x, unsigned long m, &float y) const;
 
 // ── Mixed precision with autograd (float32 Tensors) ─────────────────────────
 // Forward: each element rounded to 'dtype' precision. Backward: gradient

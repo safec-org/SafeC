@@ -12,7 +12,7 @@ static char* value_strdup_(const char* s) {
     char* buf;
     unsafe { buf = (char*)alloc_raw_(n + 1UL); }
     if (buf == (char*)0) { return (char*)0; }
-    unsafe { str_copy(buf, s, n + 1UL); }
+    unsafe { str_copy(buf[0..n + 1UL], s); }
     return buf;
 }
 

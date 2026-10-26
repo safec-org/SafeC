@@ -144,19 +144,19 @@ static struct MpsAttnShape windowed(struct MpsAttnShape s, unsigned long w) {
 
 // A persistent buffer holding 'v' in 'dtype' (0 = fp32).
 static struct MpsBuf upload(&Vec<float> v, int dtype) {
-    if (dtype == MPS_FP16) return MpsBuf::upload_f16(v.at(0UL), v.length());
-    if (dtype == MPS_BF16) return MpsBuf::upload_bf16(v.at(0UL), v.length());
-    return MpsBuf::upload(v.at(0UL), v.length());
+    if (dtype == MPS_FP16) return MpsBuf::upload_f16(v.as_slice()[0..v.length()]);
+    if (dtype == MPS_BF16) return MpsBuf::upload_bf16(v.as_slice()[0..v.length()]);
+    return MpsBuf::upload(v.as_slice()[0..v.length()]);
 }
 
 // Reads n values of 'dtype' from 'buf' into 'out' as floats.
 static int download(struct MpsBuf buf, &Vec<float> out, unsigned long n, int dtype) {
-    if (dtype == 0) { unsafe { return buf.read((void*)out.at(0UL), n * 4UL); } }
+    if (dtype == 0) { unsafe { return buf.read(((unsigned char*)out.at(0UL))[0..n * 4UL]); } }
     struct Vec<unsigned short> bits = std::Vec::with_cap(n);
     unsigned long i = 0UL;
     while (i < n) { bits.push((unsigned short)0); i = i + 1UL; }
     int ok = 0;
-    unsafe { ok = buf.read((void*)bits.at(0UL), n * 2UL); }
+    unsafe { ok = buf.read(((unsigned char*)bits.at(0UL))[0..n * 2UL]); }
     i = 0UL;
     while (i < n) {
         unsigned short b = *bits.at(i);
@@ -250,9 +250,9 @@ int main() {
     struct Vec<float> cpu = std::Vec::with_cap(qn);
     unsigned long i = 0UL;
     while (i < qn) { got.push(0.0f); cpu.push(0.0f); i = i + 1UL; }
-    &FloatTensor tq = FloatTensor::from_2d(q.at(0UL), 40UL, 64UL, 0);
-    &FloatTensor tk = FloatTensor::from_2d(k.at(0UL), 56UL, 64UL, 0);
-    &FloatTensor tv = FloatTensor::from_2d(v.at(0UL), 56UL, 64UL, 0);
+    &FloatTensor tq = FloatTensor::from_2d(q.as_slice()[0..40UL * 64UL], 40UL, 64UL, 0);
+    &FloatTensor tk = FloatTensor::from_2d(k.as_slice()[0..56UL * 64UL], 56UL, 64UL, 0);
+    &FloatTensor tv = FloatTensor::from_2d(v.as_slice()[0..56UL * 64UL], 56UL, 64UL, 0);
     int l = 0;
     while (l < 2) {
         &FloatTensor tr = l ? std::linear_attention_forward(tq, tk, tv) : std::flash_attention_forward(tq, tk, tv, 16UL);
@@ -263,7 +263,7 @@ int main() {
         unsafe {
             ok = l ? std::mps_linear_attention(dq, dk, dv, dout, 1UL, 40UL, 56UL, 64UL, 0)
                    : std::mps_flash_attention(dq, dk, dv, dout, 1UL, 40UL, 56UL, 64UL, (float)0.0, 0);
-            ok = ok && dout.read((void*)got.at(0UL), qn * 4UL);
+            ok = ok && dout.read(((unsigned char*)(void*)(got.at(0UL)))[0..qn * 4UL]);
         }
         double e = relerr(&got, &cpu);
         check(ok && e <= 1.0e-5, l ? "linear matches attention.h" : "flash matches attention.h");
@@ -299,10 +299,10 @@ int main() {
     std::mps_batch_end();
     check(okb, "batched attention encoded");
     struct Vec<float> want = ref_attn(&q, &k, &v, one, 1, 0);
-    unsafe { check(dout.read((void*)got.at(0UL), qn * 4UL) && relerr(&got, &want) <= 2.0e-5, "batched flash"); }
+    unsafe { check(dout.read(((unsigned char*)(void*)(got.at(0UL)))[0..qn * 4UL]) && relerr(&got, &want) <= 2.0e-5, "batched flash"); }
     want.free();
     want = ref_attn(&q, &k, &v, one, 0, 1);
-    unsafe { check(dout2.read((void*)got.at(0UL), qn * 4UL) && relerr(&got, &want) <= 2.0e-5, "batched linear"); }
+    unsafe { check(dout2.read(((unsigned char*)(void*)(got.at(0UL)))[0..qn * 4UL]) && relerr(&got, &want) <= 2.0e-5, "batched linear"); }
     want.free();
 
     // Rejected shapes

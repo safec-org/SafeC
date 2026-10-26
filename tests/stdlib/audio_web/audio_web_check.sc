@@ -19,10 +19,10 @@ int render(&AudioIo io, ?&Synth sp) {
             s.calls = s.calls + 1;
             s.last_frames = (int)io.frames;
             s.status = s.status | io.status;
-            struct Slice<float> o = io.output_f32();
+            []float o = io.output_f32();
             for (unsigned long f = 0UL; f < (unsigned long)io.frames; f = f + 1UL) {
-                o.set(f * 2UL, (float)(f + 1UL));
-                o.set(f * 2UL + 1UL, (float)0.0 - (float)(f + 1UL));
+                o[f * 2UL] = (float)(f + 1UL);
+                o[f * 2UL + 1UL] = (float)0.0 - (float)(f + 1UL);
             }
         }
         case null: {}
@@ -60,8 +60,8 @@ static int g_in_calls = 0;
 
 int capture(&AudioIo io, ?&Synth sp) {
     g_in_calls = g_in_calls + 1;
-    struct Slice<short> in = io.input_i16();         // f32 from the browser, i16 here
-    for (unsigned long i = 0UL; i < in.len; i = i + 1UL) g_in_sum = g_in_sum + (double)*in.at(i);
+    []const short in = io.input_i16();         // f32 from the browser, i16 here
+    for (unsigned long i = 0UL; i < in.len; i = i + 1UL) g_in_sum = g_in_sum + (double)in[i];
     return AUDIO_CB_CONTINUE;
 }
 
@@ -134,7 +134,7 @@ __attribute__((export_name("test_midi_poll")))
 int test_midi_poll() {
     unsigned char buf[16];
     double t = 0.0;
-    long n = g_in.get_message(&buf[0], 16UL, &t);
+    long n = g_in.get_message(buf[0..16], &t);
     if (n != 3L) return (int)n;
     return ((int)buf[0] << 16) | ((int)buf[1] << 8) | (int)buf[2];
 }

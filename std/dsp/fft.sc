@@ -43,27 +43,27 @@ static int fft_dispatch_(&Complex data, unsigned long n, int inv) {
     unsafe { return fft_run_((double*)data, n, inv, FFT_MODE_TOP); }
 }
 
-int fft(&Complex data, unsigned long n) { return fft_dispatch_(data, n, 0); }
-int ifft(&Complex data, unsigned long n) { return fft_dispatch_(data, n, 1); }
+int fft_n_(&Complex data, unsigned long n) { return fft_dispatch_(data, n, 0); }
+int ifft_n_(&Complex data, unsigned long n) { return fft_dispatch_(data, n, 1); }
 
-int fft_serial(&Complex data, unsigned long n) {
+int fft_serial_n_(&Complex data, unsigned long n) {
     if (dsp_is_pow2(n) == 0) return 0;
     if (n <= 1UL) return 1;
     unsafe { return fft_run_((double*)data, n, 0, FFT_MODE_RT); }
 }
 
-int ifft_serial(&Complex data, unsigned long n) {
+int ifft_serial_n_(&Complex data, unsigned long n) {
     if (dsp_is_pow2(n) == 0) return 0;
     if (n <= 1UL) return 1;
     unsafe { return fft_run_((double*)data, n, 1, FFT_MODE_RT); }
 }
 
-int fft_real(const &double in, &Complex out, unsigned long n) {
+int fft_real_n_(const &double in, &Complex out, unsigned long n) {
     if (dsp_is_pow2(n) == 0) return 0;
     unsafe { return fft_real_run_((const double*)in, (double*)out, n, FFT_MODE_TOP, 1); }
 }
 
-int fft_batch(&Complex data, unsigned long n, unsigned long batch, int inverse) {
+int fft_batch_n_(&Complex data, unsigned long n, unsigned long batch, int inverse) {
     if (dsp_is_pow2(n) == 0) return 0;
     if (n <= 1UL || batch == 0UL) return 1;
     if (fft_twiddles_(n) == (const double*)0) return 0;
@@ -81,7 +81,7 @@ int fft_batch(&Complex data, unsigned long n, unsigned long batch, int inverse) 
     return j.ok;
 }
 
-int fft_real_batch(const &double in, &Complex out, unsigned long n, unsigned long batch) {
+int fft_real_batch_n_(const &double in, &Complex out, unsigned long n, unsigned long batch) {
     if (dsp_is_pow2(n) == 0) return 0;
     if (batch == 0UL) return 1;
     if (fft_twiddles_(n) == (const double*)0) return 0;
@@ -98,19 +98,19 @@ int fft_real_batch(const &double in, &Complex out, unsigned long n, unsigned lon
     return j.ok;
 }
 
-int fft_real_batch_inplace(&Complex data, unsigned long n, unsigned long batch) {
+int fft_real_batch_inplace_n_(&Complex data, unsigned long n, unsigned long batch) {
     unsafe { return fft_real_inplace_((double*)data, n, batch); }
 }
 
-int fft_real_half(const &double in, &Complex out, unsigned long n) {
+int fft_real_half_n_(const &double in, &Complex out, unsigned long n) {
     unsafe { return fft_real_half_batch_((const double*)in, (double*)out, n, 1UL); }
 }
 
-int fft_real_half_batch(const &double in, &Complex out, unsigned long n, unsigned long batch) {
+int fft_real_half_batch_n_(const &double in, &Complex out, unsigned long n, unsigned long batch) {
     unsafe { return fft_real_half_batch_((const double*)in, (double*)out, n, batch); }
 }
 
-int ffft(&FComplex data, unsigned long n) {
+int ffft_n_(&FComplex data, unsigned long n) {
     if (dsp_is_pow2(n) == 0) {
         return 0;
     }
@@ -156,7 +156,7 @@ int ffft(&FComplex data, unsigned long n) {
     return 1;
 }
 
-int fifft(&FComplex data, unsigned long n) {
+int fifft_n_(&FComplex data, unsigned long n) {
     if (dsp_is_pow2(n) == 0) {
         return 0;
     }
@@ -165,7 +165,7 @@ int fifft(&FComplex data, unsigned long n) {
         unsafe { data[i] = data[i].conj(); }
         i = i + 1UL;
     }
-    ffft(data, n);
+    ffft_n_(data, n);
     if (n == 0UL) {
         return 1;
     }
@@ -179,6 +179,69 @@ int fifft(&FComplex data, unsigned long n) {
         i = i + 1UL;
     }
     return 1;
+}
+
+// ── Slice API (the public signatures; the (reference, length) cores above
+// are the *_n_ functions) ─────────────────────────────────────────────────────
+
+int fft([]Complex data) {
+    if (data.len == 0UL) return 0;
+    unsafe { return fft_n_((&Complex)data.ptr, data.len); }
+}
+
+int ifft([]Complex data) {
+    if (data.len == 0UL) return 0;
+    unsafe { return ifft_n_((&Complex)data.ptr, data.len); }
+}
+
+int fft_serial([]Complex data) {
+    if (data.len == 0UL) return 0;
+    unsafe { return fft_serial_n_((&Complex)data.ptr, data.len); }
+}
+
+int ifft_serial([]Complex data) {
+    if (data.len == 0UL) return 0;
+    unsafe { return ifft_serial_n_((&Complex)data.ptr, data.len); }
+}
+
+int ffft([]FComplex data) {
+    if (data.len == 0UL) return 0;
+    unsafe { return ffft_n_((&FComplex)data.ptr, data.len); }
+}
+
+int fifft([]FComplex data) {
+    if (data.len == 0UL) return 0;
+    unsafe { return fifft_n_((&FComplex)data.ptr, data.len); }
+}
+
+int fft_real([]const double in, []Complex out) {
+    if (in.len == 0UL || out.len < in.len) return 0;
+    unsafe { return fft_real_n_((const &double)in.ptr, (&Complex)out.ptr, in.len); }
+}
+
+int fft_batch([]Complex data, unsigned long n, int inverse) {
+    if (n == 0UL || data.len == 0UL || data.len % n != 0UL) return 0;
+    unsafe { return fft_batch_n_((&Complex)data.ptr, n, data.len / n, inverse); }
+}
+
+int fft_real_batch([]const double in, []Complex out, unsigned long n) {
+    if (n == 0UL || in.len == 0UL || in.len % n != 0UL || out.len < in.len) return 0;
+    unsafe { return fft_real_batch_n_((const &double)in.ptr, (&Complex)out.ptr, n, in.len / n); }
+}
+
+int fft_real_batch_inplace([]Complex data, unsigned long n) {
+    if (n == 0UL || data.len == 0UL || data.len % n != 0UL) return 0;
+    unsafe { return fft_real_batch_inplace_n_((&Complex)data.ptr, n, data.len / n); }
+}
+
+int fft_real_half([]const double in, []Complex out) {
+    if (in.len == 0UL || out.len < in.len / 2UL + 1UL) return 0;
+    unsafe { return fft_real_half_n_((const &double)in.ptr, (&Complex)out.ptr, in.len); }
+}
+
+int fft_real_half_batch([]const double in, []Complex out, unsigned long n) {
+    if (n == 0UL || in.len == 0UL || in.len % n != 0UL || out.len < (in.len / n) * (n / 2UL + 1UL)) return 0;
+    unsafe { return fft_real_half_batch_n_((const &double)in.ptr, (&Complex)out.ptr, n, in.len / n); }
 }
 
 } // namespace std

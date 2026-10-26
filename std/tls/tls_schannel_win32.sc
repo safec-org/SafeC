@@ -366,17 +366,17 @@ static int sch_verify_(&TlsStream s, struct SchConn_* c) {
     unsafe {
         struct SchCertCtx_* cc = (struct SchCertCtx_*)cert;
         s.peer_der_.free();
-        s.peer_der_ = Vec::from_arr((const &unsigned char)cc->data, (unsigned long)cc->len);
+        s.peer_der_ = Vec::from_slice(((const unsigned char*)cc->data)[0..(unsigned long)cc->len]);
         if (c->verify) {
             if (c->extra.certs.len > 0UL || !c->use_system) {
                 // std's own path validation with the configured roots
                 struct Vec<struct Vec<unsigned char>> chain = Vec::new();
-                chain.push(Vec::from_arr((const &unsigned char)cc->data, (unsigned long)cc->len));
+                chain.push(Vec::from_slice(((const unsigned char*)cc->data)[0..(unsigned long)cc->len]));
                 void* it = CertEnumCertificatesInStore(cc->store, (void*)0);
                 while (it != (void*)0) {
                     struct SchCertCtx_* ic = (struct SchCertCtx_*)it;
                     if (ic->len != cc->len || safe_memcmp_raw_((const void*)ic->data, (const void*)cc->data, (unsigned long)cc->len) != 0) {
-                        chain.push(Vec::from_arr((const &unsigned char)ic->data, (unsigned long)ic->len));
+                        chain.push(Vec::from_slice(((const unsigned char*)ic->data)[0..(unsigned long)ic->len]));
                     }
                     it = CertEnumCertificatesInStore(cc->store, it);
                 }

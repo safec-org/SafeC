@@ -32,7 +32,11 @@ inline int File::close() {
     unsafe { return fclose((void*)self); }
 }
 
-inline long long File::read(&unsigned char buf, unsigned long n) {
+inline long long File::read([]unsigned char buf_s) {
+    unsigned long n = buf_s.len;
+    if (n == 0UL) { return 0LL; }
+    &unsigned char buf;
+    unsafe { buf = (&unsigned char)buf_s.ptr; }
     unsafe {
         unsigned long got = fread((void*)buf, (unsigned long)1, n, (void*)self);
         if (got == 0UL && n > 0UL && ferror((void*)self) != 0) { return -1LL; }
@@ -44,11 +48,17 @@ inline int File::getc() {
     unsafe { return fgetc((void*)self); }
 }
 
-inline ?&char File::gets(&char buf, int n) {
-    unsafe { return fgets(buf, n, (void*)self); }
+inline ?&char File::gets([]char buf) {
+    if (buf.len == 0UL) { return null; }
+    int n = buf.len > 2147483647UL ? 2147483647 : (int)buf.len;
+    unsafe { return fgets((char*)buf.ptr, n, (void*)self); }
 }
 
-inline long long File::write(const &unsigned char buf, unsigned long n) {
+inline long long File::write([]const unsigned char buf_s) {
+    unsigned long n = buf_s.len;
+    if (n == 0UL) { return 0LL; }
+    const &unsigned char buf;
+    unsafe { buf = (const &unsigned char)buf_s.ptr; }
     unsafe {
         unsigned long put = fwrite((const void*)buf, (unsigned long)1, n, (void*)self);
         if (put == 0UL && n > 0UL) { return -1LL; }
@@ -97,11 +107,11 @@ inline long long File::size() {
 inline ?&File        file_open(const &char path, const &char mode) { return File::open(path, mode); }
 // Closes *f in place (File::open hands out references, not owned values).
 inline int           file_close(&File f) { unsafe { return f.close(); } }
-inline unsigned long file_read(&File f, &unsigned char buf, unsigned long n) {
-    long long r = f.read(buf, n); return r < 0LL ? 0UL : (unsigned long)r;
+inline unsigned long file_read(&File f, []unsigned char buf) {
+    long long r = f.read(buf); return r < 0LL ? 0UL : (unsigned long)r;
 }
-inline unsigned long file_write(&File f, const &unsigned char buf, unsigned long n) {
-    long long r = f.write(buf, n); return r < 0LL ? 0UL : (unsigned long)r;
+inline unsigned long file_write(&File f, []const unsigned char buf) {
+    long long r = f.write(buf); return r < 0LL ? 0UL : (unsigned long)r;
 }
 inline int           file_seek(&File f, long long offset, int whence) { return f.seek(offset, whence); }
 inline long long     file_tell(&File f) { return f.tell(); }
@@ -116,10 +126,10 @@ int File::read_to_string(const &char path, &String out) {
             unsigned char buf[16384];
             int ok = 1;
             for (;;) {
-                long long n = f.read(&buf[0], 16384UL);
+                long long n = f.read(buf[0..16384UL]);
                 if (n < 0LL) { ok = 0; break; }
                 if (n == 0LL) { break; }
-                unsafe { out.push_n((const char*)&buf[0], (unsigned long)n); }
+                out.push_bytes(buf[0..(unsigned long)n]);
             }
             f.close();
             return ok;
@@ -129,14 +139,13 @@ int File::read_to_string(const &char path, &String out) {
     return 0;
 }
 
-int File::write_bytes(const &char path, const &char data, unsigned long n) {
+int File::write_bytes(const &char path, []const unsigned char data) {
     ?&File fo = File::open(path, "wb");
     match (fo) {
         case some(f): {
-            long long w;
-            unsafe { w = f.write((const unsigned char*)data, n); }
+            long long w = data.len == 0UL ? 0LL : f.write(data);
             int closed = f.close();
-            return (w == (long long)n && closed == 0) ? 1 : 0;
+            return (w == (long long)data.len && closed == 0) ? 1 : 0;
         }
         case null: { return 0; }
     }

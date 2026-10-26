@@ -42,7 +42,7 @@ static ServerFn __server_fn_lookup(const char* name) {
     return (ServerFn)0;
 }
 
-static struct RpcResult __server_fn_dispatch(const unsigned char* data, unsigned long len) {
+static struct RpcResult __server_fn_dispatch([]const unsigned char req) {
     struct RpcResult result;
     result.ok = 0;
     result.data = (unsigned char*)0;
@@ -50,7 +50,7 @@ static struct RpcResult __server_fn_dispatch(const unsigned char* data, unsigned
     result.error_message = String::new();
 
     struct String reqText;
-    unsafe { reqText = String::from_n((const char*)data, len); }
+    reqText = String::from_bytes(req);
 
     int parseOk;
     struct Value root;
@@ -126,7 +126,7 @@ struct Value server_fn_call(const &char host, unsigned short port, const &char n
 
     unsigned long reqLen; unsafe { reqLen = reqText.len; }
     struct RpcResult rr;
-    unsafe { rr = rpc_call(host, port, "/fn/call", (const unsigned char*)reqText.data, reqLen); }
+    unsafe { rr = rpc_call(host, port, "/fn/call", ((const unsigned char*)reqText.data)[0..reqLen]); }
     unsafe { reqText.free(); }
 
     if (!rr.ok) {
@@ -136,7 +136,7 @@ struct Value server_fn_call(const &char host, unsigned short port, const &char n
     }
 
     struct String respText;
-    unsafe { respText = String::from_n((const char*)rr.data, rr.len); }
+    unsafe { respText = String::from_n_((const char*)rr.data, rr.len); }
     unsafe { rr.free(); }
 
     int parseOk;

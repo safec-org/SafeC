@@ -5,9 +5,9 @@
 
 namespace std {
 
-// Encodes 'len' raw bytes starting at 'data' into standard Base64 text
-// (with '=' padding, no line-wrapping).
-struct String base64_encode(const &unsigned char data, unsigned long len);
+// Encodes the bytes of 'data' into standard Base64 text (with '=' padding,
+// no line-wrapping).
+struct String base64_encode([]const unsigned char data);
 
 // Decodes standard Base64 text (whitespace between groups is tolerated and
 // skipped; anything else invalid — a non-alphabet, non-'=' byte, or '='

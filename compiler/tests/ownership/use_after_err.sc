@@ -1,4 +1,4 @@
-// SAFEC-ARGS: -I @STD@/std -I @STD@ --compat-preprocessor
+// SAFEC-ARGS: -I %root/std -I %root --compat-preprocessor
 // Use after drop or move, double drop, overwriting a live value, and moving
 // a value out of memory this function only borrows.
 extern int printf(const char* fmt, ...);

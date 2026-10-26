@@ -55,7 +55,7 @@ static unsigned long g_rfft_scratch_bytes = 0UL;
 static int rfft_dim_ok_(unsigned long v) { return v > 0UL && v <= 2147483647UL; }
 
 static void* rfft_stream_() {
-    ?&void s = rocm_stream_handle();
+    ?&RocmNativeStream s = rocm_stream_handle();
     unsafe { return (void*)s; }
 }
 
@@ -148,15 +148,21 @@ static int rfft_host_z2z_(&Complex data, unsigned long nx, unsigned long ny, uns
     return 1;
 }
 
-int rocm_fft(&Complex data, unsigned long n) { return rfft_host_z2z_(data, n, 0UL, 1UL, 0); }
-int rocm_ifft(&Complex data, unsigned long n) { return rfft_host_z2z_(data, n, 0UL, 1UL, 1); }
+int rocm_fft_n_(&Complex data, unsigned long n) { return rfft_host_z2z_(data, n, 0UL, 1UL, 0); }
+int rocm_ifft_n_(&Complex data, unsigned long n) { return rfft_host_z2z_(data, n, 0UL, 1UL, 1); }
 
-int rocm_fft_batch(&Complex data, unsigned long n, unsigned long batch, int inverse) {
+int rocm_fft_batch_n_(&Complex data, unsigned long n, unsigned long batch, int inverse) {
     return rfft_host_z2z_(data, n, 0UL, batch, inverse);
 }
 
-int rocm_fft2d(&Complex img, unsigned long h, unsigned long w) { return rfft_host_z2z_(img, h, w, 1UL, 0); }
-int rocm_ifft2d(&Complex img, unsigned long h, unsigned long w) { return rfft_host_z2z_(img, h, w, 1UL, 1); }
+int rocm_fft2d([]Complex img, unsigned long h, unsigned long w) {
+    if (h == 0UL || w == 0UL || img.len / w < h) { return 0; }
+    unsafe { return rfft_host_z2z_((&Complex)img.ptr, h, w, 1UL, 0); }
+}
+int rocm_ifft2d([]Complex img, unsigned long h, unsigned long w) {
+    if (h == 0UL || w == 0UL || img.len / w < h) { return 0; }
+    unsafe { return rfft_host_z2z_((&Complex)img.ptr, h, w, 1UL, 1); }
+}
 
 // ── Queued device ops (fp32) ─────────────────────────────────────────────────
 
@@ -198,6 +204,24 @@ int rocm_fft_c2r(struct RocmBuf in, struct RocmBuf out, unsigned long n, unsigne
         if (hipfftExecC2R(plan, (void*)in.dev, (void*)out.dev) != 0) return 0;
     }
     return rfft_normalize_(out, n * batch, n);
+}
+
+// ── Slice API (the public signatures; the (reference, length) cores above
+// are the *_n_ functions) ─────────────────────────────────────────────────────
+
+int rocm_fft([]Complex data) {
+    if (data.len == 0UL) return 0;
+    unsafe { return rocm_fft_n_((&Complex)data.ptr, data.len); }
+}
+
+int rocm_ifft([]Complex data) {
+    if (data.len == 0UL) return 0;
+    unsafe { return rocm_ifft_n_((&Complex)data.ptr, data.len); }
+}
+
+int rocm_fft_batch([]Complex data, unsigned long n, int inverse) {
+    if (n == 0UL || data.len == 0UL || data.len % n != 0UL) return 0;
+    unsafe { return rocm_fft_batch_n_((&Complex)data.ptr, n, data.len / n, inverse); }
 }
 
 } // namespace std

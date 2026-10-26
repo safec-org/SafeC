@@ -207,7 +207,7 @@ int http_safe_join(const &char root, const &char url_path, int allow_dotfiles, &
             if (len == 2UL && d[s] == '.' && d[s + 1UL] == '.') { good = 0; break; }
             if (d[s] == '.' && !allow_dotfiles) { good = 0; break; }
             if (!joined.ends_with("/")) { joined.push_char('/'); }
-            joined.push_n(&d[s], len);
+            joined.push_n_(&d[s], len);
         }
     }
     dec.free();
@@ -255,7 +255,7 @@ static int sf_etag_listed_(const &String list, const &String etag) {
     trimmed.free();
     if (star) { return 1; }
     struct String items[64];
-    unsigned long n = list.split(",", &items[0], 64UL);
+    unsigned long n = list.split(",", items[0..64]);
     int found = 0;
     unsigned long i = 0UL;
     while (i < n) {
@@ -432,9 +432,9 @@ struct HttpResponse http_serve_file(const &HttpRequest req, const &char file_pat
             unsigned long left = want;
             while (left > 0UL) {
                 unsigned long ask = left < 16384UL ? left : 16384UL;
-                long long got = file.read(&buf[0], ask);
+                long long got = file.read(buf[0..ask]);
                 if (got <= 0LL) { break; }
-                unsafe { r.body.push_n((const char*)&buf[0], (unsigned long)got); }
+                unsafe { r.body.push_n_((const char*)&buf[0], (unsigned long)got); }
                 left = left - (unsigned long)got;
             }
             file.close();

@@ -81,10 +81,10 @@ int file_copy(const &char from, const &char to) {
                 case some(out): {
                     unsigned char buf[65536];
                     for (;;) {
-                        long long n = in.read(&buf[0], 65536UL);
+                        long long n = in.read(buf[0..65536UL]);
                         if (n < 0LL) { ok = 0; break; }
                         if (n == 0LL) { break; }
-                        if (out.write(&buf[0], (unsigned long)n) != n) { ok = 0; break; }
+                        if (out.write(buf[0..(unsigned long)n]) != n) { ok = 0; break; }
                     }
                     if (out.close() != 0) { ok = 0; }
                 }

@@ -20,13 +20,14 @@ namespace std {
 // 1 on success, 0 on failure (no GPU, n == 0, hipFFT error). Same
 // conventions as fft.h: forward is unnormalized, inverse includes 1/N.
 
-int rocm_fft(&Complex data, unsigned long n);
-int rocm_ifft(&Complex data, unsigned long n);
+int rocm_fft([]Complex data);
+int rocm_ifft([]Complex data);
 // 'batch' independent length-n transforms stored back to back, in one call.
-int rocm_fft_batch(&Complex data, unsigned long n, unsigned long batch, int inverse);
-// 2D transform of a row-major h x w image (imaging.h's fft2d / ifft2d).
-int rocm_fft2d(&Complex img, unsigned long h, unsigned long w);
-int rocm_ifft2d(&Complex img, unsigned long h, unsigned long w);
+int rocm_fft_batch([]Complex data, unsigned long n, int inverse);
+// 2D transform of a row-major h x w image (imaging.h's fft2d / ifft2d);
+// 0 when img holds fewer than h * w values.
+int rocm_fft2d([]Complex img, unsigned long h, unsigned long w);
+int rocm_ifft2d([]Complex img, unsigned long h, unsigned long w);
 
 // ── Queued device ops, fp32 (1 = enqueued) ───────────────────────────────────
 // Complex RocmBufs hold interleaved (re, im) float pairs, so a buffer of
@@ -39,5 +40,11 @@ int rocm_fft_r2c(struct RocmBuf in, struct RocmBuf out, unsigned long n, unsigne
 // batch x (n/2 + 1) complex -> batch x n real. May overwrite 'in' (rocFFT's
 // complex-to-real transforms use their input as scratch).
 int rocm_fft_c2r(struct RocmBuf in, struct RocmBuf out, unsigned long n, unsigned long batch);
+
+// Internal: the (reference, length) forms the slice API above wraps
+// (std/dsp's own code calls these; not API).
+int rocm_fft_n_(&Complex data, unsigned long n);
+int rocm_ifft_n_(&Complex data, unsigned long n);
+int rocm_fft_batch_n_(&Complex data, unsigned long n, unsigned long batch, int inverse);
 
 } // namespace std

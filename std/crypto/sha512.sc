@@ -118,7 +118,7 @@ inline struct Sha512Ctx Sha512Ctx::new_384() {
     return ctx;
 }
 
-inline void Sha512Ctx::update(const &unsigned char data, unsigned long len) {
+inline void Sha512Ctx::update_n_(const &unsigned char data, unsigned long len) {
     unsigned long buf_used = (unsigned long)(self.total_bytes % (unsigned long long)SHA512_BLOCK_SIZE);
     self.total_bytes = self.total_bytes + (unsigned long long)len;
 
@@ -136,7 +136,13 @@ inline void Sha512Ctx::update(const &unsigned char data, unsigned long len) {
     }
 }
 
-void Sha512Ctx::finish(&unsigned char digest) {
+inline void Sha512Ctx::update([]const unsigned char data_s) {
+    unsigned long len = data_s.len;
+    const &unsigned char data = crypto_in_(data_s, 0UL);
+    self.update_n_(data, len);
+}
+
+void Sha512Ctx::finish_n_(&unsigned char digest) {
     unsigned long buf_used = (unsigned long)(self.total_bytes % (unsigned long long)SHA512_BLOCK_SIZE);
     unsigned long long bit_len = self.total_bytes * (unsigned long long)8;
 
@@ -186,18 +192,41 @@ void Sha512Ctx::finish(&unsigned char digest) {
     }
 }
 
+void Sha512Ctx::finish([]unsigned char digest_s) {
+    &unsigned char digest = crypto_out_(digest_s, self.digest_size());
+    self.finish_n_(digest);
+}
+
 inline unsigned long Sha512Ctx::digest_size() const { return self.is384 ? (unsigned long)SHA384_DIGEST_SIZE : (unsigned long)SHA512_DIGEST_SIZE; }
 
 inline unsigned long Sha512Ctx::block_size() const { return (unsigned long)SHA512_BLOCK_SIZE; }
 
-void sha512(const &unsigned char data, unsigned long len,
+void sha512_n_(const &unsigned char data, unsigned long len,
             &unsigned char digest) {
-    hash_bytes(Sha512Ctx::new(), data, len, digest);
+    struct Sha512Ctx c = Sha512Ctx::new();
+    c.update_n_(data, len);
+    c.finish_n_(digest);
 }
 
-void sha384(const &unsigned char data, unsigned long len,
+void sha512([]const unsigned char data_s, []unsigned char digest_s) {
+    unsigned long len = data_s.len;
+    const &unsigned char data = crypto_in_(data_s, 0UL);
+    &unsigned char digest = crypto_out_(digest_s, 64UL);
+    sha512_n_(data, len, digest);
+}
+
+void sha384_n_(const &unsigned char data, unsigned long len,
             &unsigned char digest) {
-    hash_bytes(Sha512Ctx::new_384(), data, len, digest);
+    struct Sha512Ctx c = Sha512Ctx::new_384();
+    c.update_n_(data, len);
+    c.finish_n_(digest);
+}
+
+void sha384([]const unsigned char data_s, []unsigned char digest_s) {
+    unsigned long len = data_s.len;
+    const &unsigned char data = crypto_in_(data_s, 0UL);
+    &unsigned char digest = crypto_out_(digest_s, 48UL);
+    sha384_n_(data, len, digest);
 }
 
 } // namespace std

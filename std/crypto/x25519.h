@@ -8,11 +8,12 @@
 //
 //   unsigned char priv[32], pub[32], shared[32];
 //   rng.fill(&priv[0], 32UL);
-//   std::x25519_public(&pub[0], &priv[0]);
-//   if (!std::x25519(&shared[0], &priv[0], &peer_pub[0])) { /* low-order peer key */ }
+//   std::x25519_public(pub[..], priv[..]);           // 32-byte slices
+//   if (!std::x25519(shared[..], priv[..], peer_pub[..])) { /* low-order peer key */ }
 //
 // Freestanding-safe.
 #pragma once
+#include <std/crypto/buf.h>
 
 #define X25519_KEY_SIZE 32
 
@@ -22,9 +23,13 @@ namespace std {
 // §5 specifies). 0 when the result is all zeros — the peer sent a
 // low-order point and the shared secret must be rejected (RFC 8446
 // §7.4.2) — 1 otherwise.
-int  x25519(&unsigned char out, const &unsigned char scalar, const &unsigned char point);
+int  x25519([]unsigned char out, []const unsigned char scalar, []const unsigned char point);
+// internal: the (reference, length) core of x25519()
+int  x25519_n_(&unsigned char out, const &unsigned char scalar, const &unsigned char point);
 
 // out = scalar * 9 (the base point): the public key for 'scalar'.
-void x25519_public(&unsigned char out, const &unsigned char scalar);
+void x25519_public([]unsigned char out, []const unsigned char scalar);
+// internal: the (reference, length) core of x25519_public()
+void x25519_public_n_(&unsigned char out, const &unsigned char scalar);
 
 } // namespace std

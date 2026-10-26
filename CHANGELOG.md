@@ -7,6 +7,158 @@ release tags.
 
 ## [Unreleased]
 
+### Changed — std's public API has no `void*` and no pointer + length pairs
+
+std's public declarations no longer take or return `void*`, raw `T*`
+buffers, `(pointer, length)` pairs or arrays through pointers.
+
+- **Buffers are slices.** SafeC has no `&T[]` type; the equivalent is the
+  built-in slice: `[]T` for a buffer the function writes, `[]const T` for one
+  it only reads. A slice carries its length, indexing it is bounds-checked,
+  and a fixed-size argument (a key, a nonce, a digest, a tag) is checked on
+  entry (a short one panics instead of being read or written past).
+  `std::str_bytes("text")` (`std/str.h`) gives a string's bytes as a
+  `[]const char`, accepted wherever `[]const unsigned char` is expected.
+- **Type erasure is typed.** Where std must store callbacks with different
+  context types side by side (executors, wakers, timers, widgets, the VFS,
+  audio/MIDI callbacks, HTTP handlers, DOM listeners, thread and task entry
+  points), the slot is a `?&Erased` (`std/erased.h`) with a typed `fn`, filled
+  only by generic methods that take a matching `fn(?&T)` / `?&T`. Opaque
+  handles are typed too (`?&MtlObject`, `?&CudaNativeStream`,
+  `?&struct GuiWindowState`, ...). The `void*` halves that remain are private
+  (`*_raw_`, `*_n_`, std-internal headers) or FFI externs.
+- `tests/std_modules/api_lint.py`, run by the smoke test, fails when a raw
+  pointer appears in a public std declaration.
+
+### Added — read-only, optional and checked slices; typed erasure
+
+- Compiler: `[]const T` read-only slices (`[]T` converts to it implicitly;
+  writing through one is an error), `?[]T` optional slices, slice-returning
+  functions and slice-typed top-level declarations, `?fn R(Args)` nullable
+  function references, range-checked re-slicing (`a[i..j]` traps when
+  `i > j` or `j > len`, outside `unsafe`), `.len` / indexing / re-slicing on
+  a slice-valued call, byte slices interconverting across `char`,
+  `signed char` and `unsigned char`, `&s[i]` on a slice, slices of
+  typedef/newtype elements (`[]Fixed`, `[]S24`), struct fields naming a
+  struct defined later.
+- `std/erased.h` (`Erased`), `std/audio/s24.h` (`S24`, a packed 24-bit
+  sample), `std::str_bytes`, `struct TimeFields` (`std/time.h`),
+  `RpcResult::bytes()`, `safe_memset_obj` / `mem_zero_secure_obj`,
+  `Vec::from_slice` / `as_slice`, `Slice::from` / `as_slice`,
+  `String::from_bytes` / `push_bytes` / `as_bytes`, `StaticVec::over` /
+  `StaticMap::over` / `RingBuffer::over` / `LFQueue::over` on slices.
+
+### Breaking changes — slices and typed erasure in std
+
+Every change below is a signature change the compiler reports at each call
+site (wrong argument count or type); none changes behaviour silently except
+where noted.
+
+- **I/O.** `Reader::read([]unsigned char)` / `Writer::write([]const unsigned char)`
+  replace `read(buf, n)` / `write(buf, n)`; `read_exact(&r, buf)`,
+  `write_all(&w, buf)`. `File`, `Pipe`, `BufReader`, `BufWriter`, `TcpStream`,
+  `TlsStream`, `HttpChunkedWriter` follow. `File::gets([]char)`,
+  `File::write_bytes(path, []const unsigned char)`, `file_read` /
+  `file_write` on slices.
+- **Formatting and strings.** `fmt_*` / `io_fmt_*` / `io_read_line` /
+  `io_read_token` / `wasm_itoa` / `dom_get_prop_buf` / `time_format` write
+  into a `[]char`. `str_copy([]char, src)`, `str_cat([]char, src)` and
+  `str_ncat([]char, src, n)` are bounded by the slice, always NUL-terminate
+  and return 1 when everything fit, 0 when truncated (`str_copy` no longer
+  has `strncpy`'s missing-NUL case). `mem_chr([]const unsigned char, c)`.
+  `String::from_n` / `push_n` / `string_from_n` are gone from the public API
+  (use `from_bytes` / `push_bytes`); `String::join(sep, []String)`,
+  `split*(…, []String)`.
+- **Memory.** `safe_memcpy` / `safe_memmove([]T dst, []const T src)` copy
+  `min(dst.len, src.len)` **elements** (not bytes) and return the count;
+  `safe_memset([]T, val)`, `safe_memcmp([]const T, []const T)` (a shorter
+  equal prefix compares less), `mem_zero_secure([]T)`. Callers that passed a
+  byte count must pass a slice of elements now.
+- **Time.** `time_gmtime` / `time_localtime` return a `struct TimeFields`
+  instead of filling a 9-int array; `time_format([]char, fmt, &tm)`,
+  `time_parse(s, fmt, &tm)`, `time_mktime(&tm)`.
+- **Sorting.** `sys_qsort([]T, cmp)`; `sys_bsearch(&key, []const T, cmp)`
+  returns `?unsigned long` (the index) instead of `?&T`.
+- **Collections.** `Vec::from_arr` → `Vec::from_slice`; `Vec::extend([]const T)`;
+  `push_all` / `enqueue_all` / `arr_*` on slices; `StaticVec::over([]T)`,
+  `StaticMap::over([]StaticMapSlot<V>)`, `RingBuffer::over/write/read/peek`
+  on slices; `LFQueue::over([]T)`.
+- **Allocators and memory-mapped I/O.** `BumpAllocator` / `PoolAllocator` /
+  `TlsfAllocator::over([]unsigned char)`,
+  `SlabAllocator::over([]unsigned char, obj_size)`,
+  `DmaBuffer::wrap([]unsigned char, phys)`.
+- **Async, sync, threads.** `Waker`, `Context`, `TaskHeader`, `Task`,
+  `thread_create`, `parallel_for`, channels: typed `?&Erased` contexts
+  (`Waker::empty_()`); async net writes take `[]const unsigned char`.
+- **Audio / MIDI.** `AudioIo`'s buffers are byte slices with typed slice
+  accessors (`output_f32()` → `[]float`, `input_f32()` → `[]const float`,
+  `output_i24()` → `[]S24`, …); `audio_convert.h` and the MIDI API
+  (`MidiMsg::of`, `midi_build_sysex`, `MidiParser::new`, `encode`,
+  `get_message`, `send_message`, `MidiEvent.bytes`) on slices.
+- **DSP.** FFT / DFT / DCT / windows / convolution / resampling / imaging /
+  STFT / CQT / CWT / minimum-phase / z-transform take slices (lengths come
+  from the slices; DFT / DCT / convolution / imaging / STFT / CWT /
+  minimum-phase now return `int`, 0 when an output is too short);
+  `FirFilter` / `IirFilter` / comb / Karplus-Strong constructors take their
+  coefficient and history buffers as slices (a comb's delay is
+  `history.len`); `process_block([]const T in, []T out)`, `pluck([]const T)`,
+  `filter_impulse_response` / `filter_step_response` / `generate_block` on
+  slices; `AudioBuffer` frames, `cuda_` / `rocm_fft*` on slices.
+- **Crypto.** `Hasher::update([]const unsigned char)` / `finish([]unsigned char)`,
+  `sha1` / `sha256` / `sha384` / `sha512(data, digest)`, `Hmac::new(fresh, key)`,
+  `hmac_sha256(key, data, out)`, `hkdf_extract(fresh, salt, ikm, prk)`,
+  `hkdf_expand(fresh, prk, info, out)`, `digest`, `mgf1_xor`, AES (ECB / CBC
+  / GCM), ChaCha20 / Poly1305 and the AEAD, `ct_eq` / `ct_is_zero` /
+  `ct_copy_if`, X25519, EC (keygen, ECDH, ECDSA), RSA, `BnMont`, X.509,
+  `RngCtx::fill` and the TLS record layer take slices. A user-defined
+  `Hasher` must implement the slice signatures.
+- **Networking, HTTP, RPC.** `NetDriver::transmit([]const unsigned char)`,
+  `TcpConn::send` / `read`, `ip_checksum`, `tcp_checksum`; `http_request`,
+  `http_request_timeout`, `http_post`, `http_fetch`, `http_post_url`,
+  `http_build_response`, `HttpResponse::bytes` / `set_body_bytes`, the
+  chunked coding, `MultipartBuilder::add_file`, `SseParser::feed`,
+  `WsConn::send_binary` take `[]const unsigned char` bodies (empty = none);
+  `RpcMethodHandler` is `fn RpcResult([]const unsigned char)` and
+  `rpc_call(…, []const unsigned char)`. Handler/router state and connection
+  readers are typed (`?&Erased`).
+- **Filesystems.** `BlockDriver` / `BlockDevice` read and write slices;
+  `VfsOps` is a table of typed `?fn` entries over `&Erased`;
+  `VfsNode::read` / `write` and the drivers' `read` / `write` on slices;
+  `VfsNode::readdir` is generic over the user data.
+- **Encoding and serialization.** `base64_encode`, deflate / gzip / zlib,
+  `ascii_is_valid_bytes`, `QueryParams::parse_bytes`, `PbReader::new([]const
+  unsigned char)`, `PbReader::read_length_delimited` returns
+  `?[]const unsigned char`, `pb_write_bytes_field(&out, field, bytes)`.
+- **SIMD and ML.** `vm_exp_f32` / `vm_tanh_f32` / `vm_sigmoid_f32([]const float,
+  []float)`; `sgemm` / `sgemm_serial` take slices and return 0 when one is
+  too short for its dimensions. The host-array GPU ops (`cuda_` / `rocm_` /
+  `mps_` / `spirv_` / `webgpu_` `*_f32`, including `*_matmul_f32`), buffer `upload` / `read` / `write`,
+  the float16 bulk conversions, `DenseTensor::from_1d([]const float, grad)`,
+  `from_2d([]const float, rows, cols, grad)`, `SparseTensor::new_csr`,
+  `HalfTensor` / `BF16Tensor::gemv` / `gemv_batch` take slices; tensor
+  `grad_fn`s are typed; the CUDA `*_persistent` raw-handle API is removed
+  (use `CudaBuf` / `CudaHalfBuf`); Metal / CUDA / ROCm native handles are
+  typed opaque structs.
+- **GUI (signatures only).** Widget and window callbacks are typed `?fn`
+  with `?&Erased` data; `GuiWindow.platform` is a `?&struct GuiWindowState`;
+  `GuiCanvas::set_dash([]const float, offset)`, `fill_text_n([]const char, x, y)`,
+  `GuiPath::polygon([]const float)`, `GuiImage::load_png([]const unsigned char)`,
+  `GuiTypeface::load_memory(_index)` / `measure_n`, `GuiTextLayout::build`,
+  `gui_utf8_next([]const char, &i)`; `gui_window_presenter_name` returns
+  `const &char`.
+- **Low level.** I2C (`I2cChip`, `I2cBus::write/read/write_read`) and SPI
+  (`SpiDevice::write(tx, ?rx)`, `read(rx)`) on slices;
+  `Mailbox::send(pid, type, []const unsigned char)`; syscall and ISR tables
+  hold `?fn`; `signal_handle` returns `int` (0 / -1) instead of an opaque
+  previous handler; `FuzzTarget::run([]const unsigned char)` and fuzz
+  targets are `fn void([]const unsigned char)`.
+- Compiler: casting a slice to a pointer (`(T*)s`) is now an error (it used
+  to reach LLVM and fail verification); use `s.ptr`.
+- scc (`selfhost/`) follows: it compiles the slice forms above (`[]T`
+  returns and fields, `[]const T`, `?[]T`, `?fn`, byte-slice conversions,
+  the slice-to-pointer cast error), and its bundled std (`src/vfs.sc`) is
+  regenerated from the slice-based headers.
+
 ### Added — self-hosted compiler (selfhost/)
 
 - **scc**, a SafeC compiler written in SafeC, is in the new top-level

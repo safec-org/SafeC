@@ -29,24 +29,32 @@ inline void vfs_init() {
 
 // ── VfsNode forwarding methods ────────────────────────────────────────────────
 
-inline unsigned long VfsNode::read(unsigned long offset, &unsigned char buf, unsigned long len) {
-    if (self.fs_ctx.is_null()) { return (unsigned long)0; }
-    struct VfsMount* m;
-    unsafe { m = (struct VfsMount*)self.fs_ctx; }
-    unsafe {
-        if (m->ops.read == (void*)0) { return (unsigned long)0; }
-        return m->ops.read(m->ctx, self.inode, offset, (unsigned char*)buf, len);
+inline unsigned long VfsNode::read(unsigned long offset, []unsigned char buf) {
+    match (self.fs_ctx) {
+        case some(m): {
+            match (m.ops.read) {
+                case some(f): {
+                    match (m.ctx) { case some(c): return f(c, self.inode, offset, buf); case null: { } }
+                }
+                case null: { }
+            }
+        }
+        case null: { }
     }
     return (unsigned long)0;
 }
 
-inline unsigned long VfsNode::write(unsigned long offset, const &unsigned char buf, unsigned long len) {
-    if (self.fs_ctx.is_null()) { return (unsigned long)0; }
-    struct VfsMount* m;
-    unsafe { m = (struct VfsMount*)self.fs_ctx; }
-    unsafe {
-        if (m->ops.write == (void*)0) { return (unsigned long)0; }
-        return m->ops.write(m->ctx, self.inode, offset, (const unsigned char*)buf, len);
+inline unsigned long VfsNode::write(unsigned long offset, []const unsigned char buf) {
+    match (self.fs_ctx) {
+        case some(m): {
+            match (m.ops.write) {
+                case some(f): {
+                    match (m.ctx) { case some(c): return f(c, self.inode, offset, buf); case null: { } }
+                }
+                case null: { }
+            }
+        }
+        case null: { }
     }
     return (unsigned long)0;
 }
@@ -54,32 +62,44 @@ inline unsigned long VfsNode::write(unsigned long offset, const &unsigned char b
 // Hands each entry to the caller's callback with fs_ctx set to the mount,
 // so the entry can be read or listed like a node from Vfs::open.
 struct VfsListing_ {
-    void* cb;     // the caller's fn void(&VfsNode, ?&void)
-    void* user;
-    void* mount;  // struct VfsMount*
+    fn void(&VfsNode, ?&Erased) cb;     // the caller's callback
+    ?&Erased user;
+    ?&VfsMount mount;
 };
 
-static void vfs_listing_entry_(&VfsNode node, ?&void raw) {
-    struct VfsListing_* l;
-    unsafe {
-        l = (struct VfsListing_*)raw;
-        node.fs_ctx = l->mount;
-        fn void(&VfsNode, ?&void) cb = (fn void(&VfsNode, ?&void))l->cb;
-        cb(node, l->user);
+static void vfs_listing_entry_(&VfsNode node, ?&VfsListing_ lp) {
+    match (lp) {
+        case some(l): {
+            node.fs_ctx = l.mount;
+            l.cb(node, l.user);
+        }
+        case null: { }
     }
 }
 
-inline int VfsNode::readdir_raw_(void* cb, void* user) {
-    if (self.fs_ctx.is_null()) { return -1; }
-    struct VfsMount* m;
-    unsafe { m = (struct VfsMount*)self.fs_ctx; }
-    struct VfsListing_ l;
-    unsafe {
-        if (m->ops.readdir == (void*)0) { return -1; }
-        l.cb = cb;
-        l.user = user;
-        l.mount = (void*)m;
-        return m->ops.readdir(m->ctx, self.inode, vfs_listing_entry_, (?&void)&l);
+inline int VfsNode::readdir_raw_(fn void(&VfsNode, ?&Erased) cb, ?&Erased user) {
+    match (self.fs_ctx) {
+        case some(m): {
+            match (m.ops.readdir) {
+                case some(f): {
+                    match (m.ctx) {
+                        case some(c): {
+                            struct VfsListing_ l;
+                            l.cb = cb;
+                            l.user = user;
+                            l.mount = m;
+                            fn void(&VfsNode, ?&VfsListing_) entry = vfs_listing_entry_;
+                            unsafe {
+                                return f(c, self.inode, (fn void(&VfsNode, ?&Erased))entry, (?&Erased)&l);
+                            }
+                        }
+                        case null: { }
+                    }
+                }
+                case null: { }
+            }
+        }
+        case null: { }
     }
     return -1;
 }
@@ -130,7 +150,7 @@ static const char* vfs_rel_path_(const char* path, const char* mountpoint) {
     return path;
 }
 
-int Vfs::mount_raw_(const char* mountpoint, struct VfsOps ops, void* ctx) {
+int Vfs::mount_raw_(const &char mountpoint, struct VfsOps ops, &Erased ctx) {
     if (self.mount_count >= VFS_MAX_MOUNTS) { return -1; }
     int i = 0;
     while (i < VFS_MAX_MOUNTS) {
@@ -174,12 +194,16 @@ inline int Vfs::open(const &char path, int flags, &VfsNode node_out) {
     if (m == (struct VfsMount*)0) { return -1; }
     int rc = -1;
     unsafe {
-        if (m->ops.open == (void*)0) { return -1; }
         const char* rel = vfs_rel_path_(path, (const char*)m->mountpoint);
-        rc = m->ops.open(m->ctx, rel, flags, node_out);
+        match (m->ops.open) {
+            case some(f): {
+                match (m->ctx) { case some(c): rc = f(c, rel, flags, node_out); case null: { } }
+            }
+            case null: return -1;
+        }
     }
     if (rc == 0) {
-        node_out.fs_ctx = (void*)m;
+        unsafe { node_out.fs_ctx = (?&VfsMount)m; }
     }
     return rc;
 }
@@ -189,9 +213,13 @@ inline int Vfs::unlink(const &char path) {
     unsafe { m = vfs_find_mount_((struct Vfs*)self, path); }
     if (m == (struct VfsMount*)0) { return -1; }
     unsafe {
-        if (m->ops.unlink == (void*)0) { return -1; }
         const char* rel = vfs_rel_path_(path, (const char*)m->mountpoint);
-        return m->ops.unlink(m->ctx, rel);
+        match (m->ops.unlink) {
+            case some(f): {
+                match (m->ctx) { case some(c): return f(c, rel); case null: { } }
+            }
+            case null: { }
+        }
     }
     return -1;
 }
@@ -201,9 +229,13 @@ inline int Vfs::mkdir(const &char path) {
     unsafe { m = vfs_find_mount_((struct Vfs*)self, path); }
     if (m == (struct VfsMount*)0) { return -1; }
     unsafe {
-        if (m->ops.mkdir == (void*)0) { return -1; }
         const char* rel = vfs_rel_path_(path, (const char*)m->mountpoint);
-        return m->ops.mkdir(m->ctx, rel);
+        match (m->ops.mkdir) {
+            case some(f): {
+                match (m->ctx) { case some(c): return f(c, rel); case null: { } }
+            }
+            case null: { }
+        }
     }
     return -1;
 }

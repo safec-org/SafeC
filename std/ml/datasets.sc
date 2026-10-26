@@ -206,7 +206,7 @@ static unsigned long ds_read_all_(const &char path, &&heap unsigned char out) {
             unsigned long n = (unsigned long)sz;
             unsafe {
                 unsigned char* buf = (unsigned char*)malloc(n + 1UL);
-                unsigned long got = file_read(f, (&unsigned char)buf, n);
+                unsigned long got = file_read(f, buf[0..n]);
                 file_close(f);
                 if (got != n) { free((void*)buf); return 0UL; }
                 buf[n] = (unsigned char)0;

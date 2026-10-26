@@ -84,20 +84,26 @@ struct Ext2Ctx {
     // `dev`).  Returns 0 on success.
     int  init(&BlockDevice dev);
 
-    // Read block `block_no` into `buf` (must be >= block_size bytes).
-    int  read_block(unsigned long block_no, &unsigned char buf);
+    // Read block `block_no` into the first block_size bytes of `buf`
+    // (-1 if it is shorter).
+    int  read_block(unsigned long block_no, []unsigned char buf);
 
     // Read inode `ino` into `inode_out`.  Returns 0 on success.
     int  read_inode(unsigned long ino, &Ext2Inode inode_out);
 
-    // Read file data for inode at byte offset `offset` into `buf` for `len` bytes.
-    unsigned long read_file(unsigned long ino, unsigned long offset,
-                             &unsigned char buf, unsigned long len);
+    // Read up to buf.len bytes of inode `ino`'s data at byte `offset`.
+    unsigned long read_file(unsigned long ino, unsigned long offset, []unsigned char buf);
 
     // ── FsRead (vfs.h): mount with vfs.mount_ro(mountpoint, &ctx) ──────────
     int           open(const &char path, int flags, &VfsNode node_out);
-    unsigned long read(unsigned long inode, unsigned long offset, &unsigned char buf, unsigned long len);
-    int           readdir(unsigned long inode, fn void(&VfsNode, ?&void) cb, ?&void user);
+    unsigned long read(unsigned long inode, unsigned long offset, []unsigned char buf);
+    generic<T> int readdir(unsigned long inode, fn void(&VfsNode, ?&T) cb, ?&T user);
+    int           readdir_raw_(unsigned long inode, fn void(&VfsNode, ?&Erased) cb, ?&Erased user);
 };
+
+generic<T>
+int Ext2Ctx::readdir(unsigned long inode, fn void(&VfsNode, ?&T) cb, ?&T user) {
+    unsafe { return self.readdir_raw_(inode, (fn void(&VfsNode, ?&Erased))cb, (?&Erased)user); }
+}
 
 } // namespace std

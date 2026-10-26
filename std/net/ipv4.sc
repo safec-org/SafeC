@@ -4,7 +4,10 @@
 
 namespace std {
 
-inline unsigned short ip_checksum(const &unsigned char data, unsigned long len) {
+inline unsigned short ip_checksum([]const unsigned char data_s) {
+    unsigned long len = data_s.len;
+    const &unsigned char data;
+    unsafe { data = (const &unsigned char)data_s.ptr; }
     unsigned long sum = (unsigned long)0;
     unsigned long i = (unsigned long)0;
     unsafe {
@@ -78,8 +81,7 @@ unsigned long ipv4_build(&PacketBuf pkt, unsigned long offset,
         d[18]= (unsigned char)((ds >>  8) & (unsigned int)0xFF);
         d[19]= (unsigned char)(ds & (unsigned int)0xFF);
         // Fill checksum.
-        unsigned short csum = ip_checksum((const unsigned char*)d,
-                                          (unsigned long)IPV4_HDR_LEN);
+        unsigned short csum = ip_checksum(((const unsigned char*)d)[0..(unsigned long)IPV4_HDR_LEN]);
         unsigned short csum_n = (csum);
         d[10]= (unsigned char)((csum_n >> 8) & (unsigned short)0xFF);
         d[11]= (unsigned char)(csum_n & (unsigned short)0xFF);

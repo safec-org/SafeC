@@ -76,7 +76,7 @@ void CV_DIRECT(const &CV_R x, unsigned long len_x,
     unsafe { dealloc_raw_((void*)hrev); }
 }
 
-// Two strategies, both on fft_batch / fft (threaded, vendor FFT if linked):
+// Two strategies, both on fft_batch / fft_n_ (threaded, vendor FFT if linked):
 //  - kernel much shorter than the signal: overlap-add. The kernel's
 //    spectrum is computed once at a block size N of about 8x the kernel;
 //    signal blocks of N - len_h + 1 samples go two to a complex FFT (one in

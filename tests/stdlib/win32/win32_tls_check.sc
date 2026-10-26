@@ -54,11 +54,11 @@ static int fetch(int backend, const &char host, int verify, const ?&char alpn) {
     int code = TLS_OK;
     unsafe {
         const &char req = "GET / HTTP/1.0\r\n\r\n";
-        if (t.write((const &unsigned char)req, str_len(req)) <= 0LL) { code = TLS_ERR_IO; }
+        if (t.write(str_bytes(req)) <= 0LL) { code = TLS_ERR_IO; }
         unsigned char buf[8192];
         long long total = 0LL;
         while (total < 8000LL) {
-            long long n = t.read(&buf[total], 8000UL - (unsigned long)total);
+            long long n = t.read(buf[(unsigned long)total..8000UL]);
             if (n <= 0LL) break;
             total = total + n;
         }

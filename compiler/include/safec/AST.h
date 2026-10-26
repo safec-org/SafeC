@@ -394,6 +394,7 @@ struct SliceExpr : Expr {
     ExprPtr base;      // the array or pointer being sliced
     ExprPtr start;     // start index (nullable → 0)
     ExprPtr end;       // end index (nullable → array length)
+    bool    boundsCheckOmit = false; // true inside unsafe{} — skip the range check
     SliceExpr(ExprPtr b, ExprPtr s, ExprPtr e, SourceLocation l)
         : Expr(ExprKind::Slice, l), base(std::move(b)),
           start(std::move(s)), end(std::move(e)) {}

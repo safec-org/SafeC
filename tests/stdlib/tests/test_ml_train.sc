@@ -236,11 +236,11 @@ void t_dataset_csv() {
         lab[7] = (unsigned char)2; lab[8] = (unsigned char)7; lab[9] = (unsigned char)3;
     }
     match (File::open("build/test_ml_train.idx3", "wb")) {
-        case some(f): { unsafe { f.write((const &unsigned char)&img[0], 24UL); } f.close(); }
+        case some(f): { unsafe { f.write(img[0..24UL]); } f.close(); }
         case null: { ASSERT_TRUE(0); }
     }
     match (File::open("build/test_ml_train.idx1", "wb")) {
-        case some(f): { unsafe { f.write((const &unsigned char)&lab[0], 10UL); } f.close(); }
+        case some(f): { unsafe { f.write(lab[0..10UL]); } f.close(); }
         case null: { ASSERT_TRUE(0); }
     }
     struct Dataset mn = Dataset::load_mnist("build/test_ml_train.idx3", "build/test_ml_train.idx1", 0UL);

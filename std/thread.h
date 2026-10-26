@@ -18,11 +18,13 @@
 #include <std/ownership.h>
 
 // ── Thread ───────────────────────────────────────────────────────────────────
+#include <std/erased.h>
+
 namespace std {
 
-// OS-boundary entry point (POSIX/Win32 take an untyped start routine);
-// call thread_create below instead.
-int  thread_create_raw_(&unsigned long long tid, void* func, void* arg);
+// OS-boundary entry point (POSIX/Win32 take an untyped start routine; see
+// std/erased.h); call thread_create below instead.
+int  thread_create_raw_(&unsigned long long tid, fn ?&Erased(?&Erased) func, ?&Erased arg);
 
 // Starts func(arg) on a new thread and stores its handle in *tid.
 // 0 on success. func's return value is discarded (thread_join only waits).
@@ -31,7 +33,7 @@ int  thread_create_raw_(&unsigned long long tid, void* func, void* arg);
 //   std::thread_create(&tid, work, (?&Job)&job);
 generic<T>
 int thread_create(&unsigned long long tid, fn ?&T(?&T) func, ?&T arg) {
-    unsafe { return thread_create_raw_(tid, (void*)func, (void*)arg); }
+    unsafe { return thread_create_raw_(tid, (fn ?&Erased(?&Erased))func, (?&Erased)arg); }
 }
 int  thread_join(unsigned long long tid);
 int  thread_detach(unsigned long long tid);

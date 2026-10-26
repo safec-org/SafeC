@@ -26,9 +26,9 @@ struct DmaBuffer {
     // Return physical address of byte at `offset`.
     unsigned long phys_at(unsigned long offset) const;
 
-    // Initialise a DmaBuffer wrapping an existing allocation.
+    // Initialise a DmaBuffer wrapping an existing allocation (all of virt).
     // `phys` = 0 means physical == virtual (identity-mapped / non-MMU systems).
-    static struct DmaBuffer wrap(&unsigned char virt, unsigned long phys, unsigned long size);
+    static struct DmaBuffer wrap([]unsigned char virt, unsigned long phys);
 };
 
 // A DMA channel descriptor, generic over the driver context type T its

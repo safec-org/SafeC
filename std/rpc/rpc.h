@@ -30,6 +30,8 @@ struct RpcResult {
     struct String          error_message; // meaningful when ok == 0
     void drop();
 
+    // The response bytes (data[0..len]); empty when there are none.
+    []const unsigned char bytes() const;
     void free() consume;   // = drop()
 };
 
@@ -37,7 +39,7 @@ struct RpcResult {
 // bytes, return the raw response bytes to frame and send back. Set
 // RpcResult::ok = 0 (with error_message) to report a failure — rpc_serve
 // maps that to an HTTP error response rather than a 200.
-typedef fn struct RpcResult(const &unsigned char data, unsigned long len) RpcMethodHandler;
+typedef fn struct RpcResult([]const unsigned char data) RpcMethodHandler;
 
 // ── Client ────────────────────────────────────────────────────────────────
 
@@ -48,7 +50,7 @@ typedef fn struct RpcResult(const &unsigned char data, unsigned long len) RpcMet
 // RpcResult with ok=0) is surfaced the same way, with the handler's own
 // error_message forwarded.
 struct RpcResult rpc_call(const &char host, unsigned short port, const &char path,
-                           const &unsigned char request_data, unsigned long request_len);
+                           []const unsigned char request_data);
 
 // ── Server ────────────────────────────────────────────────────────────────
 

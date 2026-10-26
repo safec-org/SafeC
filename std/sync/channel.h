@@ -18,16 +18,18 @@
 #pragma once
 
 // Channel runtime (defined in channel.sc, deliberately outside namespace std
-// — see there); declared here because Chan<T>'s generic methods are
-// instantiated in the caller's translation unit.
-void* __safec_chan_create(int requestedCap);
-bool  __safec_chan_send(void* chPtr, void* valPtr);
-bool  __safec_chan_recv(void* chPtr, void* outPtr);
-void  __safec_chan_close(void* chPtr);
+// — see there): the C ABI the compiler's chan_* built-ins call, declared
+// here because Chan<T>'s generic methods are instantiated in the caller's
+// translation unit. Not API: use Chan<T>.
+extern void* __safec_chan_create(int requestedCap);
+extern bool  __safec_chan_send(void* chPtr, void* valPtr);
+extern bool  __safec_chan_recv(void* chPtr, void* outPtr);
+extern void  __safec_chan_close(void* chPtr);
 
 // A T moves into / out of the runtime's 8-byte slot by memcpy: strict
 // aliasing forbids reading a T through the slot's integer type.
 #include <std/stddef.h>
+#include <std/erased.h>
 extern void* memcpy(void* dst, const void* src, size_t n);   // size_t: 32-bit on wasm32 / 32-bit targets
 
 namespace std {
@@ -35,7 +37,7 @@ namespace std {
 generic<T: Send>
 struct Chan {
     unsafe impl Send + Sync;   // the runtime channel is locked inside
-    ?&void raw;   // runtime handle from __safec_chan_create; null if creation failed
+    ?&Erased raw_;   // runtime handle from __safec_chan_create; null if creation failed
 
     static struct Chan<T> new(int cap);   // buffered channel of `cap` slots
 
@@ -56,19 +58,19 @@ generic<T>
 struct Chan<T> Chan::new(int cap) {
     static_assert(sizeof(T) <= 8UL, "Chan<T>: T must fit in 8 bytes (channels carry fixed 8-byte payload slots) — send a ?&T to a larger value instead");
     struct Chan<T> c;
-    c.raw = null;
-    unsafe { c.raw = (?&void)__safec_chan_create(cap); }
+    c.raw_ = null;
+    unsafe { c.raw_ = (?&Erased)__safec_chan_create(cap); }
     return c;
 }
 
 generic<T>
 int Chan::send(T val) {
-    if (self.raw.is_null()) { drop(val); return 0; }
+    if (self.raw_.is_null()) { drop(val); return 0; }
     unsigned long long slot = 0ULL;
     bool ok;
     unsafe {
         memcpy((void*)&slot, (const void*)&val, (size_t)sizeof(T));
-        ok = __safec_chan_send((void*)self.raw, (void*)&slot);
+        ok = __safec_chan_send((void*)self.raw_, (void*)&slot);
     }
     if (ok) { unsafe { forget(val); } }   // its bytes moved into the channel
     else drop(val);                       // closed: nobody will receive it
@@ -77,10 +79,10 @@ int Chan::send(T val) {
 
 generic<T>
 ?T Chan::recv() {
-    if (self.raw.is_null()) return null;
+    if (self.raw_.is_null()) return null;
     unsigned long long slot = 0ULL;
     bool ok;
-    unsafe { ok = __safec_chan_recv((void*)self.raw, (void*)&slot); }
+    unsafe { ok = __safec_chan_recv((void*)self.raw_, (void*)&slot); }
     if (!ok) return null;
     T v[1];   // filled by memcpy, which definite-init can't see through
     unsafe { memcpy((void*)&v[0], (const void*)&slot, (size_t)sizeof(T)); }
@@ -95,8 +97,8 @@ generic<T>
 
 generic<T>
 void Chan::close() {
-    if (self.raw.is_null()) return;
-    unsafe { __safec_chan_close((void*)self.raw); }
+    if (self.raw_.is_null()) return;
+    unsafe { __safec_chan_close((void*)self.raw_); }
 }
 
 } // namespace std

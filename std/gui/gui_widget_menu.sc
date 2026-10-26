@@ -237,7 +237,7 @@ void __wk_menu_measure(&GuiUi ui, &Widget w, &int cw, &int ch) {
         float saveFs = w.style.fontSize;
         w.style.fontSize = sz;
         struct GuiTextLayout l = GuiTextLayout::new();
-        unsafe { l.build(__w_face(ui, w), __w_font_size(ui, w), (const char*)w.text.data, w.text.len, __w_px(ui, 320.0f), GUI_TEXT_LEFT); }
+        unsafe { l.build_n_(__w_face(ui, w), __w_font_size(ui, w), (const char*)w.text.data, w.text.len, __w_px(ui, 320.0f), GUI_TEXT_LEFT); }
         w.style.fontSize = saveFs;
         *cw = (int)ceil_f(l.width);
         *ch = (int)ceil_f(l.height);
@@ -354,7 +354,7 @@ void __wk_menu_paint(&GuiUi ui, &GuiCanvas c, &Widget w) {
         float saveFs = w.style.fontSize;
         w.style.fontSize = ui.theme.smallFontSize;
         struct GuiTextLayout l = GuiTextLayout::new();
-        unsafe { l.build(__w_face(ui, w), __w_font_size(ui, w), (const char*)w.text.data, w.text.len, __w_px(ui, 320.0f), GUI_TEXT_LEFT); }
+        unsafe { l.build_n_(__w_face(ui, w), __w_font_size(ui, w), (const char*)w.text.data, w.text.len, __w_px(ui, 320.0f), GUI_TEXT_LEFT); }
         c.set_fill_color(ui.theme.tooltipText);
         c.fill_text_layout(&l, (float)cx, (float)cy);
         l.free();

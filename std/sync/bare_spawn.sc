@@ -32,6 +32,13 @@
 // literal '__safec_thread_create'/'__safec_thread_join' symbol names the
 // compiler emits calls to.
 
+namespace std {
+// The compiler's spawn hands over an untyped C function and argument.
+static int bare_spawn_(&TaskScheduler s, void* func, void* arg) {
+    unsafe { return s.spawn_raw_((fn int(?&Erased, int))func, (?&Erased)arg); }
+}
+} // namespace std
+
 static struct TaskScheduler __safec_bare_sched_;
 static int __safec_bare_sched_ready_ = 0;
 
@@ -40,7 +47,7 @@ long long __safec_thread_create(void* func, void* arg) {
         __safec_bare_sched_ = std::TaskScheduler::new();
         __safec_bare_sched_ready_ = 1;
     }
-    int idx = __safec_bare_sched_.spawn_raw_(func, arg);
+    int idx = std::bare_spawn_(&__safec_bare_sched_, func, arg);
     return (long long)idx;
 }
 

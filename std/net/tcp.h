@@ -63,7 +63,7 @@ struct TcpConn {
     int  recv(&PacketBuf pkt, unsigned long tcp_offset);
 
     // Enqueue payload data to send.  Returns bytes accepted (0 if full).
-    unsigned long send(const &unsigned char data, unsigned long len);
+    unsigned long send([]const unsigned char data);
 
     // Build next outgoing segment into pkt; returns 1 if segment produced.
     int  build_segment(&PacketBuf pkt,
@@ -73,8 +73,8 @@ struct TcpConn {
     // Is there received data ready?
     int  rx_ready() const;
 
-    // Consume `len` bytes from rx_buf into `out`; returns bytes copied.
-    unsigned long read(&unsigned char out, unsigned long len);
+    // Consume up to out.len bytes from rx_buf into `out`; returns bytes copied.
+    unsigned long read([]unsigned char out);
 
     // Initiate active open (send SYN).
     void connect(unsigned int remote_ip, unsigned short remote_port,
@@ -99,6 +99,6 @@ int tcp_parse(&PacketBuf pkt, unsigned long offset,
 
 // Compute TCP checksum (pseudo-header + segment).
 unsigned short tcp_checksum(unsigned int src_ip, unsigned int dst_ip,
-                             const &unsigned char tcp_seg, unsigned long seg_len);
+                             []const unsigned char tcp_seg);
 
 } // namespace std

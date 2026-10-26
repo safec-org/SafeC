@@ -1053,7 +1053,7 @@ static int gGuiFallbackState = 0;
 
 &GuiTypeface GuiTypeface::fallback() {
     if (gGuiFallbackState == 0) {
-        unsafe { gGuiFallbackFace.load_memory((const unsigned char*)&gGuiFallbackTtf[0], GUI_FALLBACK_TTF_SIZE, 0); }
+        unsafe { gGuiFallbackFace.load_memory_n_((const unsigned char*)&gGuiFallbackTtf[0], GUI_FALLBACK_TTF_SIZE, 0); }
         gGuiFallbackState = 1;
     }
     return &gGuiFallbackFace;

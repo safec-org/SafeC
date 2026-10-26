@@ -321,7 +321,7 @@ static unsigned int __be32(const unsigned char* p) {
     return r;
 }
 
-int GuiImage::load_png(const &unsigned char data_ref, unsigned long size) { const unsigned char* data = data_ref;
+int GuiImage::load_png_n_(const &unsigned char data_ref, unsigned long size) { const unsigned char* data = data_ref;
     unsafe {
         self.pixels = (&heap unsigned char)0;
         self.premultiplied = 0;
@@ -483,6 +483,14 @@ int GuiImage::load_png(const &unsigned char data_ref, unsigned long size) { cons
         raw.free();
     }
     return 1;
+}
+
+int GuiImage::load_png([]const unsigned char data_ref_s) {
+    unsigned long size = (unsigned long)data_ref_s.len;
+    unsigned char data_ref_d_[1];
+    const &unsigned char data_ref = &data_ref_d_[0];
+    if (data_ref_s.len > 0UL) { unsafe { data_ref = (const &unsigned char)data_ref_s.ptr; } }
+    return self.load_png_n_(data_ref, size);
 }
 
 void GuiImage::draw(&GuiWindow win, int x, int y) const {

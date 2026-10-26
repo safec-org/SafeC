@@ -57,9 +57,10 @@ struct SparseTensor {
     // The transpose (cols x rows), its values a graph node of these.
     struct SparseTensor transpose() const;
 
-    // From CSR arrays (host): rowPtr [rows + 1], colIdx and values [nnz].
-    static struct SparseTensor new_csr(unsigned long rows, unsigned long cols, const &unsigned long rowPtr,
-                                       const &unsigned long colIdx, const &float values, int requiresGrad);
+    // From CSR arrays (host): rowPtr [rows + 1], colIdx and values [nnz]
+    // (shorter slices panic).
+    static struct SparseTensor new_csr(unsigned long rows, unsigned long cols, []const unsigned long rowPtr,
+                                       []const unsigned long colIdx, []const float values, int requiresGrad);
     // The entries of a dense [rows, cols] tensor whose magnitude exceeds 'threshold'.
     static struct SparseTensor from_dense(const &FloatTensor dense, float threshold, int requiresGrad);
     // The n x n identity.

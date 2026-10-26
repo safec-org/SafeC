@@ -228,10 +228,10 @@ static void conv_blocks_(&ConvJob j, unsigned long lo, unsigned long hi) {
             conv_im2col_(j, col, pc, p0, pc);
             conv_bias_(j, p0, pc);
             if (j.threaded)
-                sgemm(SGEMM_NO_TRANS, SGEMM_NO_TRANS, j.outC, pc, K, (float)1.0, (const &float)j.w, K,
+                sgemm_n_(SGEMM_NO_TRANS, SGEMM_NO_TRANS, j.outC, pc, K, (float)1.0, (const &float)j.w, K,
                       (const &float)col, pc, (float)1.0, (&float)&j.out[p0], j.pixels);
             else
-                sgemm_serial(SGEMM_NO_TRANS, SGEMM_NO_TRANS, j.outC, pc, K, (float)1.0, (const &float)j.w, K,
+                sgemm_serial_n_(SGEMM_NO_TRANS, SGEMM_NO_TRANS, j.outC, pc, K, (float)1.0, (const &float)j.w, K,
                              (const &float)col, pc, (float)1.0, (&float)&j.out[p0], j.pixels);
             if (j.relu) conv_relu_(j, p0, pc);
             blk = blk + 1UL;
@@ -428,7 +428,7 @@ static void wino_gemm_(&WinoJob j, unsigned long x0, unsigned long x1) {
     unsigned long x = x0;
     unsafe {
         while (x < x1) {
-            sgemm_serial(SGEMM_NO_TRANS, SGEMM_NO_TRANS, j.outC, j.tiles, j.inC, (float)1.0,
+            sgemm_serial_n_(SGEMM_NO_TRANS, SGEMM_NO_TRANS, j.outC, j.tiles, j.inC, (float)1.0,
                          (const &float)&j.u[x * j.outC * j.inC], j.inC,
                          (const &float)&j.v[x * j.pv], j.tiles, (float)0.0,
                          (&float)&j.m[x * j.pm], j.tiles);
@@ -618,7 +618,7 @@ static struct FeatureMap conv_run_(const &Conv2D layer, const &FeatureMap input,
         if (kH == 1UL && kW == 1UL && stride == 1UL && padding == 0UL) {
             // 1x1 convolution: the input planes already are the columns.
             conv_bias_(&j, 0UL, pixels);
-            sgemm(SGEMM_NO_TRANS, SGEMM_NO_TRANS, outC, pixels, K, (float)1.0,
+            sgemm_n_(SGEMM_NO_TRANS, SGEMM_NO_TRANS, outC, pixels, K, (float)1.0,
                   (const &float)layer->weight, K, (const &float)input->data, pixels,
                   (float)1.0, (&float)out.data, pixels);
             if (relu) conv_relu_(&j, 0UL, pixels);

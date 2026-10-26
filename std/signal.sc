@@ -10,8 +10,11 @@ extern int   kill(int pid, int sig);
 extern int   pause();
 
 // SIG_DFL = 0, SIG_IGN = 1 on POSIX
-inline ?&void signal_handle(int sig, fn void(int) handler) {
-    unsafe { return signal(sig, (void*)handler); }
+inline int signal_handle(int sig, fn void(int) handler) {
+    unsafe {
+        void* prev = signal(sig, (void*)handler);
+        return prev == (void*)-1 ? -1 : 0;   // SIG_ERR
+    }
 }
 
 inline void signal_default(int sig) {

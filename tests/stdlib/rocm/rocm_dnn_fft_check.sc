@@ -45,7 +45,7 @@ static struct Vec<float> download(struct RocmBuf b) {
     struct Vec<float> v = std::Vec::with_cap(b.len);
     unsigned long i = 0UL;
     while (i < b.len) { v.push(0.0f); i = i + 1UL; }
-    std::rocm_read(b, v.at(0UL), b.len);
+    std::rocm_read(b, v.as_slice()[0..b.len]);
     return v;
 }
 
@@ -118,11 +118,11 @@ static void check_miopen() {
     struct RocmBuf dx = RocmBuf::alloc(2UL * inN);
     struct RocmBuf dy = RocmBuf::alloc(2UL * outN);
     unsafe {
-        std::rocm_write(dx, xa.data, inN);
+        std::rocm_write(dx, ((const float*)xa.data)[0..inN]);
         struct RocmBuf dx2 = dx;
         dx2.dev = dx.dev + inN * 4UL;
         dx2.len = inN;
-        std::rocm_write(dx2, xb.data, inN);
+        std::rocm_write(dx2, ((const float*)xb.data)[0..inN]);
     }
     check(d2.forward(dx, dy, 2UL, 21UL, 15UL), "RocmConv2D::forward batch ran");
     struct Vec<float> ya = fm_download(dy, 0UL, outN);
@@ -177,8 +177,10 @@ static void check_miopen() {
     ya.free();
 
     struct FeatureMap cat = std::concat_channels(&xa, &xb);
-    struct RocmBuf dxa = RocmBuf::upload(xa.data, inN);
-    struct RocmBuf dxb = RocmBuf::upload(xb.data, inN);
+    struct RocmBuf dxa;
+    unsafe { dxa = RocmBuf::upload(((const float*)xa.data)[0..inN]); }
+    struct RocmBuf dxb;
+    unsafe { dxb = RocmBuf::upload(((const float*)xb.data)[0..inN]); }
     struct RocmBuf dc = RocmBuf::alloc(2UL * inN);
     check(std::rocm_concat_channels(dxa, 4UL, dxb, 4UL, dc, 1UL, 21UL * 15UL), "rocm_concat_channels ran");
     ya = download(dc);
@@ -203,6 +205,11 @@ static void check_miopen() {
     ca.free(); cb.free(); xa.free(); xb.free();
     c1.free(); x1.free();
     l1.free(); l2.free();
+}
+
+// A slice over n Complex values at p (test buffers from cplx_new).
+static []Complex cs(&Complex p, unsigned long n) {
+    unsafe { return ((struct Complex*)p)[0..n]; }
 }
 
 static &heap Complex cplx_new(unsigned long n, unsigned long salt) {
@@ -253,18 +260,18 @@ static void check_hipfft() {
     &heap Complex x = cplx_new(n, 0UL);
     &heap Complex ref = cplx_new(n, 0UL);
     &heap Complex got = cplx_new(n, 0UL);
-    std::fft(ref, n);
-    check(std::rocm_fft(got, n), "rocm_fft ran");
+    std::fft(cs(ref, n));
+    check(std::rocm_fft(cs(got, n)), "rocm_fft ran");
     check(cplx_err(got, ref, n) < 1e-12, "rocm_fft values");
-    check(std::rocm_ifft(got, n), "rocm_ifft ran");
+    check(std::rocm_ifft(cs(got, n)), "rocm_ifft ran");
     check(cplx_err(got, x, n) < 1e-12, "rocm_ifft round trip");
 
     // non-power-of-two length against dft.h
     unsigned long m = 1000UL;
     &heap Complex y = cplx_new(m, 5UL);
     &heap Complex yref = cplx_new(m, 0UL);
-    std::dft(y, yref, m);
-    check(std::rocm_fft(y, m), "rocm_fft n=1000 ran");
+    std::dft(cs(y, m), cs(yref, m));
+    check(std::rocm_fft(cs(y, m)), "rocm_fft n=1000 ran");
     check(cplx_err(y, yref, m) < 1e-10, "rocm_fft n=1000 values");
 
     // batch of 4 x 256 against per-row fft
@@ -272,8 +279,8 @@ static void check_hipfft() {
     &heap Complex bx = cplx_new(4UL * bn, 9UL);
     &heap Complex bref = cplx_new(4UL * bn, 9UL);
     unsigned long r = 0UL;
-    unsafe { while (r < 4UL) { std::fft(&bref[r * bn], bn); r = r + 1UL; } }
-    check(std::rocm_fft_batch(bx, bn, 4UL, 0), "rocm_fft_batch ran");
+    unsafe { while (r < 4UL) { std::fft(cs(bref, 4UL * bn)[r * bn..r * bn + bn]); r = r + 1UL; } }
+    check(std::rocm_fft_batch(cs(bx, 4UL * bn), bn, 0), "rocm_fft_batch ran");
     check(cplx_err(bx, bref, 4UL * bn) < 1e-12, "rocm_fft_batch values");
 
     // 2D against imaging.h
@@ -281,10 +288,10 @@ static void check_hipfft() {
     unsigned long w = 64UL;
     &heap Complex img = cplx_new(h * w, 11UL);
     &heap Complex iref = cplx_new(h * w, 11UL);
-    std::fft2d(iref, h, w);
-    check(std::rocm_fft2d(img, h, w), "rocm_fft2d ran");
+    std::fft2d(cs(iref, h * w), h, w);
+    check(std::rocm_fft2d(cs(img, h * w), h, w), "rocm_fft2d ran");
     check(cplx_err(img, iref, h * w) < 1e-12, "rocm_fft2d values");
-    check(std::rocm_ifft2d(img, h, w), "rocm_ifft2d ran");
+    check(std::rocm_ifft2d(cs(img, h * w), h, w), "rocm_ifft2d ran");
     &heap Complex iorig = cplx_new(h * w, 11UL);
     check(cplx_err(img, iorig, h * w) < 1e-12, "rocm_ifft2d round trip");
 
@@ -293,11 +300,11 @@ static void check_hipfft() {
     &heap Complex fx = cplx_new(fb * n, 21UL);
     &heap Complex fref = cplx_new(fb * n, 21UL);
     r = 0UL;
-    unsafe { while (r < fb) { std::fft(&fref[r * n], n); r = r + 1UL; } }
+    unsafe { while (r < fb) { std::fft(cs(fref, fb * n)[r * n..r * n + n]); r = r + 1UL; } }
     struct Vec<float> hf = std::Vec::with_cap(2UL * fb * n);
     unsigned long i = 0UL;
     unsafe { while (i < fb * n) { hf.push((float)fx[i].re); hf.push((float)fx[i].im); i = i + 1UL; } }
-    struct RocmBuf din = RocmBuf::upload(hf.at(0UL), 2UL * fb * n);
+    struct RocmBuf din = RocmBuf::upload(hf.as_slice()[0..2UL * fb * n]);
     struct RocmBuf dfreq = RocmBuf::alloc(2UL * fb * n);
     check(std::rocm_fft_c2c(din, dfreq, n, fb, 0), "rocm_fft_c2c ran");
     struct Vec<float> gf = download(dfreq);
@@ -319,8 +326,8 @@ static void check_hipfft() {
     i = 0UL;
     unsafe { while (i < n) { re.push((float)fx[i].re); red[i] = (double)(float)fx[i].re; i = i + 1UL; } }
     &heap Complex rref = cplx_new(n, 0UL);
-    unsafe { std::fft_real((const double*)red, rref, n); }
-    struct RocmBuf dre = RocmBuf::upload(re.at(0UL), n);
+    unsafe { std::fft_real(red[0..n], cs(rref, n)); }
+    struct RocmBuf dre = RocmBuf::upload(re.as_slice()[0..n]);
     struct RocmBuf dhalf = RocmBuf::alloc(2UL * (n / 2UL + 1UL));
     check(std::rocm_fft_r2c(dre, dhalf, n, 1UL), "rocm_fft_r2c ran");
     gf = download(dhalf);
@@ -369,7 +376,7 @@ static struct Vec<float> half_download_(struct RocmHalfBuf h, unsigned long off,
     struct Vec<unsigned short> bits = std::Vec::with_cap(h.len);
     unsigned long i = 0UL;
     while (i < h.len) { bits.push((unsigned short)0); i = i + 1UL; }
-    std::rocm_half_read(h, bits.at(0UL), h.len);
+    std::rocm_half_read(h, bits.as_slice()[0..h.len]);
     struct Vec<float> v = std::Vec::with_cap(n);
     i = 0UL;
     while (i < n) { v.push(std::half_decode(*bits.at(off + i), h.dtype)); i = i + 1UL; }
@@ -410,7 +417,7 @@ static void check_miopen_half() {
                 while (i < inN) { both.push(xb.data[i]); i = i + 1UL; }
             }
             struct RocmHalfConv2D hl = RocmHalfConv2D::upload(&l, d);
-            struct RocmHalfBuf hx = RocmHalfBuf::upload(both.at(0UL), 2UL * inN, d);
+            struct RocmHalfBuf hx = RocmHalfBuf::upload(both.as_slice()[0..2UL * inN], d);
             struct RocmHalfBuf hy = RocmHalfBuf::alloc(2UL * outN, d);
             check(hl.weight.dev != 0UL && hx.dev != 0UL && hy.dev != 0UL, "half conv upload");
             check(hl.forward(hx, hy, 2UL, 21UL, 15UL), d == ROCM_FP16 ? "fp16 conv ran" : "bf16 conv ran");

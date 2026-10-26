@@ -62,12 +62,14 @@ trait Park {
 }
 
 // The part of an AsyncTask an executor sees. First field of every
-// AsyncTask, so a ?&TaskHeader and the task have the same address.
+// AsyncTask, so a ?&TaskHeader and the task have the same address: poll_
+// and drop_ are AsyncTask<F, T>'s own functions, stored by AsyncTask::new
+// as functions of the header (see std/erased.h).
 struct TaskHeader {
-    void*            poll_;     // fn int(?&AsyncTask<F, T>, &Context): 1 = finished
-    void*            drop_;     // fn void(?&AsyncTask<F, T>): drop the future
-    void*            exec_;     // the executor it was spawned on, null before
-    void*            wake_;     // that executor's wake: fn void(?&TaskHeader, unsigned long)
+    fn int(?&TaskHeader, &Context)          poll_;  // 1 = finished
+    fn void(?&TaskHeader)                   drop_;  // drop the future
+    ?&Erased                                exec_;  // the executor it was spawned on, null before
+    ?fn void(?&TaskHeader, unsigned long)   wake_;  // that executor's wake
     int              state;     // ASYNC_TASK_* bits, changed atomically
     ?&TaskHeader     next;      // the executor's list link
     struct WakerSlot joiner;    // a JoinHandle waiting for it
@@ -121,9 +123,9 @@ struct LocalExecutor {
     int               notified;    // atomic: some task (or the block_on root) was woken
     int               root_woken;  // atomic: block_on's own future was woken
     struct TimerQueue timers;
-    void*             io_;         // an attached IoDriver (std/async/net.h), or null
-    void*             unpark_;     // fn void(?&P): the running Park's unpark, or null
-    void*             park_;       // that Park
+    ?&IoDriver        io_;         // an attached IoDriver (std/async/net.h), or null
+    ?fn void(?&Erased) unpark_;    // the running Park's unpark, or null
+    ?&Erased          park_;       // that Park
     long long         polls;       // statistics: task polls so far
 
     static struct LocalExecutor new();
@@ -155,8 +157,8 @@ struct LocalExecutor {
     // Releases the timer queue. Spawned tasks are owned by their AsyncTask
     // storage, not by the executor: finish or abort them first.
     void drop();
-    // Internal: one round of run() with the Park hooks installed.
-    void install_park_(void* unpark, void* park);
+    // Internal: install (or, with nulls, remove) the running Park's unpark.
+    generic<P> void install_park_(?fn void(?&P) unpark, ?&P park);
 };
 
 // Spawn 'task' on the executor that is polling 'cx' — from inside a task
@@ -217,7 +219,7 @@ void async_task_drop_(?&AsyncTask<F, T> tp) {
 }
 
 // Make 'hdr' a fresh, unspawned header.
-void task_header_init_(&TaskHeader hdr, void* poll, void* drop);
+void task_header_init_(&TaskHeader hdr, fn int(?&TaskHeader, &Context) poll, fn void(?&TaskHeader) drop);
 // Mark 'hdr' finished (aborted or not) and wake its JoinHandle.
 void task_header_finish_(&TaskHeader hdr, int aborted);
 
@@ -226,7 +228,7 @@ struct AsyncTask<F, T> AsyncTask::new(F fut) {
     struct AsyncTask<F, T> t;
     fn int(?&AsyncTask<F, T>, &Context) pf = async_task_poll_;
     fn void(?&AsyncTask<F, T>) df = async_task_drop_;
-    unsafe { task_header_init_(&t.hdr, (void*)pf, (void*)df); }
+    unsafe { task_header_init_(&t.hdr, (fn int(?&TaskHeader, &Context))pf, (fn void(?&TaskHeader))df); }
     t.fut = fut;
     return t;
 }
@@ -334,6 +336,15 @@ struct JoinHandle<T> LocalExecutor::spawn(&AsyncTask<F, T> task) {
     return join_handle_for_(task);
 }
 
+// Executors: make async_spawn on 'cx' call sp(exec, task).
+generic<E>
+void context_set_spawn_(&Context cx, fn int(?&E, ?&TaskHeader) sp, ?&E exec) {
+    unsafe {
+        cx.spawn_ = (?fn int(?&Erased, ?&TaskHeader))sp;
+        cx.exec_  = (?&Erased)exec;
+    }
+}
+
 // Calls the spawn function an executor left in a Context.
 int context_spawn_raw_(&Context cx, ?&TaskHeader t);
 
@@ -351,16 +362,25 @@ void park_unpark_thunk_(?&P p) {
     }
 }
 
+generic<P>
+void LocalExecutor::install_park_(?fn void(?&P) unpark, ?&P park) {
+    unsafe {
+        self.unpark_ = (?fn void(?&Erased))unpark;
+        self.park_ = (?&Erased)park;
+    }
+}
+
 generic<P: Park>
 void LocalExecutor::run(&P park) {
     fn void(?&P) up = park_unpark_thunk_;
-    unsafe { self.install_park_((void*)up, (void*)park); }
+    self.install_park_(up, (?&P)park);
     while (self.live > 0) {
         self.turn(park.now_ms());
         if (self.live == 0 || self.has_ready() != 0) continue;
         park.park(self.timers.park_timeout());
     }
-    unsafe { self.install_park_((void*)0, (void*)0); }
+    self.unpark_ = null;
+    self.park_ = null;
 }
 
 // The block_on root future's waker (data = the executor).
@@ -371,7 +391,7 @@ struct Context local_context_(&LocalExecutor ex, struct Waker w);
 generic<P: Park, F: Future, T>
 T LocalExecutor::block_on(&P park, &F fut) {
     fn void(?&P) up = park_unpark_thunk_;
-    unsafe { self.install_park_((void*)up, (void*)park); }
+    self.install_park_(up, (?&P)park);
     struct Context cx = local_context_(self, Waker::new(local_root_wake_, (?&LocalExecutor)self, 0UL));
     async_store_(&self.root_woken, 1);
     self.timers.advance(park.now_ms());
@@ -379,7 +399,8 @@ T LocalExecutor::block_on(&P park, &F fut) {
         if (async_xchg_(&self.root_woken, 0) != 0) {
             struct Poll<T> p = fut.poll(&cx);
             if (p.ready_ != 0) {
-                unsafe { self.install_park_((void*)0, (void*)0); }
+                self.unpark_ = null;
+                self.park_ = null;
                 cx.drop();
                 return p.unwrap();
             }

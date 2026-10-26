@@ -15,6 +15,14 @@
 
 namespace std {
 
+[]const unsigned char RpcResult::bytes() const {
+    match (self.data) {
+        case some(d): { unsafe { return ((const unsigned char*)d)[0..self.len]; } }
+        case null: { }
+    }
+    unsafe { return ((const unsigned char*)"")[0..0]; }
+}
+
 void RpcResult::free() { self.drop(); }
 
 void RpcResult::drop() {
@@ -35,7 +43,7 @@ static struct String rpc_frame_(const unsigned char* data, unsigned long len) {
         out.push_char((char)((len >> 16) & 0xFFUL));
         out.push_char((char)((len >> 8) & 0xFFUL));
         out.push_char((char)(len & 0xFFUL));
-        if (len > 0UL) { out.push_n((const char*)data, len); }
+        if (len > 0UL) { out.push_n_((const char*)data, len); }
     }
     return out;
 }
@@ -69,7 +77,10 @@ static int rpc_unframe_(const char* raw, unsigned long rawLen,
 // ── Client ────────────────────────────────────────────────────────────────
 
 struct RpcResult rpc_call(const &char host, unsigned short port, const &char path,
-                           const &unsigned char request_data, unsigned long request_len) {
+                           []const unsigned char request_data_s) {
+    unsigned long request_len = request_data_s.len;
+    const &unsigned char request_data;
+    unsafe { request_data = (const &unsigned char)request_data_s.ptr; }
     struct RpcResult result;
     result.ok            = 0;
     result.data           = (unsigned char*)0;
@@ -80,7 +91,7 @@ struct RpcResult rpc_call(const &char host, unsigned short port, const &char pat
     int httpOk = 0;
     struct HttpResponse resp;
     unsafe {
-        resp = http_post(host, port, path, "application/grpc+safec",
+        resp = http_post_n_(host, port, path, "application/grpc+safec",
                           (const unsigned char*)frame.as_ptr(), frame.length(), &httpOk);
     }
     frame.free();
@@ -167,12 +178,12 @@ static struct HttpResponse rpc_dispatch_(&HttpRequest req) {
 
     RpcMethodHandler handlerFn = *expect_ref(found, "rpc handler");
     // An empty payload has no buffer; hand the handler a zero-length view.
-    unsigned char emptyPayload = (unsigned char)0;
+    unsigned char emptyPayload[1];
     struct RpcResult result;
     if (reqData == (unsigned char*)0) {
-        result = handlerFn(&emptyPayload, 0UL);
+        result = handlerFn(emptyPayload[0..0]);
     } else {
-        unsafe { result = handlerFn(reqData, reqLen); }
+        unsafe { result = handlerFn(((const unsigned char*)reqData)[0..reqLen]); }
     }
     if (reqData != (unsigned char*)0) { unsafe { dealloc_raw_((void*)reqData); } }
 

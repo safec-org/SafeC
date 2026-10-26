@@ -20,23 +20,23 @@ namespace std {
 // What an I2C controller type provides; I2cBus<C> requires it.
 trait I2cChip {
     void init(unsigned long base, unsigned int speed, unsigned int clock_hz) const;
-    int  write(unsigned long base, unsigned char addr, const &unsigned char data, unsigned long len) const;
-    int  read(unsigned long base, unsigned char addr, &unsigned char data, unsigned long len) const;
+    int  write(unsigned long base, unsigned char addr, []const unsigned char data) const;
+    int  read(unsigned long base, unsigned char addr, []unsigned char data) const;
     int  probe(unsigned long base, unsigned char addr) const;
 }
 
 struct I2cGeneric {
     int unused_;
     void init(unsigned long base, unsigned int speed, unsigned int clock_hz) const;
-    int  write(unsigned long base, unsigned char addr, const &unsigned char data, unsigned long len) const;
-    int  read(unsigned long base, unsigned char addr, &unsigned char data, unsigned long len) const;
+    int  write(unsigned long base, unsigned char addr, []const unsigned char data) const;
+    int  read(unsigned long base, unsigned char addr, []unsigned char data) const;
     int  probe(unsigned long base, unsigned char addr) const;
 };
 struct Stm32F4I2c {
     int unused_;
     void init(unsigned long base, unsigned int speed, unsigned int clock_hz) const;
-    int  write(unsigned long base, unsigned char addr, const &unsigned char data, unsigned long len) const;
-    int  read(unsigned long base, unsigned char addr, &unsigned char data, unsigned long len) const;
+    int  write(unsigned long base, unsigned char addr, []const unsigned char data) const;
+    int  read(unsigned long base, unsigned char addr, []unsigned char data) const;
     int  probe(unsigned long base, unsigned char addr) const;
 };
 
@@ -51,14 +51,12 @@ struct I2cBus {
     // type comes from the target.
     static struct I2cBus<C> new(&volatile unsigned int base, unsigned int speed, unsigned int clock_hz);
 
-    // Write `len` bytes from `data` to the 7-bit address `addr`. Returns I2C_OK on success.
-    int          write(unsigned char addr, const &unsigned char data, unsigned long len);
-    // Read `len` bytes into `data` from device at `addr`. Returns I2C_OK on success.
-    int          read(unsigned char addr, &unsigned char data, unsigned long len);
+    // Write `data` to the 7-bit address `addr`. Returns I2C_OK on success.
+    int          write(unsigned char addr, []const unsigned char data);
+    // Read data.len bytes into `data` from device at `addr`. Returns I2C_OK on success.
+    int          read(unsigned char addr, []unsigned char data);
     // Write, then read (e.g. a register address, then its value). Returns I2C_OK on success.
-    int          write_read(unsigned char addr,
-                            const &unsigned char wr, unsigned long wr_len,
-                            &unsigned char rd,       unsigned long rd_len);
+    int          write_read(unsigned char addr, []const unsigned char wr, []unsigned char rd);
     // Probe: address the device with no data. Returns 1 if it acknowledges.
     int          probe(unsigned char addr);
     unsigned long addr_() const;
@@ -76,19 +74,18 @@ struct I2cBus<C> I2cBus::new(&volatile unsigned int base, unsigned int speed, un
 generic<C: I2cChip>
 unsigned long I2cBus::addr_() const { unsafe { return (unsigned long)self.base; } }
 generic<C: I2cChip>
-int I2cBus::write(unsigned char addr, const &unsigned char data, unsigned long len) {
-    return self.chip.write(self.addr_(), addr, data, len);
+int I2cBus::write(unsigned char addr, []const unsigned char data) {
+    return self.chip.write(self.addr_(), addr, data);
 }
 generic<C: I2cChip>
-int I2cBus::read(unsigned char addr, &unsigned char data, unsigned long len) {
-    return self.chip.read(self.addr_(), addr, data, len);
+int I2cBus::read(unsigned char addr, []unsigned char data) {
+    return self.chip.read(self.addr_(), addr, data);
 }
 generic<C: I2cChip>
-int I2cBus::write_read(unsigned char addr, const &unsigned char wr, unsigned long wr_len,
-                       &unsigned char rd, unsigned long rd_len) {
-    int r = self.chip.write(self.addr_(), addr, wr, wr_len);
+int I2cBus::write_read(unsigned char addr, []const unsigned char wr, []unsigned char rd) {
+    int r = self.chip.write(self.addr_(), addr, wr);
     if (r != I2C_OK) { return r; }
-    return self.chip.read(self.addr_(), addr, rd, rd_len);
+    return self.chip.read(self.addr_(), addr, rd);
 }
 generic<C: I2cChip>
 int I2cBus::probe(unsigned char addr) { return self.chip.probe(self.addr_(), addr); }

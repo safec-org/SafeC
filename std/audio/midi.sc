@@ -70,13 +70,13 @@ static ?&MidiBackendVt_ midi_backend_for_(int api) {
     return null;
 }
 
-int midi_compiled_apis(&int out, int cap) {
+int midi_compiled_apis([]int out) {
     ?&MidiBackendVt_ list[MIDI_API_COUNT];
     int n = midi_backends_(&list[0], MIDI_API_COUNT);
     int k = 0;
-    for (int i = 0; i < n && k < cap; i = i + 1) {
+    for (int i = 0; i < n && (unsigned long)k < out.len; i = i + 1) {
         match (list[i]) {
-            case some(vt): { unsafe { out[k] = vt.api; } k = k + 1; }
+            case some(vt): { out[k] = vt.api; k = k + 1; }
             case null: {}
         }
     }
@@ -184,16 +184,21 @@ struct MidiMsg MidiMsg::system(int status) {
     m.len = 1;
     return m;
 }
-struct MidiMsg MidiMsg::of(const &unsigned char bytes, unsigned long n) {
+struct MidiMsg MidiMsg::of([]const unsigned char bytes) {
     struct MidiMsg m;
     m.data[0] = (unsigned char)0; m.data[1] = (unsigned char)0; m.data[2] = (unsigned char)0;
     m.len = 0;
+    unsigned long n = bytes.len;
     if (n == 0UL || n > 3UL) return m;
-    unsafe {
-        for (unsigned long i = 0UL; i < n; i = i + 1UL) m.data[i] = bytes[i];
-    }
+    for (unsigned long i = 0UL; i < n; i = i + 1UL) m.data[i] = bytes[i];
     m.len = (int)n;
     return m;
+}
+
+[]const unsigned char MidiMsg::bytes() const {
+    unsigned long n = self.len < 0 ? 0UL : (unsigned long)self.len;
+    if (n > 3UL) n = 3UL;
+    return self.data[0..n];
 }
 
 int MidiMsg::status() const { return self.len > 0 ? (int)self.data[0] : 0; }
@@ -235,14 +240,13 @@ int midi_message_length(int status) {
 
 int midi_is_realtime(int status) { return status >= 0xF8 && status <= 0xFF; }
 
-long midi_build_sysex(&unsigned char out, unsigned long cap, const &unsigned char payload, unsigned long n) {
-    if (cap < n + 2UL) return -1L;
-    unsafe {
-        for (unsigned long i = 0UL; i < n; i = i + 1UL) if (payload[i] >= (unsigned char)0x80) return -1L;
-        out[0] = (unsigned char)MIDI_SYSEX;
-        for (unsigned long i = 0UL; i < n; i = i + 1UL) out[i + 1UL] = payload[i];
-        out[n + 1UL] = (unsigned char)MIDI_SYSEX_END;
-    }
+long midi_build_sysex([]unsigned char out, []const unsigned char payload) {
+    unsigned long n = payload.len;
+    if (out.len < n + 2UL) return -1L;
+    for (unsigned long i = 0UL; i < n; i = i + 1UL) if (payload[i] >= (unsigned char)0x80) return -1L;
+    out[0] = (unsigned char)MIDI_SYSEX;
+    for (unsigned long i = 0UL; i < n; i = i + 1UL) out[i + 1UL] = payload[i];
+    out[n + 1UL] = (unsigned char)MIDI_SYSEX_END;
     return (long)(n + 2UL);
 }
 
@@ -250,7 +254,7 @@ int midi_14bit(int lsb, int msb) { return (lsb & 0x7F) | ((msb & 0x7F) << 7); }
 
 // ── parser ───────────────────────────────────────────────────────────────
 
-struct MidiParser MidiParser::new(?&unsigned char sysex_buf, unsigned long cap) {
+struct MidiParser MidiParser::new([]unsigned char sysex_buf) {
     struct MidiParser p;
     p.running = (unsigned char)0;
     p.msg[0] = (unsigned char)0; p.msg[1] = (unsigned char)0; p.msg[2] = (unsigned char)0;
@@ -259,7 +263,6 @@ struct MidiParser MidiParser::new(?&unsigned char sysex_buf, unsigned long cap) 
     p.last = MidiMsg::system(0);
     p.last.len = 0;
     p.sysex = sysex_buf;
-    p.sysex_cap = sysex_buf.is_null() ? 0UL : cap;
     p.sysex_len = 0UL;
     p.in_sysex = 0;
     p.sysex_overflow = 0;
@@ -276,11 +279,8 @@ void MidiParser::reset() {
 }
 
 static void midi_parser_sysex_put_(&MidiParser p, int byte) {
-    if (p.sysex_len < p.sysex_cap) {
-        match (p.sysex) {
-            case some(b): { unsafe { b[p.sysex_len] = (unsigned char)byte; } }
-            case null: {}
-        }
+    if (p.sysex_len < p.sysex.len) {
+        p.sysex[p.sysex_len] = (unsigned char)byte;
         p.sysex_len = p.sysex_len + 1UL;
     } else {
         p.sysex_overflow = 1;
@@ -299,7 +299,7 @@ int MidiParser::feed(int byte) {
         if (b == MIDI_SYSEX_END) {
             midi_parser_sysex_put_(self, b);
             self.in_sysex = 0;
-            if (self.sysex_overflow || self.sysex_cap == 0UL) { self.sysex_overflow = 0; return MIDI_PARSE_ERROR; }
+            if (self.sysex_overflow || self.sysex.len == 0UL) { self.sysex_overflow = 0; return MIDI_PARSE_ERROR; }
             return MIDI_PARSE_SYSEX;
         }
         if (b < 0x80) { midi_parser_sysex_put_(self, b); return MIDI_PARSE_NONE; }
@@ -345,7 +345,7 @@ int MidiParser::feed(int byte) {
     self.msg[self.have] = (unsigned char)b;
     self.have = self.have + 1;
     if (self.have >= self.need) {
-        self.last = MidiMsg::of(&self.msg[0], (unsigned long)self.need);
+        self.last = MidiMsg::of(self.msg[0..(unsigned long)self.need]);
         self.have = 0;
         return MIDI_PARSE_MESSAGE;
     }
@@ -354,6 +354,10 @@ int MidiParser::feed(int byte) {
 
 struct MidiMsg MidiParser::message() const { return self.last; }
 unsigned long MidiParser::sysex_length() const { return self.sysex_len; }
+[]const unsigned char MidiParser::sysex_message() const {
+    unsigned long n = self.sysex_len < self.sysex.len ? self.sysex_len : self.sysex.len;
+    return self.sysex[0..n];
+}
 
 // ── encoder ──────────────────────────────────────────────────────────────
 
@@ -366,10 +370,10 @@ struct MidiEncoder MidiEncoder::new(int use_running_status) {
 
 void MidiEncoder::reset() { self.running = (unsigned char)0; }
 
-long MidiEncoder::encode(const &unsigned char msg, unsigned long len, &unsigned char out, unsigned long cap) {
+long MidiEncoder::encode([]const unsigned char msg, []unsigned char out) {
+    unsigned long len = msg.len;
     if (len == 0UL) return 0L;
-    int status = 0;
-    unsafe { status = (int)msg[0]; }
+    int status = (int)msg[0];
     unsigned long skip = 0UL;
     if (status >= 0x80 && status < 0xF0) {
         if (self.use_running_status && (int)self.running == status) skip = 1UL;
@@ -378,29 +382,23 @@ long MidiEncoder::encode(const &unsigned char msg, unsigned long len, &unsigned 
         self.running = (unsigned char)0;     // system common cancels running status
     }
     unsigned long n = len - skip;
-    if (n > cap) return -1L;
-    unsafe {
-        for (unsigned long i = 0UL; i < n; i = i + 1UL) out[i] = msg[i + skip];
-    }
+    if (n > out.len) return -1L;
+    for (unsigned long i = 0UL; i < n; i = i + 1UL) out[i] = msg[i + skip];
     return (long)n;
 }
 
 // ── MidiEvent ────────────────────────────────────────────────────────────
 
 int MidiEvent::status() const {
-    match (self.bytes.get(0UL)) { case some(b): return (int)*b; case null: {} }
-    return 0;
+    if (self.bytes.len == 0UL) return 0;
+    return (int)self.bytes[0];
 }
 
 struct MidiMsg MidiEvent::short_msg() const {
     struct MidiMsg m = MidiMsg::system(0);
     m.len = 0;
     if (self.bytes.len == 0UL || self.bytes.len > 3UL) return m;
-    match (self.bytes.ptr) {
-        case some(p): return MidiMsg::of(p, self.bytes.len);
-        case null: {}
-    }
-    return m;
+    return MidiMsg::of(self.bytes);
 }
 
 // ── the input path (real-time) ───────────────────────────────────────────
@@ -461,9 +459,9 @@ void midi_in_deliver_(&MidiPortState_ st, const &unsigned char msg, unsigned lon
         struct MidiEvent ev;
         ev.timestamp = t;
         ev.delta = delta;
-        unsafe { ev.bytes = Slice::of((&unsigned char)msg, len); }
         unsafe {
-            void* user = atomic_load((_Atomic void**)&st.user);
+            ev.bytes = ((const unsigned char*)msg)[0..len];
+            ?&Erased user = (?&Erased)atomic_load((_Atomic void**)&st.user);
             MidiCallbackRaw_ f = (MidiCallbackRaw_)cb;
             f(&ev, user);
         }
@@ -503,8 +501,8 @@ void midi_in_feed_(&MidiPortState_ st, const &unsigned char bytes, unsigned long
 
 // ── MidiIn / MidiOut ─────────────────────────────────────────────────────
 
-static ?&MidiPortState_ midi_state_of_(?&void impl) {
-    unsafe { return (?&MidiPortState_)impl; }
+static ?&MidiPortState_ midi_state_of_(?&MidiPortState_ impl) {
+    return impl;
 }
 
 static ?&MidiBackendVt_ midi_vt_of_(&MidiPortState_ st) {
@@ -549,7 +547,9 @@ static ?&MidiPortState_ midi_client_open_(int api, int input, const &char name, 
                             st.ring = (unsigned char*)alloc_zeroed_raw_(cap);
                             st.sysex_buf = (unsigned char*)alloc_zeroed_raw_(MIDI_MAX_SYSEX);
                             if (st.ring == (unsigned char*)0 || st.sysex_buf == (unsigned char*)0) ok = 0;
-                            st.parser = MidiParser::new((?&unsigned char)st.sysex_buf, MIDI_MAX_SYSEX);
+                            unsafe {
+                                st.parser = MidiParser::new(st.sysex_buf[0..(st.sysex_buf == (unsigned char*)0 ? 0UL : MIDI_MAX_SYSEX)]);
+                            }
                         }
                         st.ring_cap = cap;
                     }
@@ -610,7 +610,7 @@ struct Result<MidiIn, AudioError> MidiIn::open(int api, const &char client_name,
     if (st.is_null()) return Result::new_err(err);
     struct MidiIn m;
     m.api_id = chosen;
-    unsafe { m.impl = (?&void)st; }
+    m.impl = st;
     return Result::new_ok(m);
 }
 
@@ -621,7 +621,7 @@ struct Result<MidiOut, AudioError> MidiOut::open(int api, const &char client_nam
     if (st.is_null()) return Result::new_err(err);
     struct MidiOut m;
     m.api_id = chosen;
-    unsafe { m.impl = (?&void)st; }
+    m.impl = st;
     return Result::new_ok(m);
 }
 
@@ -639,7 +639,7 @@ struct MidiOut MidiOut::closed() {
     return m;
 }
 
-static unsigned int midi_port_count_(?&void impl) {
+static unsigned int midi_port_count_(?&MidiPortState_ impl) {
     match (midi_state_of_(impl)) {
         case some(st): {
             match (midi_vt_of_(st)) {
@@ -656,7 +656,7 @@ static unsigned int midi_port_count_(?&void impl) {
     return 0U;
 }
 
-static struct Result<MidiPortInfo, AudioError> midi_port_info_(?&void impl, unsigned int index) {
+static struct Result<MidiPortInfo, AudioError> midi_port_info_(?&MidiPortState_ impl, unsigned int index) {
     match (midi_state_of_(impl)) {
         case some(st): {
             match (midi_vt_of_(st)) {
@@ -677,7 +677,7 @@ static struct Result<MidiPortInfo, AudioError> midi_port_info_(?&void impl, unsi
     return Result::new_err(AudioError::make(AUDIO_ERR_INVALID_USE, "midi: not open"));
 }
 
-static struct AudioError midi_open_port_(?&void impl, int isVirtual, unsigned int index, const &char name) {
+static struct AudioError midi_open_port_(?&MidiPortState_ impl, int isVirtual, unsigned int index, const &char name) {
     match (midi_state_of_(impl)) {
         case some(st): {
             if (st.port_open) return AudioError::make(AUDIO_ERR_INVALID_USE, "midi: a port is already open (close_port() first)");
@@ -703,7 +703,7 @@ static struct AudioError midi_open_port_(?&void impl, int isVirtual, unsigned in
     return AudioError::make(AUDIO_ERR_INVALID_USE, "midi: not open");
 }
 
-static void midi_close_port_(?&void impl) {
+static void midi_close_port_(?&MidiPortState_ impl) {
     match (midi_state_of_(impl)) {
         case some(st): {
             if (!st.port_open) return;
@@ -717,7 +717,7 @@ static void midi_close_port_(?&void impl) {
     }
 }
 
-static void midi_close_(?&void impl) {
+static void midi_close_(?&MidiPortState_ impl) {
     midi_close_port_(impl);
     match (midi_state_of_(impl)) {
         case some(st): {
@@ -747,13 +747,13 @@ int MidiIn::is_port_open() const {
     return 0;
 }
 
-void MidiIn::set_callback_raw_(void* callback, void* user) {
+void MidiIn::set_callback_raw_(MidiCallbackRaw_ callback, ?&Erased user) {
     match (midi_state_of_(self.impl)) {
         case some(st): {
             unsafe {
                 atomic_store((_Atomic void**)&st.callback, (void*)0);
-                atomic_store((_Atomic void**)&st.user, user);
-                atomic_store((_Atomic void**)&st.callback, callback);
+                atomic_store((_Atomic void**)&st.user, (void*)user);
+                atomic_store((_Atomic void**)&st.callback, (void*)callback);
             }
         }
         case null: {}
@@ -775,7 +775,7 @@ void MidiIn::ignore_types(int sysex, int timing, int active_sensing) {
     }
 }
 
-long MidiIn::get_message(&unsigned char buf, unsigned long cap, &double timestamp) {
+long MidiIn::get_message([]unsigned char buf, &double timestamp) {
     match (midi_state_of_(self.impl)) {
         case some(st): {
             if (st.ring_cap == 0UL) return 0L;
@@ -790,8 +790,8 @@ long MidiIn::get_message(&unsigned char buf, unsigned long cap, &double timestam
                 midi_ring_get_(st, tail + 4UL, (&unsigned char)&t, 8UL);
             }
             unsigned long len = (unsigned long)l32;
-            if (len > cap) return 0L - (long)len;
-            midi_ring_get_(st, tail + 12UL, buf, len);
+            if (len > buf.len) return 0L - (long)len;
+            if (len > 0UL) unsafe { midi_ring_get_(st, tail + 12UL, (&unsigned char)&buf[0], len); }
             *timestamp = t;
             unsafe { atomic_store((_Atomic unsigned long*)&st.ring_tail, tail + 12UL + len); }
             return (long)len;
@@ -837,19 +837,19 @@ int MidiOut::is_port_open() const {
     return 0;
 }
 
-struct AudioError MidiOut::send_message(const &unsigned char msg, unsigned long len) {
+struct AudioError MidiOut::send_message([]const unsigned char msg) {
+    unsigned long len = msg.len;
     match (midi_state_of_(self.impl)) {
         case some(st): {
             if (!st.port_open) return AudioError::make(AUDIO_ERR_INVALID_USE, "midi: no port open");
             if (len == 0UL) return AudioError::make(AUDIO_ERR_INVALID_PARAM, "midi: empty message");
-            int first = 0;
-            unsafe { first = (int)msg[0]; }
+            int first = (int)msg[0];
             if (first < 0x80) return AudioError::make(AUDIO_ERR_INVALID_PARAM, "midi: a message starts with a status byte");
             match (midi_vt_of_(st)) {
                 case some(vt): {
                     st.error = AudioError::none();
                     int rc = 0;
-                    unsafe { rc = vt.send(st, msg, len); }
+                    unsafe { rc = vt.send(st, (const &unsigned char)&msg[0], len); }
                     if (rc != AUDIO_OK) return st.error;
                     return AudioError::none();
                 }
@@ -863,7 +863,7 @@ struct AudioError MidiOut::send_message(const &unsigned char msg, unsigned long 
 
 struct AudioError MidiOut::send(struct MidiMsg msg) {
     if (msg.len <= 0 || msg.len > 3) return AudioError::make(AUDIO_ERR_INVALID_PARAM, "midi: empty message");
-    return self.send_message(&msg.data[0], (unsigned long)msg.len);
+    return self.send_message(msg.bytes());
 }
 
 void MidiOut::close() { self.drop(); }

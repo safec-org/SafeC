@@ -17,15 +17,15 @@ namespace std {
 
 generic<T>
 struct LFQueue {
-    ?&heap T      buffer;
-    unsigned long cap;        // power of two
+    []T           buffer;     // the slots (empty after destroy or a failed new)
+    unsigned long cap;        // power of two, <= buffer.len
     long long     head;       // elements ever enqueued (producer, atomic)
     long long     tail;       // elements ever dequeued (consumer, atomic)
     int           owned;      // 1 if LFQueue::new allocated the buffer
 
-    // Uses a caller-provided buffer of at least 'cap' elements; cap is rounded
-    // DOWN to a power of two so the queue never touches past the buffer.
-    static struct LFQueue<T> over(&heap T buffer, unsigned long cap);
+    // Uses a caller-provided buffer (which must outlive the queue); its
+    // length is rounded DOWN to a power of two for the capacity.
+    static struct LFQueue<T> over([]T buffer);
 
     // Allocates its own buffer; cap is rounded UP to a power of two. A failed
     // allocation yields a queue with cap 0 (every enqueue reports full).
@@ -44,10 +44,10 @@ unsigned long lfq_floor_pow2_(unsigned long n);   // lockfree.sc
 unsigned long lfq_ceil_pow2_(unsigned long n);
 
 generic<T>
-struct LFQueue<T> LFQueue::over(&heap T buffer, unsigned long cap) {
+struct LFQueue<T> LFQueue::over([]T buffer) {
     struct LFQueue<T> q;
     q.buffer = buffer;
-    q.cap    = lfq_floor_pow2_(cap);
+    q.cap    = buffer.len == 0UL ? 0UL : lfq_floor_pow2_(buffer.len);
     q.head   = 0LL;
     q.tail   = 0LL;
     q.owned  = 0;
@@ -58,9 +58,11 @@ generic<T>
 struct LFQueue<T> LFQueue::new(unsigned long cap) {
     struct LFQueue<T> q;
     unsigned long rounded = lfq_ceil_pow2_(cap);
-    q.buffer = null;
-    unsafe { q.buffer = (?&heap T)alloc_raw_(checked_mul_size(rounded, sizeof(T))); }
-    q.cap   = q.buffer.is_null() ? 0UL : rounded;
+    unsafe {
+        T* p = (T*)alloc_raw_(checked_mul_size(rounded, sizeof(T)));
+        q.buffer = p[0..(p == (T*)0 ? 0UL : rounded)];
+    }
+    q.cap   = q.buffer.len;
     q.head  = 0LL;
     q.tail  = 0LL;
     q.owned = 1;
@@ -112,8 +114,8 @@ void LFQueue::destroy() { self.drop(); }
 
 generic<T>
 void LFQueue::drop() {
-    if (self.owned) { unsafe { dealloc_raw_((void*)self.buffer); } }
-    self.buffer = null;
+    if (self.owned && self.buffer.len != 0UL) { unsafe { dealloc_raw_((void*)self.buffer.ptr); } }
+    self.buffer = self.buffer[0..0];
     self.cap = 0UL;
 }
 

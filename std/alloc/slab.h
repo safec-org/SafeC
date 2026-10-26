@@ -7,10 +7,15 @@
 
 namespace std {
 
+// A free slot's first word: the link to the next free slot.
+struct SlabLink_ {
+    ?&SlabLink_ next;
+};
+
 struct SlabAllocator {
     &heap void    base;       // heap-backed backing buffer
     int           owned;   // 1 if SlabAllocator::new allocated base (destroy() frees it)
-    void*         free_head;  // head of embedded free-list (raw — unsafe arithmetic)
+    ?&SlabLink_   free_head;  // head of the embedded free list (walked inside unsafe)
     unsigned long obj_size;   // slot size: the requested size rounded up to a multiple of 8
     unsigned long cap;        // max number of objects
     unsigned long used;       // currently allocated count
@@ -21,12 +26,12 @@ struct SlabAllocator {
     // contract, which adding a tag would silently overrun).
     int           has_tags;
 
-    // A slab over a user-provided buffer of obj_size*count bytes. Slots are
-    // obj_size rounded up to a multiple of 8 (at least 8, to hold the
-    // free-list link) and start 8-byte aligned, so 'cap' can come out below
-    // 'count' when that rounding doesn't fit. No double-free detection (see
-    // has_tags) — the buffer size contract can't grow to fit a tag.
-    static struct SlabAllocator over(&unsigned char buffer, unsigned long obj_size, unsigned long count);
+    // A slab over a caller-provided buffer. Slots are obj_size rounded up to
+    // a multiple of 8 (at least 8, to hold the free-list link) and start
+    // 8-byte aligned, so 'cap' can come out below buffer.len / obj_size when
+    // that rounding doesn't fit. No double-free detection (see has_tags) —
+    // the buffer size contract can't grow to fit a tag.
+    static struct SlabAllocator over([]unsigned char buffer, unsigned long obj_size);
 
     // A heap-backed slab of `count` objects (double-free-detecting).
     static struct SlabAllocator new(unsigned long obj_size, unsigned long count);

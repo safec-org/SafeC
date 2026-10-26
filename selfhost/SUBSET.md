@@ -36,9 +36,17 @@ it, so `__SAFEC_COMPAT_PREPROCESSOR__` is defined):
   `unsafe`.
 - References `&stack T`, `&heap T`, `&static T`, `&arena<R> T` and plain
   `&T`, with `const`.
-- Nullable references `?&T`, optionals `?T`, slices `[]T`, tuples
-  `tuple(int, double)`.
-- Function types `fn R(P...)`, and C-style function pointer declarators.
+- Nullable references `?&T`, optionals `?T`, tuples `tuple(int, double)`.
+- Slices `[]T` in every declaration position (parameters, return types,
+  locals, globals, fields), read-only slices `[]const T` (`[]T` converts
+  to `[]const T`, not back; their elements can't be assigned), optional
+  slices `?[]T`, and byte slices that interconvert across `char`,
+  `signed char` and `unsigned char`. `a[i..j]`, `a[i..]` and `a[..]` are
+  range-checked outside `unsafe`, and casting a slice to a pointer is an
+  error (use `.ptr`), as in safec.
+- Function types `fn R(P...)`, nullable function references `?fn R(P...)`
+  (checked with `match` / `is_null()`, `!` unwraps to the `fn`), and C-style
+  function pointer declarators.
 - `struct`, `union`, `enum` (with an underlying type), tagged unions,
   `newtype`, `typedef`, `typeof`.
 
@@ -176,9 +184,15 @@ These are not implemented, and the error is a parse or name error:
   at most 64 objects and 384 cells per function, and paths 4 deep. Past
   those limits it stops tracking rather than guess, so it can miss an
   error but does not invent one. A backward `goto` is treated as a loop.
-  On safec's own `compiler/tests/lifetimes` suite, the two compilers agree
-  on accept or reject for every test, and scc reports exactly safec's
-  diagnostics on every `EXPECT-ERROR` test.
+  It does not track element references into a container's buffer (what
+  `Vec::at`/`get` and the maps' `get` return), so one held across a call
+  that reallocates or frees the buffer (a `push`, a rehashing `insert`) is
+  not reported; safec reports it. Apart from that
+  (`lifetimes/container_refs_err.sc`), the two compilers agree on accept
+  or reject for every test in safec's own `compiler/tests/lifetimes`
+  suite; on a few `EXPECT-ERROR` tests there that need aliasing seen only
+  through a recursive call (`calls_err.sc`, `recursive_fresh_err.sc`),
+  scc reports a subset of safec's diagnostics.
 - **Ownership and thread safety**: scc compiles the `Drop` forms — `drop()`
   and `consume` methods, conditional `void drop() if (cond);`, `drop(x)`
   (drop glue: `T::drop()`, else each owning field and constant-length array

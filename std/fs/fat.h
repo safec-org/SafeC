@@ -47,16 +47,23 @@ struct FatCtx {
     // Returns 0 on success.
     int init(&BlockDevice dev, unsigned long lba);
 
-    // Read a cluster into `buf` (must be >= bytes_per_cluster bytes).
-    int read_cluster(unsigned long cluster, &unsigned char buf);
+    // Read a cluster into the first bytes_per_cluster bytes of `buf` (-1
+    // if it is shorter).
+    int read_cluster(unsigned long cluster, []unsigned char buf);
 
     // Follow FAT chain to find cluster at position `idx` from `start_cluster`.
     unsigned long follow_fat(unsigned long start_cluster, unsigned long idx);
 
     // ── FsRead (vfs.h): mount with vfs.mount_ro(mountpoint, &ctx) ──────────
     int           open(const &char path, int flags, &VfsNode node_out);
-    unsigned long read(unsigned long inode, unsigned long offset, &unsigned char buf, unsigned long len);
-    int           readdir(unsigned long inode, fn void(&VfsNode, ?&void) cb, ?&void user);
+    unsigned long read(unsigned long inode, unsigned long offset, []unsigned char buf);
+    generic<T> int readdir(unsigned long inode, fn void(&VfsNode, ?&T) cb, ?&T user);
+    int           readdir_raw_(unsigned long inode, fn void(&VfsNode, ?&Erased) cb, ?&Erased user);
 };
+
+generic<T>
+int FatCtx::readdir(unsigned long inode, fn void(&VfsNode, ?&T) cb, ?&T user) {
+    unsafe { return self.readdir_raw_(inode, (fn void(&VfsNode, ?&Erased))cb, (?&Erased)user); }
+}
 
 } // namespace std

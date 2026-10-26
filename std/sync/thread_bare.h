@@ -32,7 +32,7 @@ struct ThreadSched {
     generic<T> Thread spawn(fn int(?&T, int) func, ?&T arg, int priority);
 
     // Type-erased spawn behind spawn().
-    Thread  spawn_raw_(void* func, void* arg, int priority);
+    Thread  spawn_raw_(fn int(?&Erased, int) func, ?&Erased arg, int priority);
 
     // Run one scheduling pass: threads are served in descending priority order.
     // Returns the number of still-active threads.
@@ -53,7 +53,7 @@ struct ThreadSched {
 
 generic<T>
 Thread ThreadSched::spawn(fn int(?&T, int) func, ?&T arg, int priority) {
-    unsafe { return self.spawn_raw_((void*)func, (void*)arg, priority); }
+    unsafe { return self.spawn_raw_((fn int(?&Erased, int))func, (?&Erased)arg, priority); }
 }
 
 } // namespace std

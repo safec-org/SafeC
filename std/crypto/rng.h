@@ -6,6 +6,7 @@
 // Freestanding-safe with RngCtx::init_seed() or rdrand.
 // Usage: struct RngCtx rng; rng.init(); rng.fill(buf, n);
 #pragma once
+#include <std/crypto/buf.h>
 
 #define RNG_BLOCK_SIZE 64   // ChaCha20 output block (bytes)
 
@@ -27,7 +28,9 @@ struct RngCtx {
     void init_seed(const unsigned char seed[32]);
 
     // Fill `out[0..len-1]` with cryptographically strong random bytes.
-    void fill(&unsigned char out, unsigned long len);
+    void fill([]unsigned char out);
+    // internal: the (reference, length) core of fill()
+    void fill_n_(&unsigned char out, unsigned long len);
 
     // Return a random 32-bit unsigned integer.
     unsigned int  rand32();

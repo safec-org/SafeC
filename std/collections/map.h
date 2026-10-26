@@ -30,7 +30,7 @@ namespace std {
 #define MAP_FULL_  1
 #define MAP_TOMB_  2
 
-unsigned int  map_hash_str_(const char* s);    // map.sc
+unsigned int  map_hash_str_(const &char s);    // map.sc
 
 // Keys of 1/2/4/8 bytes (every integer, enum, pointer and small padding-
 // free struct) are read as one little-endian word — assembled from bytes,
@@ -352,7 +352,7 @@ struct StrMap {
     void          drop();
     void          free() consume;   // = drop()
 
-    long long     find_(const char* key, unsigned int h) const;
+    long long     find_(const &char key, unsigned int h) const;
     int           rehash_(unsigned long new_cap);
 };
 
@@ -371,7 +371,7 @@ generic<V>
 int StrMap::is_empty() const { return self.len == 0UL; }
 
 generic<V>
-long long StrMap::find_(const char* key, unsigned int h) const {
+long long StrMap::find_(const &char key, unsigned int h) const {
     if (self.len == 0UL) return -1LL;
     unsigned long mask = self.cap - 1UL;
     unsigned long idx = (unsigned long)h & mask;

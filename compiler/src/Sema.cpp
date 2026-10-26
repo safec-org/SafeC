@@ -559,6 +559,13 @@ TypePtr Sema::resolveType(TypePtr ty) {
         if (resolvedElem != vt.element)
             return makeVector(resolvedElem, vt.width);
     }
+    // '[]Fixed' / '[]S24': the element type is a name like any other.
+    if (ty->kind == TypeKind::Slice) {
+        auto &sl = static_cast<SliceType &>(*ty);
+        auto resolvedElem = resolveType(sl.element);
+        if (resolvedElem != sl.element)
+            return makeSlice(resolvedElem, sl.constElem);
+    }
     // 'fn void(&Node<F16>)': resolve the parameter and return types too, so a
     // generic struct named there is the same instance as everywhere else.
     if (ty->kind == TypeKind::Function) {
@@ -726,6 +733,16 @@ void Sema::collectDecls(TranslationUnit &tu) {
         default: break;
         }
     }
+    // A field can name a struct defined later in the file behind a
+    // reference ('?&struct VfsMount fs_ctx;' in a struct declared first):
+    // bind those placeholders now that every struct is registered.
+    for (auto &d : tu.decls) {
+        if (d->kind != DeclKind::Struct) continue;
+        auto &sd = static_cast<StructDecl &>(*d);
+        if (!sd.type || sd.type->kind != TypeKind::Struct) continue;
+        auto &st = static_cast<StructType &>(*sd.type);
+        for (auto &fd : st.fields) fd.type = resolveType(fd.type);
+    }
 }
 
 // Replace StructType{name} with GenericType{name} when 'name' is in the
@@ -811,7 +828,7 @@ static TypePtr resolveGenericNames(const TypePtr &ty,
     if (ty->kind == TypeKind::Slice) {
         auto &sl = static_cast<const SliceType &>(*ty);
         auto ne = resolveGenericNames(sl.element, gps);
-        return (ne == sl.element) ? ty : makeSlice(ne);
+        return (ne == sl.element) ? ty : makeSlice(ne, sl.constElem);
     }
     if (ty->kind == TypeKind::Vector) {
         auto &vt = static_cast<const VectorType &>(*ty);
@@ -2877,6 +2894,12 @@ TypePtr Sema::checkUnary(UnaryExpr &e) {
         }
         if (isNullableRef) {
             auto &rt = static_cast<ReferenceType &>(*operandTy);
+            // '?fn' -> 'fn': a function reference unwraps to the non-null
+            // function reference itself (there is no function value to load).
+            if (rt.base && rt.base->kind == TypeKind::Function) {
+                e.isLValue = false;
+                return makeReference(rt.base, rt.region, /*nullable=*/false, rt.mut, rt.arenaName);
+            }
             e.isLValue = rt.mut;
             return rt.base;
         }
@@ -2951,7 +2974,9 @@ TypePtr Sema::checkAddrOf(UnaryExpr &e) {
             if (b->type && b->type->kind == TypeKind::Reference) {
                 r = static_cast<ReferenceType &>(*b->type).region; haveRegion = true; break;
             }
-            if (b->type && b->type->kind == TypeKind::Pointer) { r = Region::Extern; haveRegion = true; break; }
+            if (b->type && (b->type->kind == TypeKind::Pointer || b->type->kind == TypeKind::Slice)) {
+                r = Region::Extern; haveRegion = true; break;
+            }
             cur = b;
             continue;
         }
@@ -4422,7 +4447,9 @@ TypePtr Sema::checkSubscript(SubscriptExpr &e) {
     }
     if (baseTy->kind == TypeKind::Slice) {
         e.boundsCheckOmit = inUnsafeScope();
-        e.isLValue = true;
+        // An element of a '[]const T' designates an object but isn't
+        // assignable (its address is a const reference, see checkAddrOf).
+        e.isLValue = !static_cast<SliceType &>(*baseTy).constElem;
         return static_cast<SliceType &>(*baseTy).element;
     }
     if (baseTy->kind == TypeKind::Reference) {
@@ -4458,19 +4485,24 @@ TypePtr Sema::checkSlice(SliceExpr &e) {
     }
 
     TypePtr elemTy;
+    bool constElem = false;
+    e.boundsCheckOmit = inUnsafeScope();
     if (baseTy->kind == TypeKind::Array) {
         elemTy = static_cast<ArrayType &>(*baseTy).element;
     } else if (baseTy->kind == TypeKind::Pointer) {
         if (!inUnsafeScope())
             diag_.error(e.loc, "slicing a pointer requires 'unsafe' block");
         elemTy = static_cast<PointerType &>(*baseTy).base;
+        constElem = static_cast<PointerType &>(*baseTy).isConst;
     } else if (baseTy->kind == TypeKind::Slice) {
         elemTy = static_cast<SliceType &>(*baseTy).element;
+        constElem = static_cast<SliceType &>(*baseTy).constElem;
     } else if (baseTy->kind == TypeKind::Reference) {
         auto &rt = static_cast<ReferenceType &>(*baseTy);
-        if (rt.base->kind == TypeKind::Array)
+        if (rt.base->kind == TypeKind::Array) {
             elemTy = static_cast<ArrayType &>(*rt.base).element;
-        else {
+            constElem = !rt.mut;
+        } else {
             diag_.error(e.loc, "cannot slice type '" + baseTy->str() + "'");
             return makeError();
         }
@@ -4478,7 +4510,7 @@ TypePtr Sema::checkSlice(SliceExpr &e) {
         diag_.error(e.loc, "cannot slice type '" + baseTy->str() + "'");
         return makeError();
     }
-    return makeSlice(elemTy);
+    return makeSlice(elemTy, constElem);
 }
 
 TypePtr Sema::checkMember(MemberExpr &e) {
@@ -4534,7 +4566,7 @@ TypePtr Sema::checkMember(MemberExpr &e) {
     if (baseTy->kind == TypeKind::Slice) {
         auto &sl = static_cast<SliceType &>(*baseTy);
         if (e.field == "len") return makeInt(64, false);
-        if (e.field == "ptr") return makePointer(sl.element, false);
+        if (e.field == "ptr") return makePointer(sl.element, sl.constElem);
         diag_.error(e.loc, "slice has no member '" + e.field + "' (use .len or .ptr)");
         return makeError();
     }
@@ -4580,6 +4612,16 @@ TypePtr Sema::checkCast(CastExpr &e) {
         srcTy = checkCompoundInit(static_cast<CompoundInitExpr &>(*e.operand), e.targetType);
     } else {
         srcTy = checkExpr(*e.operand);
+    }
+
+    // A slice is a (pointer, length) pair, not a pointer: '(T*)s' would
+    // reinterpret the pair. Take its '.ptr' (or re-slice it) instead.
+    if (srcTy && srcTy->kind == TypeKind::Slice && e.targetType &&
+        e.targetType->kind != TypeKind::Slice && !e.targetType->isError()) {
+        diag_.error(e.loc,
+            "cannot cast slice '" + srcTy->str() + "' to '" + e.targetType->str() +
+            "': use its '.ptr' (and '.len'), or slice it");
+        return e.targetType;
     }
 
     // A cast can't drop nullability: '(&T)q' on a '?&T' would skip the null
@@ -4673,7 +4715,12 @@ TypePtr Sema::checkAssign(AssignExpr &e) {
     expectedType_ = savedExpectedType;
     rhsTy = coerceGenericFnValue(*e.rhs, rhsTy, lhsTy);
 
-    if (!e.lhs->isLValue) {
+    if (!e.lhs->isLValue && e.lhs->kind == ExprKind::Subscript &&
+        static_cast<SubscriptExpr &>(*e.lhs).base->type &&
+        static_cast<SubscriptExpr &>(*e.lhs).base->type->kind == TypeKind::Slice) {
+        diag_.error(e.loc, "cannot assign through a read-only slice '" +
+                    static_cast<SubscriptExpr &>(*e.lhs).base->type->str() + "'");
+    } else if (!e.lhs->isLValue) {
         diag_.error(e.loc, "left side of assignment must be lvalue");
     }
 
@@ -4687,28 +4734,37 @@ TypePtr Sema::checkAssign(AssignExpr &e) {
 
     // Region escape: RHS &stack/&arena can't be assigned to variable with wider
     // scope. This also has to cover assignment through struct fields
-    // ('h.ref = &x') — not just plain identifiers — by walking the '.' chain
-    // down to its base variable ('->' breaks the chain: it indirects through
-    // a pointer/reference with its own, independent lifetime).
+    // ('h.ref = &x', 'h->ref = &x') — not just plain identifiers — by
+    // walking the '.'/'->' chain down to its base variable. '->' is judged
+    // like '.' through a reference: by the scope of the variable holding
+    // the pointer/reference (a pointer to storage in an outer scope is
+    // caught when it's stored there, by this same check).
     if (rhsTy && rhsTy->kind == TypeKind::Reference) {
         auto &rt = static_cast<ReferenceType &>(*rhsTy);
         VarDecl *baseVd = nullptr;
+        // 'f().field = r': the storage a returned reference designates
+        // outlives every scope of this function, like an outermost variable.
+        bool callRoot = false;
         for (Expr *cur = e.lhs.get(); cur; ) {
             if (cur->kind == ExprKind::Ident) { baseVd = static_cast<IdentExpr *>(cur)->resolved; break; }
-            if (cur->kind == ExprKind::Member) { cur = static_cast<MemberExpr *>(cur)->base.get(); continue; }
+            if (cur->kind == ExprKind::Member || cur->kind == ExprKind::Arrow) {
+                cur = static_cast<MemberExpr *>(cur)->base.get();
+                continue;
+            }
+            callRoot = cur != e.lhs.get() && cur->kind == ExprKind::Call;
             break;
         }
-        if (rt.region == Region::Stack && baseVd) {
-            if (baseVd->scopeDepth < scopeDepth_) {
+        if (rt.region == Region::Stack && (baseVd || callRoot)) {
+            if (callRoot || baseVd->scopeDepth < scopeDepth_) {
                 diag_.error(e.loc,
                     "cannot assign '&stack " + rt.base->str() +
                     "' to variable in outer scope: reference would escape");
             }
         }
-        if (rt.region == Region::Arena && baseVd) {
+        if (rt.region == Region::Arena && (baseVd || callRoot)) {
             auto it = regionRegistry_.find(rt.arenaName);
             int minDepth = (it != regionRegistry_.end()) ? it->second->declScopeDepth : 0;
-            if (baseVd->scopeDepth < minDepth) {
+            if ((callRoot ? 0 : baseVd->scopeDepth) < minDepth) {
                 diag_.error(e.loc,
                     "cannot assign '&arena<" + rt.arenaName + "> " + rt.base->str() +
                     "' to variable in outer scope: arena reference would escape");
@@ -5264,6 +5320,19 @@ bool Sema::canImplicitlyConvert(const TypePtr &from, const TypePtr &to) const {
     // later accesses skip the volatile semantics; that takes an explicit cast.
     if (dropsVolatile(from, to)) return false;
     if (typeEqual(from, to)) return true;
+    // '[]T' -> '[]const T': dropping write access is always fine. Byte
+    // slices interconvert across char / signed char / unsigned char (the
+    // same 8-bit interop their elements have), so text is a byte buffer.
+    if (from->kind == TypeKind::Slice && to->kind == TypeKind::Slice) {
+        auto &fs = static_cast<const SliceType &>(*from);
+        auto &ts = static_cast<const SliceType &>(*to);
+        auto byte = [](const TypePtr &t) {
+            return t && (t->kind == TypeKind::Char || t->kind == TypeKind::Int8 ||
+                         t->kind == TypeKind::UInt8);
+        };
+        bool sameElem = typeEqual(fs.element, ts.element) || (byte(fs.element) && byte(ts.element));
+        if (sameElem && (ts.constElem || !fs.constElem)) return true;
+    }
     // A function whose signature differs from the target function type only
     // by raw 'T*' vs region-less '&T'/'?&T' in some parameter/return slots
     // is the same function at the ABI level (both are one pointer), and
@@ -5497,15 +5566,18 @@ bool Sema::canImplicitlyConvert(const TypePtr &from, const TypePtr &to) const {
 }
 
 StructType *Sema::asStruct(TypePtr &ty) {
-    if (ty && ty->kind == TypeKind::Struct) return static_cast<StructType *>(ty.get());
-    // Look up by name
+    // A struct named before its definition ('?&struct VfsMount' in a field
+    // of a struct declared earlier) is a placeholder: look the definition
+    // up by name.
     if (ty && ty->kind == TypeKind::Struct) {
         auto &st = static_cast<StructType &>(*ty);
+        if (st.isDefined || !st.typeArgs.empty()) return &st;
         auto it = typeRegistry_.find(st.name);
         if (it != typeRegistry_.end() && it->second->kind == TypeKind::Struct) {
             ty = it->second;
             return static_cast<StructType *>(ty.get());
         }
+        return &st;
     }
     return nullptr;
 }

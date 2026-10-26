@@ -163,12 +163,13 @@ static &Widget __widget_new(int kind) {
     w.caret = 0UL;
     w.hover = 0; w.pressed = 0; w.focused = 0;
     unsafe {
-        w.onClick = (void*)0; w.onClickData = (void*)0;
-        w.onChange = (void*)0; w.onChangeData = (void*)0;
-        w.customDraw = (void*)0; w.customLayout = (void*)0; w.customEvent = (void*)0; w.userData = (void*)0;
-        w.onActivate = (void*)0; w.onActivateData = (void*)0;
-        w.onDraw = (void*)0; w.onDrawData = (void*)0;
-        w.uiPtr = (void*)0;
+        w.onClick = null; w.onClickData = null;
+        w.onChange = null; w.onChangeData = null;
+        w.customDraw = null; w.customLayout = null; w.customEvent = null; w.userData = null;
+        w.onActivate = null; w.onActivateData = null;
+        w.onDraw = null; w.onDrawData = null;
+        w.onClose_ = null; w.onCloseData_ = null; w.mbUser_ = null; w.mbUserData_ = null;
+        w.uiPtr = null;
     }
     w.children = Vec::new();
     w.parent = null;
@@ -355,7 +356,7 @@ static &Widget __widget_new_text(int kind, const &char text) {
     w.orientation = WIDGET_VERTICAL;
     return w;
 }
-&Widget Widget::canvas_raw_(void* draw, void* userData) {
+&Widget Widget::canvas_raw_(fn void(&Widget, &GuiCanvas, ?&Erased) draw, ?&Erased userData) {
     &Widget w = __widget_new(WIDGET_CANVAS);
     unsafe {
         w.onDraw = draw;
@@ -364,12 +365,12 @@ static &Widget __widget_new_text(int kind, const &char text) {
     return w;
 }
 &Widget Widget::custom_raw_(WidgetDrawFn draw, WidgetLayoutFn layout,
-                            WidgetCustomEventFn eventFn, void* userData) {
+                            WidgetCustomEventFn eventFn, ?&Erased userData) {
     &Widget w = __widget_new(WIDGET_CUSTOM);
     unsafe {
-        w.customDraw = (void*)draw;
-        w.customLayout = (void*)layout;
-        w.customEvent = (void*)eventFn;
+        w.customDraw = draw;
+        w.customLayout = layout;
+        w.customEvent = eventFn;
         w.userData = userData;
     }
     return w;
@@ -454,7 +455,7 @@ unsigned long Widget::child_count() const { return self.children.len; }
             case null: return null;
             case some(cur): {
                 unsafe {
-                    if (cur.uiPtr != (void*)0) { return (struct GuiUi*)cur.uiPtr; }
+                    if (!cur.uiPtr.is_null()) { return cur.uiPtr; }
                 }
                 // popups belong to their owner's UI
                 if (cur.parent.is_null() && !cur.owner.is_null()) { w = cur.owner; }
@@ -790,27 +791,27 @@ struct GuiColor Widget::get_color() const { return self.color; }
     return __w_self(self);
 }
 
-&Widget Widget::on_click_raw_(void* cb, void* userData) {
+&Widget Widget::on_click_raw_(fn void(&Widget, ?&Erased) cb, ?&Erased userData) {
     unsafe { self.onClick = cb; self.onClickData = userData; }
     return __w_self(self);
 }
-&Widget Widget::on_change_raw_(void* cb, void* userData) {
+&Widget Widget::on_change_raw_(fn void(&Widget, ?&Erased) cb, ?&Erased userData) {
     unsafe { self.onChange = cb; self.onChangeData = userData; }
     return __w_self(self);
 }
-&Widget Widget::on_activate_raw_(void* cb, void* userData) {
+&Widget Widget::on_activate_raw_(fn void(&Widget, ?&Erased) cb, ?&Erased userData) {
     unsafe { self.onActivate = cb; self.onActivateData = userData; }
     return __w_self(self);
 }
-&Widget Widget::on_draw_raw_(void* cb, void* userData) {
+&Widget Widget::on_draw_raw_(fn void(&Widget, &GuiCanvas, ?&Erased) cb, ?&Erased userData) {
     unsafe { self.onDraw = cb; self.onDrawData = userData; }
     return __w_self(self);
 }
 
 void __w_fire_click(&Widget w) {
     unsafe {
-        if (w.onClick != (void*)0) {
-            WidgetCallback cb = (WidgetCallback)w.onClick;
+        if (!w.onClick.is_null()) {
+            WidgetCallback cb = w.onClick!;
             cb(w, w.onClickData);
         }
     }
@@ -818,16 +819,16 @@ void __w_fire_click(&Widget w) {
 void __w_fire_change(&Widget w) {
     __w_mark(w);
     unsafe {
-        if (w.onChange != (void*)0) {
-            WidgetCallback cb = (WidgetCallback)w.onChange;
+        if (!w.onChange.is_null()) {
+            WidgetCallback cb = w.onChange!;
             cb(w, w.onChangeData);
         }
     }
 }
 void __w_fire_activate(&Widget w) {
     unsafe {
-        if (w.onActivate != (void*)0) {
-            WidgetCallback cb = (WidgetCallback)w.onActivate;
+        if (!w.onActivate.is_null()) {
+            WidgetCallback cb = w.onActivate!;
             cb(w, w.onActivateData);
         }
     }
@@ -886,7 +887,7 @@ float __w_text_wn(const &GuiUi ui, const &Widget w, const &char s, unsigned long
         case null: { }
     }
     &GuiTypeface f = __w_face(ui, w);
-    return f.measure_n(s, n, __w_font_size(ui, w));
+    return f.measure_n_n_(s, n, __w_font_size(ui, w));
 }
 
 float __w_text_w(const &GuiUi ui, const &Widget w, const &char s) {
@@ -928,7 +929,7 @@ void __w_text_n(const &GuiUi ui, &GuiCanvas c, const &Widget w, const &char s, u
     c.set_text_align(GUI_TEXT_LEFT);
     c.set_text_baseline(GUI_BASELINE_ALPHABETIC);
     c.set_fill_color(col);
-    c.fill_text_n(s, n, x, floor_f(y + __w_ascent(ui, w) + 0.5f));
+    c.fill_text_n_n_(s, n, x, floor_f(y + __w_ascent(ui, w) + 0.5f));
 }
 
 void __w_text(const &GuiUi ui, &GuiCanvas c, const &Widget w, const &char s, float x, float y, struct GuiColor col) {
@@ -1029,7 +1030,7 @@ void __w_chevron(&GuiCanvas c, float cx, float cy, float size, int dir, struct G
     c.set_line_join(GUI_JOIN_ROUND);
     float noDash[1];
     noDash[0] = 0.0f;
-    c.set_dash(&noDash[0], 0, 0.0f);
+    c.set_dash_n_(&noDash[0], 0, 0.0f);
     c.begin_path();
     if (dir == 0) { c.move_to(cx - h, cy - q); c.line_to(cx, cy + q); c.line_to(cx + h, cy - q); }
     else if (dir == 1) { c.move_to(cx - q, cy - h); c.line_to(cx + q, cy); c.line_to(cx - q, cy + h); }
@@ -1047,7 +1048,7 @@ void __w_check_mark(&GuiCanvas c, float x, float y, float s, struct GuiColor col
     c.set_line_join(GUI_JOIN_ROUND);
     float noDash[1];
     noDash[0] = 0.0f;
-    c.set_dash(&noDash[0], 0, 0.0f);
+    c.set_dash_n_(&noDash[0], 0, 0.0f);
     c.begin_path();
     c.move_to(x + s * 0.22f, y + s * 0.52f);
     c.line_to(x + s * 0.42f, y + s * 0.72f);
@@ -1141,7 +1142,7 @@ int __w_height_for(&GuiUi ui, &Widget w, int width) {
         int inner = width - __w_pad(ui, w, 0) - __w_pad(ui, w, 2);
         if (inner < 1) { inner = 1; }
         struct GuiTextLayout l = GuiTextLayout::new();
-        unsafe { l.build(__w_face(ui, w), __w_font_size(ui, w), (const char*)w.text.data, w.text.len, (float)inner, w.textAlign); }
+        unsafe { l.build_n_(__w_face(ui, w), __w_font_size(ui, w), (const char*)w.text.data, w.text.len, (float)inner, w.textAlign); }
         int h = (int)ceil_f(l.height) + __w_pad(ui, w, 1) + __w_pad(ui, w, 3);
         l.free();
         if (w.minH > 0 && h < __w_ipx(ui, w.minH)) { h = __w_ipx(ui, w.minH); }
@@ -1185,8 +1186,8 @@ void __w_content(const &GuiUi ui, const &Widget w, &int cx, &int cy, &int cw, &i
 void __w_arrange(&GuiUi ui, &Widget w, int x, int y, int ww, int hh) {
     if (w.kind == WIDGET_CUSTOM) {
         unsafe {
-            if (w.customLayout != (void*)0) {
-                WidgetLayoutFn fnp = (WidgetLayoutFn)w.customLayout;
+            if (!w.customLayout.is_null()) {
+                WidgetLayoutFn fnp = w.customLayout!;
                 fnp(w, x, y, ww, hh);
                 return;
             }
@@ -1222,7 +1223,7 @@ static &GuiUi __w_ui_of(&Widget root) {
     &GuiUi ui;
     unsafe {
         ui = (struct GuiUi*)alloc_zeroed_raw_(sizeof(struct GuiUi));
-        root.uiPtr = (void*)ui;
+        root.uiPtr = ui;
     }
     ui.root = root;
     ui.win = null;
@@ -1238,7 +1239,7 @@ static &GuiUi __w_ui_of(&Widget root) {
     ui.tipFor = null;
     ui.tipSince = 0.0;
     ui.tip = __widget_new(WIDGET_TOOLTIP);
-    unsafe { ui.tip.uiPtr = (void*)ui; }
+    ui.tip.uiPtr = ui;
     ui.tipShown = 0;
     ui.nowMs = 0.0;
     ui.needsLayout = 1;
@@ -1351,7 +1352,7 @@ static void __w_ui_win_size(const &GuiUi ui, &int ww, &int wh) {
 }
 
 void GuiUi::popup(&Widget menu, float x, float y) {
-    unsafe { menu.uiPtr = (void*)self; }
+    unsafe { menu.uiPtr = (?&GuiUi)(void*)self; }
     menu.open = 1;
     menu.hotIndex = -1;
     menu.parent = null;
@@ -1405,7 +1406,7 @@ static ?&Widget __w_first_focusable(&Widget w);
 
 void GuiUi::show_modal(&Widget dialog) {
     self.close_popups();
-    unsafe { dialog.uiPtr = (void*)self; }
+    unsafe { dialog.uiPtr = (?&GuiUi)(void*)self; }
     dialog.open = 1;
     dialog.result = GUI_RESULT_NONE;
     self.overlays.push(dialog);
@@ -1457,11 +1458,9 @@ void Widget::close_dialog(int result) {
                     d.result = result;
                     match (u) { case some(ui): { ui.close_modal(d); } case null: { } }
                     // the message-box close callback
-                    unsafe {
-                        if (d.onActivate != (void*)0) {
-                            fn void(&Widget, int, ?&void) cb = (fn void(&Widget, int, ?&void))d.onActivate;
-                            cb(d, result, d.onActivateData);
-                        }
+                    match (d.onClose_) {
+                        case some(cb): cb(d, result, d.onCloseData_);
+                        case null: { }
                     }
                     return;
                 }
@@ -1494,10 +1493,10 @@ void __w_paint(&GuiUi ui, &GuiCanvas c, &Widget w) {
     if (w.kind == WIDGET_CUSTOM) {
         // legacy: draws into the window directly
         unsafe {
-            if (w.customDraw != (void*)0) {
+            if (!w.customDraw.is_null()) {
                 match (ui.win) {
                     case some(win): {
-                        WidgetDrawFn d = (WidgetDrawFn)w.customDraw;
+                        WidgetDrawFn d = w.customDraw!;
                         d(win, w);
                     }
                     case null: { }
@@ -1678,8 +1677,8 @@ static ?&Widget __w_hit_ui(&GuiUi ui, float x, float y) {
 static int __w_handle(&GuiUi ui, &Widget w, &GuiEvent ev) {
     if (w.kind == WIDGET_CUSTOM) {
         unsafe {
-            if (w.customEvent != (void*)0) {
-                WidgetCustomEventFn f = (WidgetCustomEventFn)w.customEvent;
+            if (!w.customEvent.is_null()) {
+                WidgetCustomEventFn f = w.customEvent!;
                 if (f(w, ev)) { return 1; }
             }
         }
@@ -2071,31 +2070,29 @@ void GuiUi::drop() {
     self.overlays.free();
     self.tip.free();
     if (self.canvasReady) { self.canvas.free(); }
-    unsafe { self.root.uiPtr = (void*)0; }
+    self.root.uiPtr = null;
     self.root.free();
     unsafe { dealloc_raw_((void*)self); }
 }
 
 // ── message boxes ─────────────────────────────────────────────────────────
 
-static void __w_mb_clicked(&Widget b, ?&void data) {
+static void __w_mb_clicked(&Widget b, ?&Erased data) {
     b.close_dialog((int)b.tag);
 }
 
-static void __w_mb_closed(&Widget dlg, int result, ?&void data) {
+static void __w_mb_closed(&Widget dlg, int result, ?&Erased data) {
     // the user's callback, then the box frees itself (its UI no longer
     // references it)
-    unsafe {
-        if (dlg.dragValue != 0.0) {
-            fn void(&Widget, int, ?&void) user = (fn void(&Widget, int, ?&void))dlg.customDraw;
-            user(dlg, result, dlg.userData);
-        }
+    match (dlg.mbUser_) {
+        case some(user): user(dlg, result, dlg.mbUserData_);
+        case null: { }
     }
     unsafe { dlg.free(); }   // a heap widget: destroyed in place, the UI no longer references it
 }
 
 void gui_message_box_raw_(&GuiUi ui, const &char title, const &char text, int buttons,
-                          void* onClose, void* userData) {
+                          ?fn void(&Widget, int, ?&Erased) onClose, ?&Erased userData) {
     &Widget dlg = Widget::dialog(title);
     &Widget msg = Widget::label(text);
     msg.set_wrap(1);
@@ -2116,19 +2113,16 @@ void gui_message_box_raw_(&GuiUi ui, const &char title, const &char text, int bu
             unsafe { b = Widget::button(label); b.set_name(nm); }
             b.set_min_size(72, 0);
             b.tag = (long)bits[i];
-            b.on_click_raw_((void*)__w_mb_clicked, (void*)0);
+            b.on_click_raw_(__w_mb_clicked, null);
             row.add_child(b);
         }
         i = i + 1;
     }
     dlg.add_child(row);
-    unsafe {
-        dlg.onActivate = (void*)__w_mb_closed;
-        dlg.onActivateData = (void*)0;
-        dlg.customDraw = onClose;     // the user's callback (stored erased)
-        dlg.userData = userData;
-        dlg.dragValue = onClose != (void*)0 ? 1.0 : 0.0;
-    }
+    dlg.onClose_ = __w_mb_closed;
+    dlg.onCloseData_ = null;
+    dlg.mbUser_ = onClose;        // the user's callback (stored erased)
+    dlg.mbUserData_ = userData;
     ui.show_modal(dlg);
 }
 

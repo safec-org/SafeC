@@ -104,6 +104,8 @@ struct Crate {
     // https:// for another crate's items, else relative to the doc root.
     struct Vec<struct String> link_urls;
     struct StrMap<long long> links;
+    // Every item page's path, lowercased (see claim_page in model.sc).
+    struct StrMap<long long> pages;
     struct String readme;    // README.md text ("" if none)
 };
 

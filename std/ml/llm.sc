@@ -65,7 +65,7 @@ struct String LlmClient::chat(&Vec<struct LlmMessage> messages, ?&int ok) {
     struct HttpResponse resp;
     unsafe {
         resp = http_request(self.host.as_ptr(), self.port, "POST", "/v1/chat/completions",
-                             headers.as_ptr(), (const unsigned char*)body.data, body.len, &httpOk);
+                             headers.as_ptr(), body.as_bytes(), &httpOk);
     }
     unsafe { headers.free(); body.free(); }
 
@@ -115,7 +115,7 @@ struct String prompt_template_render(const &char tmpl_ref, const &Value vars) { 
                 while (j < len && tmpl[j] != '}') { j = j + 1UL; }
                 if (j < len) {
                     unsigned long keyLen = j - i - 1UL;
-                    struct String key = string_from_n((const char*)tmpl + i + 1UL, keyLen);
+                    struct String key = string_from_n_((const char*)tmpl + i + 1UL, keyLen);
                     struct Value* v = vars.object_get(key.as_ptr());
                     if (v != (struct Value*)0) {
                         if (v->kind == VAL_STRING) { out.push(v->as_string()); }

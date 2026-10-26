@@ -54,7 +54,9 @@ struct MultipartBuilder {
     // A random boundary.
     static struct MultipartBuilder new();
     void add_field(const &char name, const &char value);
-    void add_file(const &char name, const &char filename, const &char content_type,
+    void add_file(const &char name, const &char filename, const &char content_type, []const unsigned char data);
+    // internal: the (reference, length) core of add_file()
+    void add_file_n_(const &char name, const &char filename, const &char content_type,
                   const &unsigned char data, unsigned long len);
     // "multipart/form-data; boundary=..." for the Content-Type header.
     struct String content_type() const;

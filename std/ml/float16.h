@@ -65,7 +65,7 @@ float bf16_to_f32(unsigned short b);
 #define HALF_CPU_BF16_DOT      8   // bf16 dot products (VDPBF16PS / BFDOT)
 int half_cpu_features();
 // "F16C, AVX512-BF16" and the like; "none" for none.
-const char* half_cpu_features_name();
+const &char half_cpu_features_name();
 
 // ── Bulk conversions (src and dst must not overlap) ─────────────────────────
 // Bit-identical to the scalar functions above for every input except NaN
@@ -77,14 +77,26 @@ const char* half_cpu_features_name();
 // is a shift and float32 -> bf16 an integer rounding everywhere else, both
 // in loops the compiler vectorizes. Arrays of 256K values or more are
 // split across std/sync/parallel.h's thread pool.
-void f32_to_fp16_bulk(const &float src, &unsigned short dst, unsigned long n);
-void fp16_to_f32_bulk(const &unsigned short src, &float dst, unsigned long n);
-void f32_to_bf16_bulk(const &float src, &unsigned short dst, unsigned long n);
-void bf16_to_f32_bulk(const &unsigned short src, &float dst, unsigned long n);
+void f32_to_fp16_bulk([]const float src, []unsigned short dst);
+// internal: the (reference, length) core of f32_to_fp16_bulk()
+void f32_to_fp16_bulk_n_(const &float src, &unsigned short dst, unsigned long n);
+void fp16_to_f32_bulk([]const unsigned short src, []float dst);
+// internal: the (reference, length) core of fp16_to_f32_bulk()
+void fp16_to_f32_bulk_n_(const &unsigned short src, &float dst, unsigned long n);
+void f32_to_bf16_bulk([]const float src, []unsigned short dst);
+// internal: the (reference, length) core of f32_to_bf16_bulk()
+void f32_to_bf16_bulk_n_(const &float src, &unsigned short dst, unsigned long n);
+void bf16_to_f32_bulk([]const unsigned short src, []float dst);
+// internal: the (reference, length) core of bf16_to_f32_bulk()
+void bf16_to_f32_bulk_n_(const &unsigned short src, &float dst, unsigned long n);
 // Between the two 16-bit formats (through float32, rounded to nearest even):
 // fp16 -> bf16 loses 3 mantissa bits, bf16 -> fp16 rounds to fp16's range
 // (overflow to infinity, small values to subnormals or zero).
-void fp16_to_bf16_bulk(const &unsigned short src, &unsigned short dst, unsigned long n);
-void bf16_to_fp16_bulk(const &unsigned short src, &unsigned short dst, unsigned long n);
+void fp16_to_bf16_bulk([]const unsigned short src, []unsigned short dst);
+// internal: the (reference, length) core of fp16_to_bf16_bulk()
+void fp16_to_bf16_bulk_n_(const &unsigned short src, &unsigned short dst, unsigned long n);
+void bf16_to_fp16_bulk([]const unsigned short src, []unsigned short dst);
+// internal: the (reference, length) core of bf16_to_fp16_bulk()
+void bf16_to_fp16_bulk_n_(const &unsigned short src, &unsigned short dst, unsigned long n);
 
 } // namespace std

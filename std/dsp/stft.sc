@@ -11,13 +11,13 @@ namespace std {
 
 static void stft_fill_window_(double* w, unsigned long n, int windowType) {
     if (windowType == STFT_WIN_HANN) {
-        unsafe { window_hann(w, n); }
+        unsafe { window_hann_n_(w, n); }
     } else if (windowType == STFT_WIN_HAMMING) {
-        unsafe { window_hamming(w, n); }
+        unsafe { window_hamming_n_(w, n); }
     } else if (windowType == STFT_WIN_BLACKMAN) {
-        unsafe { window_blackman(w, n); }
+        unsafe { window_blackman_n_(w, n); }
     } else {
-        unsafe { window_rectangular(w, n); }
+        unsafe { window_rectangular_n_(w, n); }
     }
 }
 
@@ -26,7 +26,7 @@ unsigned long stft_num_frames(unsigned long signalLen, unsigned long frameSize, 
     return (signalLen - frameSize) / hopSize + 1UL;
 }
 
-void stft_forward(const &double signal, unsigned long signalLen,
+void stft_forward_n_(const &double signal, unsigned long signalLen,
                    unsigned long frameSize, unsigned long hopSize,
                    int windowType, &Complex out_ref) { struct Complex* out = out_ref;
     double* win;
@@ -56,12 +56,12 @@ void stft_forward(const &double signal, unsigned long signalLen,
     // ones), spread over the thread pool (stft_forward is an
     // offline analysis; streaming code should window and fft_serial a frame
     // at a time instead).
-    unsafe { fft_real_batch_inplace(out, frameSize, numFrames); }
+    unsafe { fft_real_batch_inplace_n_(out, frameSize, numFrames); }
 
     unsafe { dealloc_raw_((void*)win); }
 }
 
-void stft_inverse(const &Complex frames, unsigned long numFrames,
+void stft_inverse_n_(const &Complex frames, unsigned long numFrames,
                    unsigned long frameSize, unsigned long hopSize,
                    int windowType, &double outSignal) {
     if (numFrames == 0UL) { return; }
@@ -89,7 +89,7 @@ void stft_inverse(const &Complex frames, unsigned long numFrames,
             unsafe { frameBuf[i] = frames[f * frameSize + i]; }
             i = i + 1UL;
         }
-        unsafe { ifft(frameBuf, frameSize); }
+        unsafe { ifft_n_(frameBuf, frameSize); }
         i = 0UL;
         while (i < frameSize) {
             double w;
@@ -126,17 +126,17 @@ void stft_inverse(const &Complex frames, unsigned long numFrames,
 
 static void stft_fill_window32_(float* w, unsigned long n, int windowType) {
     if (windowType == STFT_WIN_HANN) {
-        unsafe { window_hann_f32(w, n); }
+        unsafe { window_hann_f32_n_(w, n); }
     } else if (windowType == STFT_WIN_HAMMING) {
-        unsafe { window_hamming_f32(w, n); }
+        unsafe { window_hamming_f32_n_(w, n); }
     } else if (windowType == STFT_WIN_BLACKMAN) {
-        unsafe { window_blackman_f32(w, n); }
+        unsafe { window_blackman_f32_n_(w, n); }
     } else {
-        unsafe { window_rectangular_f32(w, n); }
+        unsafe { window_rectangular_f32_n_(w, n); }
     }
 }
 
-void stft_forward_f32(const &float signal, unsigned long signalLen,
+void stft_forward_f32_n_(const &float signal, unsigned long signalLen,
                    unsigned long frameSize, unsigned long hopSize,
                    int windowType, &Complex32 out_ref) { struct Complex32* out = out_ref;
     float* win;
@@ -166,12 +166,12 @@ void stft_forward_f32(const &float signal, unsigned long signalLen,
     // ones), spread over the thread pool (stft_forward is an
     // offline analysis; streaming code should window and fft_serial a frame
     // at a time instead).
-    unsafe { fft_real_batch_inplace_f32(out, frameSize, numFrames); }
+    unsafe { fft_real_batch_inplace_f32_n_(out, frameSize, numFrames); }
 
     unsafe { dealloc_raw_((void*)win); }
 }
 
-void stft_inverse_f32(const &Complex32 frames, unsigned long numFrames,
+void stft_inverse_f32_n_(const &Complex32 frames, unsigned long numFrames,
                    unsigned long frameSize, unsigned long hopSize,
                    int windowType, &float outSignal) {
     if (numFrames == 0UL) { return; }
@@ -199,7 +199,7 @@ void stft_inverse_f32(const &Complex32 frames, unsigned long numFrames,
             unsafe { frameBuf[i] = frames[f * frameSize + i]; }
             i = i + 1UL;
         }
-        unsafe { ifft_f32(frameBuf, frameSize); }
+        unsafe { ifft_f32_n_(frameBuf, frameSize); }
         i = 0UL;
         while (i < frameSize) {
             float w;
@@ -232,7 +232,7 @@ void stft_inverse_f32(const &Complex32 frames, unsigned long numFrames,
     }
 }
 
-double mr_stft_loss(const &double x, const &double y, unsigned long len,
+double mr_stft_loss_n_(const &double x, const &double y, unsigned long len,
                      const &unsigned long frameSizes, unsigned long numResolutions) {
     if (numResolutions == 0UL) { return 0.0; }
     double totalLoss = 0.0;
@@ -252,8 +252,8 @@ double mr_stft_loss(const &double x, const &double y, unsigned long len,
                 sx = (struct Complex*)alloc_raw_(total * (unsigned long)sizeof(struct Complex));
                 sy = (struct Complex*)alloc_raw_(total * (unsigned long)sizeof(struct Complex));
             }
-            unsafe { stft_forward(x, len, frameSize, hop, STFT_WIN_HANN, sx); }
-            unsafe { stft_forward(y, len, frameSize, hop, STFT_WIN_HANN, sy); }
+            unsafe { stft_forward_n_(x, len, frameSize, hop, STFT_WIN_HANN, sx); }
+            unsafe { stft_forward_n_(y, len, frameSize, hop, STFT_WIN_HANN, sy); }
 
             double diffSq = 0.0;
             double xSq = 0.0;
@@ -291,6 +291,51 @@ double mr_stft_loss(const &double x, const &double y, unsigned long len,
 
     if (validCount == 0UL) { return 0.0; }
     return totalLoss / (double)validCount;
+}
+
+// ── Slice API (the public signatures; the (reference, length) cores above
+// are the *_n_ functions) ─────────────────────────────────────────────────────
+
+int stft_forward([]const double signal, unsigned long frameSize, unsigned long hopSize,
+                 int windowType, []Complex out) {
+    if (frameSize == 0UL || hopSize == 0UL) return 0;
+    unsigned long frames = stft_num_frames(signal.len, frameSize, hopSize);
+    if (frames == 0UL || out.len / frameSize < frames) return 0;
+    unsafe { stft_forward_n_((const &double)signal.ptr, signal.len, frameSize, hopSize, windowType, (&Complex)out.ptr); }
+    return 1;
+}
+
+int stft_forward_f32([]const float signal, unsigned long frameSize, unsigned long hopSize,
+                 int windowType, []Complex32 out) {
+    if (frameSize == 0UL || hopSize == 0UL) return 0;
+    unsigned long frames = stft_num_frames(signal.len, frameSize, hopSize);
+    if (frames == 0UL || out.len / frameSize < frames) return 0;
+    unsafe { stft_forward_f32_n_((const &float)signal.ptr, signal.len, frameSize, hopSize, windowType, (&Complex32)out.ptr); }
+    return 1;
+}
+
+int stft_inverse([]const Complex frames, unsigned long frameSize, unsigned long hopSize,
+                 int windowType, []double outSignal) {
+    if (frameSize == 0UL || hopSize == 0UL || frames.len < frameSize) return 0;
+    unsigned long numFrames = frames.len / frameSize;
+    if (outSignal.len < (numFrames - 1UL) * hopSize + frameSize) return 0;
+    unsafe { stft_inverse_n_((const &Complex)frames.ptr, numFrames, frameSize, hopSize, windowType, (&double)outSignal.ptr); }
+    return 1;
+}
+
+int stft_inverse_f32([]const Complex32 frames, unsigned long frameSize, unsigned long hopSize,
+                 int windowType, []float outSignal) {
+    if (frameSize == 0UL || hopSize == 0UL || frames.len < frameSize) return 0;
+    unsigned long numFrames = frames.len / frameSize;
+    if (outSignal.len < (numFrames - 1UL) * hopSize + frameSize) return 0;
+    unsafe { stft_inverse_f32_n_((const &Complex32)frames.ptr, numFrames, frameSize, hopSize, windowType, (&float)outSignal.ptr); }
+    return 1;
+}
+
+double mr_stft_loss([]const double x, []const double y, []const unsigned long frameSizes) {
+    unsigned long len = x.len < y.len ? x.len : y.len;
+    if (len == 0UL || frameSizes.len == 0UL) return 0.0;
+    unsafe { return mr_stft_loss_n_((const &double)x.ptr, (const &double)y.ptr, len, (const &unsigned long)frameSizes.ptr, frameSizes.len); }
 }
 
 } // namespace std

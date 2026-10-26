@@ -7,7 +7,7 @@
 namespace std {
 
 struct SyscallTable {
-    void* handlers[SYSCALL_MAX];  // fn long long(long long, long long, long long), stored erased
+    ?fn long long(long long, long long, long long) handlers[SYSCALL_MAX];   // null = none
     int   count;                  // number of registered syscalls
 
     // Register a handler for syscall number `num`.

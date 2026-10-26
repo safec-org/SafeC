@@ -206,7 +206,7 @@ struct GuiEvent {
 // Everything GuiWindow::create_with() can be told. Start from
 // GuiWindowOptions::new(title, w, h) and change fields.
 struct GuiWindowOptions {
-    const char* title;     // UTF-8
+    const ?&char title;    // UTF-8 (null: untitled)
     int x;                 // position in logical units, or GUI_POS_DEFAULT
     int y;
     int width;             // client-area size, logical units
@@ -227,7 +227,7 @@ struct GuiWindowOptions {
 
 struct GuiWindow {
     impl !Send + !Sync;   // lives on the thread that created it (the UI thread)
-    ?&void               platform; // backend-neutral window state (struct GuiWindowState, gui_backend.h); null for an offscreen window or on failure
+    ?&struct GuiWindowState platform; // backend-neutral window state (gui_backend.h); null for an offscreen window or on failure
     &heap unsigned char  pixels;   // width*height*4 bytes, premultiplied RGBA8888
     int                  width;    // buffer size in pixels
     int                  height;

@@ -31,7 +31,7 @@ static void poly_mul_linear_(const double* poly, unsigned long polyLen, double f
     }
 }
 
-void bilinear_nth_order(const &double B, const &double A, unsigned long order,
+void bilinear_nth_order_n_(const &double B, const &double A, unsigned long order,
                          double fs, &double bOut, &double aOut) {
     unsigned long m = order;
     double c = 2.0 * fs;
@@ -154,16 +154,39 @@ static struct Complex ztransform_response_(const double* b, const double* a, uns
     return numAcc / denAcc;
 }
 
-double ztransform_response_mag(const &double b, const &double a, unsigned long order,
+double ztransform_response_mag_n_(const &double b, const &double a, unsigned long order,
                                 double fs, double freqHz) {
     struct Complex h = ztransform_response_(b, a, order, fs, freqHz);
     return h.abs();
 }
 
-double ztransform_response_phase(const &double b, const &double a, unsigned long order,
+double ztransform_response_phase_n_(const &double b, const &double a, unsigned long order,
                                   double fs, double freqHz) {
     struct Complex h = ztransform_response_(b, a, order, fs, freqHz);
     return h.arg();
+}
+
+// ── Slice API (the public signatures; the (reference, length) cores above
+// are the *_n_ functions) ─────────────────────────────────────────────────────
+
+int bilinear_nth_order([]const double B, []const double A, double fs, []double bOut, []double aOut) {
+    if (B.len == 0UL) return 0;
+    unsigned long order = B.len - 1UL;
+    if (A.len < order + 1UL || bOut.len < order + 1UL || aOut.len < order + 1UL) return 0;
+    unsafe { bilinear_nth_order_n_((const &double)B.ptr, (const &double)A.ptr, order, fs, (&double)bOut.ptr, (&double)aOut.ptr); }
+    return 1;
+}
+
+double ztransform_response_mag([]const double b, []const double a, double fs, double freqHz) {
+    unsigned long m = b.len < a.len ? b.len : a.len;
+    if (m == 0UL) return 0.0;
+    unsafe { return ztransform_response_mag_n_((const &double)b.ptr, (const &double)a.ptr, m - 1UL, fs, freqHz); }
+}
+
+double ztransform_response_phase([]const double b, []const double a, double fs, double freqHz) {
+    unsigned long m = b.len < a.len ? b.len : a.len;
+    if (m == 0UL) return 0.0;
+    unsafe { return ztransform_response_phase_n_((const &double)b.ptr, (const &double)a.ptr, m - 1UL, fs, freqHz); }
 }
 
 } // namespace std

@@ -1,4 +1,4 @@
-// SAFEC-ARGS: -I @STD@/std -I @STD@ --compat-preprocessor
+// SAFEC-ARGS: -I %root/std -I %root --compat-preprocessor
 // Mutex<T>: the value is reachable only through a guard, and a reference
 // from the guard can't outlive it. thread_spawn moves its argument.
 #include <std/thread.h>

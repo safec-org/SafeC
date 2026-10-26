@@ -134,8 +134,17 @@ static void vm_run_(int op, const &float x, &float y, unsigned long n) {
     else vm_range_(&j, 0UL, n);
 }
 
-void vm_exp_f32(const &float x, &float y, unsigned long n) { vm_run_(VM_EXP, x, y, n); }
-void vm_tanh_f32(const &float x, &float y, unsigned long n) { vm_run_(VM_TANH, x, y, n); }
-void vm_sigmoid_f32(const &float x, &float y, unsigned long n) { vm_run_(VM_SIGMOID, x, y, n); }
+void vm_exp_f32_n_(const &float x, &float y, unsigned long n) { vm_run_(VM_EXP, x, y, n); }
+void vm_tanh_f32_n_(const &float x, &float y, unsigned long n) { vm_run_(VM_TANH, x, y, n); }
+void vm_sigmoid_f32_n_(const &float x, &float y, unsigned long n) { vm_run_(VM_SIGMOID, x, y, n); }
+
+static unsigned long vm_slices_(int op, []const float x, []float y) {
+    unsigned long n = x.len < y.len ? x.len : y.len;
+    if (n > 0UL) { unsafe { vm_run_(op, (const &float)x.ptr, (&float)y.ptr, n); } }
+    return n;
+}
+unsigned long vm_exp_f32([]const float x, []float y) { return vm_slices_(VM_EXP, x, y); }
+unsigned long vm_tanh_f32([]const float x, []float y) { return vm_slices_(VM_TANH, x, y); }
+unsigned long vm_sigmoid_f32([]const float x, []float y) { return vm_slices_(VM_SIGMOID, x, y); }
 
 } // namespace std

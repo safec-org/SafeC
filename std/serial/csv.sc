@@ -34,7 +34,7 @@ static void csv_append_quoted_(&String out, const char* s) {
         unsafe { c = s[i]; }
         if (c == (char)0) { break; }
         if (c == '"') {
-            if (i > run_start) { unsafe { out.push_n(s + run_start, i - run_start); } }
+            if (i > run_start) { unsafe { out.push_n_(s + run_start, i - run_start); } }
             unsafe { out.push("\"\""); } // escape: one quote becomes two
             i = i + 1UL;
             run_start = i;
@@ -42,7 +42,7 @@ static void csv_append_quoted_(&String out, const char* s) {
             i = i + 1UL;
         }
     }
-    if (i > run_start) { unsafe { out.push_n(s + run_start, i - run_start); } }
+    if (i > run_start) { unsafe { out.push_n_(s + run_start, i - run_start); } }
     unsafe { out.push_char('"'); }
 }
 

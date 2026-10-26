@@ -35,7 +35,7 @@ struct Vec {
     // ── Construction ────────────────────────────────────────────────────────
     static struct Vec<T> new();                                   // empty, no allocation
     static struct Vec<T> with_cap(unsigned long cap);             // empty, room for cap elements
-    static struct Vec<T> from_arr(const &T items, unsigned long len); // copies len elements
+    static struct Vec<T> from_slice([]const T items);             // copies the elements
 
     // ── Capacity ────────────────────────────────────────────────────────────
     int           reserve(unsigned long new_cap);   // ensure cap >= new_cap; 0 on OOM
@@ -47,6 +47,7 @@ struct Vec {
     // ── Element access ──────────────────────────────────────────────────────
     ?&T           get(unsigned long idx) const;      // null if out of range
     &T            at(unsigned long idx) const;       // bounds-checked: panics if out of range
+    []T           as_slice() const;                  // the len elements; valid until the next growth
     int           set(unsigned long idx, T value);    // 0 if out of range
     ?&T           front();
     ?&T           back();
@@ -57,7 +58,7 @@ struct Vec {
     int           insert(unsigned long idx, T value); // idx <= len; shifts right
     ?T            remove(unsigned long idx);          // shifts left; null if out of range
     void          clear();                            // len := 0, keeps the buffer
-    int           extend(const &T items, unsigned long count); // append a C array
+    int           extend([]const T items);            // append the elements; 0 on OOM
 
     // ── Algorithms ──────────────────────────────────────────────────────────
     void          reverse();
@@ -88,12 +89,17 @@ struct Vec<T> Vec::with_cap(unsigned long cap) {
     return v;
 }
 
-// Copies 'len' elements starting at 'items'.
+// Copies the elements of 'items'.
 generic<T>
-struct Vec<T> Vec::from_arr(const &T items, unsigned long len) {
-    struct Vec<T> v = Vec::with_cap(len);
-    v.extend(items, len);
+struct Vec<T> Vec::from_slice([]const T items) {
+    struct Vec<T> v = Vec::with_cap(items.len);
+    v.extend(items);
     return v;
+}
+
+generic<T>
+[]T Vec::as_slice() const {
+    unsafe { return ((T*)self.data)[0..(self.data.is_null() ? 0UL : self.len)]; }
 }
 
 // kept for std/ml until its refactor moves to the static method
@@ -247,8 +253,9 @@ void Vec::clear() {
 
 
 generic<T>
-int Vec::extend(const &T items, unsigned long count) {
+int Vec::extend([]const T items) {
     if const (needs_drop(T)) panic_at("Vec::extend: the elements own resources; push clones of them instead", "vec.h", 0);
+    unsigned long count = items.len;
     if (count == 0UL) return 1;
     if (self.len + count > self.cap) {
         unsigned long next = self.cap * 2UL;
@@ -257,7 +264,7 @@ int Vec::extend(const &T items, unsigned long count) {
     }
     unsafe {
         unsigned long i = 0UL;
-        while (i < count) { self.data[self.len + i] = items[i]; i = i + 1UL; }
+        while (i < count) { T v = items[i]; self.data[self.len + i] = v; i = i + 1UL; }
     }
     self.len = self.len + count;
     return 1;
@@ -417,7 +424,7 @@ struct Vec<T> Vec::clone() const {
     struct Vec<T> out = Vec::with_cap(self.len);
     match (self.data) {
         case null: { }
-        case some(buf): out.extend(buf, self.len);
+        case some(buf): out.extend(self.as_slice());
     }
     return out;
 }

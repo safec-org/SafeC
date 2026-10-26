@@ -33,9 +33,9 @@ static unsigned long rt_trim_len_(const char* p) {
 static void rt_push_(&Vec<RouteParam> params, const char* name, unsigned long nameLen,
                      const char* val, unsigned long valLen) {
     struct RouteParam rp;
-    unsafe { rp.name = String::from_n(name, nameLen); }
+    unsafe { rp.name = String::from_n_(name, nameLen); }
     struct String raw = String::new();
-    unsafe { raw.push_n(val, valLen); }
+    unsafe { raw.push_n_(val, valLen); }
     // '+' stays '+' in a path; only %XX is decoded.
     int ok = 0;
     struct String dec = url_decode(raw.as_ptr(), &ok);

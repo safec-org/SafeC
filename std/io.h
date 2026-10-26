@@ -36,12 +36,12 @@ void eprint_float(double v);
 
 // ── Formatted output to buffer (snprintf wrappers) ───────────────────────────
 // All return the number of characters written (excluding NUL), or -1 on error.
-int io_fmt_int(&char buf, int n, long long v);
-int io_fmt_uint(&char buf, int n, unsigned long long v);
-int io_fmt_float(&char buf, int n, double v);
-int io_fmt_float_prec(&char buf, int n, double v, int prec);
-int io_fmt_hex(&char buf, int n, unsigned long long v);
-int io_fmt_str(&char buf, int n, const &char s);
+int io_fmt_int([]char buf, long long v);
+int io_fmt_uint([]char buf, unsigned long long v);
+int io_fmt_float([]char buf, double v);
+int io_fmt_float_prec([]char buf, double v, int prec);
+int io_fmt_hex([]char buf, unsigned long long v);
+int io_fmt_str([]char buf, const &char s);
 
 // ── Input (stdin) ─────────────────────────────────────────────────────────────
 // Read a single character from stdin.  Returns the character or SC_EOF.
@@ -50,13 +50,13 @@ int  io_getchar();
 // Push a character back onto stdin so the next io_getchar/io_scan_* returns it.
 int  io_ungetc(int c);
 
-// Read a line (up to n-1 chars + NUL) from stdin into buf.
+// Read a line (up to buf.len-1 chars + NUL) from stdin into buf.
 // Returns number of characters read (excluding NUL), or -1 on EOF/error.
-int  io_read_line(&char buf, int n);
+int  io_read_line([]char buf);
 
 // Read a whitespace-delimited token from stdin.
 // Returns number of characters read (0 = EOF before token, -1 = error).
-int  io_read_token(&char buf, int n);
+int  io_read_token([]char buf);
 
 // Parse a signed decimal integer from stdin. Returns 1 on success, 0 on error.
 int  io_scan_int(&long long out);

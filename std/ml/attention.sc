@@ -45,7 +45,7 @@ static int attn_on_cpu_(const &FloatTensor a, const &FloatTensor b, const &Float
 &FloatTensor FloatTensor::softmax_rows_mask(int causal, unsigned long window) const {
     if (!causal && window == 0UL) return self.softmax();
     match (tdev_softmax_mask_(self, causal, window)) { case some(o): { return o; } case null: { } }
-    unsafe { tensor_host_((void*)self); }
+    unsafe { tensor_host_raw_((void*)self); }
     unsigned long rows; unsigned long cols;
     unsafe { cols = self->shape[self->ndim - 1UL]; rows = self->size / cols; }
     long off = (long)cols - (long)rows;
@@ -72,7 +72,7 @@ static int attn_on_cpu_(const &FloatTensor a, const &FloatTensor b, const &Float
                 while (c < n) { if (xv[c] > rowMax) rowMax = xv[c]; c = c + 1UL; }
                 c = 0UL;
                 while (c < n) { yv[c] = xv[c] - rowMax; c = c + 1UL; }
-                vm_exp_f32((const float*)yv, yv, n);
+                vm_exp_f32_n_((const float*)yv, yv, n);
                 float sum = (float)0.0;
                 c = 0UL;
                 while (c < n) { sum = sum + yv[c]; c = c + 1UL; }
@@ -107,7 +107,7 @@ static void attn_transpose_backward_(void* selfPtr) {
 
 &FloatTensor FloatTensor::transpose() const {
     match (tdev_transpose_(self)) { case some(o): { return o; } case null: { } }
-    unsafe { tensor_host_((void*)self); }
+    unsafe { tensor_host_raw_((void*)self); }
     unsigned long rows; unsigned long cols;
     unsafe { rows = self->shape[0]; cols = self->shape[1]; }
     unsigned long shape[2];
@@ -149,7 +149,7 @@ static void attn_slice_backward_(void* selfPtr) {
 
 &FloatTensor FloatTensor::slice_cols(unsigned long start, unsigned long len) const {
     match (tdev_slice_cols_(self, start, len)) { case some(o): { return o; } case null: { } }
-    unsafe { tensor_host_((void*)self); }
+    unsafe { tensor_host_raw_((void*)self); }
     unsigned long rows; unsigned long n;
     unsafe { rows = self->shape[0]; n = self->shape[1]; }
     &FloatTensor out = FloatTensor::new_2d(rows, len, 0);
@@ -167,7 +167,7 @@ static void attn_slice_backward_(void* selfPtr) {
 }
 
 void tensor_set_cols(&FloatTensor dst, unsigned long startCol, const &FloatTensor src) {
-    unsafe { tensor_host_write_((void*)dst); tensor_host_((void*)src); }
+    unsafe { tensor_host_write_raw_((void*)dst); tensor_host_raw_((void*)src); }
     unsigned long rows; unsigned long dstCols; unsigned long srcCols;
     unsafe { rows = dst->shape[0]; dstCols = dst->shape[1]; srcCols = src->shape[1]; }
     unsigned long r = 0UL;
@@ -277,7 +277,7 @@ static &FloatTensor attn_composed_(const &FloatTensor Q, const &FloatTensor K, c
 // phi(x) = elu(x) + 1, elementwise (always > 0, used as linear
 // attention's kernel feature map).
 static &FloatTensor __phi_elu_p1(&FloatTensor x) {
-    unsafe { tensor_host_write_((void*)x); }
+    unsafe { tensor_host_write_raw_((void*)x); }
     &FloatTensor out = x.zeros_like();
     unsafe {
         unsigned long i = 0UL;
@@ -320,7 +320,7 @@ static &FloatTensor attn_linear_graph_(const &FloatTensor Q, const &FloatTensor 
 
 &FloatTensor linear_attention_forward(const &FloatTensor Q, const &FloatTensor K, const &FloatTensor V) {
     if (attn_grad_(Q, K, V) || !attn_on_cpu_(Q, K, V)) return attn_linear_graph_(Q, K, V);
-    unsafe { tensor_host_((void*)Q); tensor_host_((void*)K); tensor_host_((void*)V); }
+    unsafe { tensor_host_raw_((void*)Q); tensor_host_raw_((void*)K); tensor_host_raw_((void*)V); }
     unsigned long seqLen; unsigned long headDim; unsigned long kvLen;
     unsafe { seqLen = Q->shape[0]; headDim = Q->shape[1]; kvLen = K->shape[0]; }
 
@@ -389,7 +389,7 @@ static &FloatTensor attn_linear_graph_(const &FloatTensor Q, const &FloatTensor 
         match (tensor_attention_fused_(Q, K, V, 1UL, 0, 0UL, scale)) { case some(o): { return o; } case null: { } }
         return attn_composed_(Q, K, V, 0, 0UL);
     }
-    unsafe { tensor_host_((void*)Q); tensor_host_((void*)K); tensor_host_((void*)V); }
+    unsafe { tensor_host_raw_((void*)Q); tensor_host_raw_((void*)K); tensor_host_raw_((void*)V); }
 
     &FloatTensor out = FloatTensor::new_2d(seqLen, headDim, 0); // doubles as the running 'acc' buffer
 

@@ -19,7 +19,7 @@ inline const ?&PartEntry PartTable::get(int idx) const {
 
 int PartTable::read(&BlockDevice dev) {
     unsigned char mbr[512];
-    if (dev.read((unsigned long)0, (&unsigned char)mbr, (unsigned long)1) != 0) {
+    if (dev.read((unsigned long)0, mbr[0..512]) != 0) {
         return -1;
     }
     // Validate signature.

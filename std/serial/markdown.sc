@@ -333,7 +333,7 @@ static unsigned long md_entity_(const char* s, unsigned long i, unsigned long n,
         unsigned long k = i + 1UL;
         while (k < n && k - i <= 32UL && (md_is_alnum_(s[k]) || s[k] == '#')) { k = k + 1UL; }
         if (k >= n || s[k] != ';' || k == i + 1UL) { return 0UL; }
-        struct String ref = String::from_n(s + i, k + 1UL - i);
+        struct String ref = String::from_n_(s + i, k + 1UL - i);
         struct String dec = String::new();
         html_unescape(&dec, ref.as_ptr());
         int ok = !dec.eq(&ref);
@@ -466,8 +466,8 @@ static unsigned long md_autolink_(const char* s, unsigned long i, unsigned long 
             ((s[st] >= 'a' && s[st] <= 'z') || (s[st] >= 'A' && s[st] <= 'Z'))) {
             while (k < n && s[k] != '>' && s[k] != '<' && !md_is_space_(s[k])) { k = k + 1UL; }
             if (k < n && s[k] == '>') {
-                href->push_n(s + st, k - st);
-                label->push_n(s + st, k - st);
+                href->push_n_(s + st, k - st);
+                label->push_n_(s + st, k - st);
                 return k + 1UL;
             }
             return 0UL;
@@ -481,8 +481,8 @@ static unsigned long md_autolink_(const char* s, unsigned long i, unsigned long 
         }
         if (k < n && s[k] == '>' && at == 1 && s[st] != '@' && s[k - 1UL] != '@') {
             href->push("mailto:");
-            href->push_n(s + st, k - st);
-            label->push_n(s + st, k - st);
+            href->push_n_(s + st, k - st);
+            label->push_n_(s + st, k - st);
             return k + 1UL;
         }
     }
@@ -519,8 +519,8 @@ static unsigned long md_bare_url_(const char* s, unsigned long i, unsigned long 
         unsigned long minlen = www ? 5UL : 9UL;
         if (k - i < minlen) { return 0UL; }
         if (www) { href->push("http://"); }
-        href->push_n(s + i, k - i);
-        label->push_n(s + i, k - i);
+        href->push_n_(s + i, k - i);
+        label->push_n_(s + i, k - i);
         return k;
     }
     return 0UL;
@@ -562,7 +562,7 @@ static void md_parse_inlines_(struct MdParser_* st, struct MdNode* parent, const
                         j = j + r2;
                     } else { j = j + 1UL; }
                 }
-                if (close == 0UL) { buf.push_n(s + i, run); i = i + run; continue; }
+                if (close == 0UL) { buf.push_n_(s + i, run); i = i + run; continue; }
                 struct String code = String::new();
                 for (unsigned long k = i + run; k < close; k = k + 1UL) { code.push_char(s[k] == '\n' ? ' ' : s[k]); }
                 // One space of padding on both sides is stripped (unless all spaces).
@@ -609,7 +609,7 @@ static void md_parse_inlines_(struct MdParser_* st, struct MdNode* parent, const
                     if (h > 0UL) {
                         md_flush_text_(&il, &buf);
                         struct MdNode* raw = md_new_(MD_HTML_INLINE);
-                        raw->text.push_n(s + i, h - i);
+                        raw->text.push_n_(s + i, h - i);
                         md_push_node_(&il, raw);
                         i = h;
                         continue;
@@ -645,7 +645,7 @@ static void md_parse_inlines_(struct MdParser_* st, struct MdNode* parent, const
             if (c == '*' || c == '_' || (c == '~' && st->opts.strikethrough)) {
                 unsigned long run = 0UL;
                 while (i + run < n && s[i + run] == c) { run = run + 1UL; }
-                if (c == '~' && run > 2UL) { buf.push_n(s + i, run); i = i + run; continue; }
+                if (c == '~' && run > 2UL) { buf.push_n_(s + i, run); i = i + run; continue; }
                 char before = i > 0UL ? s[i - 1UL] : ' ';
                 char after = i + run < n ? s[i + run] : ' ';
                 int left = !md_is_space_(after) && (!md_is_punct_(after) || md_is_space_(before) || md_is_punct_(before));
@@ -659,7 +659,7 @@ static void md_parse_inlines_(struct MdParser_* st, struct MdNode* parent, const
                 md_flush_text_(&il, &buf);
                 struct MdTok_ t;
                 t.kind = MD_TOK_DELIM;
-                t.text = String::from_n(s + i, run);
+                t.text = String::from_n_(s + i, run);
                 t.node = (struct MdNode*)0;
                 t.dch = c; t.count = (int)run; t.orig = (int)run;
                 t.can_open = can_open; t.can_close = can_close;
@@ -885,7 +885,7 @@ static int md_container_open_(const char* l, struct String* kind, struct String*
         unsigned long ks = k;
         while (l[k] != '\0' && l[k] != ' ' && l[k] != '\t') { k = k + 1UL; }
         if (k == ks) { return 0; }
-        kind->push_n(l + ks, k - ks);
+        kind->push_n_(l + ks, k - ks);
         while (l[k] == ' ' || l[k] == '\t') { k = k + 1UL; }
         struct String t = String::from(l + k);
         struct String tt = t.trim_right();
@@ -923,7 +923,7 @@ static int md_html_start_(const char* l) {
         unsigned long ns = k;
         while (md_is_alnum_(p[k]) || p[k] == '-') { k = k + 1UL; }
         if (k == ns) { return 0; }
-        struct String name = String::from_n(p + ns, k - ns);
+        struct String name = String::from_n_(p + ns, k - ns);
         struct String lower = name.to_lower();
         name.free();
         int t = 0;
@@ -1616,7 +1616,7 @@ void MdNode::plain_text(&String out) const {
 
 // ── HTML rendering ───────────────────────────────────────────────────────────
 
-typedef fn int(void*, const &MdNode, int, &String) MdHookFn_;
+typedef fn int(?&Erased, const &MdNode, int, &String) MdHookFn_;
 
 static void md_render_node_(const &MdNode n, struct String* out, const struct MdHookRaw_* hook, int tight);
 
@@ -1712,9 +1712,11 @@ static void md_close_(const &MdNode n, struct String* out, const &MdNode parent_
 static void md_render_node_(const &MdNode n, struct String* out, const struct MdHookRaw_* hook, int tight) {
     int mode = 0;
     unsafe {
-        if (hook != (const struct MdHookRaw_*)0 && hook->fn_ != (void*)0) {
-            MdHookFn_ f = (MdHookFn_)hook->fn_;
-            mode = f(hook->ctx, n, 1, out);
+        if (hook != (const struct MdHookRaw_*)0) {
+            match (hook->fn_) {
+                case some(f): mode = f(hook->ctx, n, 1, out);
+                case null: { }
+            }
         }
     }
     if (mode == 1) { return; }
@@ -1786,8 +1788,10 @@ static void md_render_node_(const &MdNode n, struct String* out, const struct Md
     if (mode == 2) {
         int closed = 0;
         unsafe {
-            MdHookFn_ f = (MdHookFn_)hook->fn_;
-            closed = f(hook->ctx, n, 0, out);
+            match (hook->fn_) {
+                case some(f): closed = f(hook->ctx, n, 0, out);
+                case null: { }
+            }
         }
         if (closed == 1) { return; }
     }

@@ -194,10 +194,12 @@ int TmpfsCtx::mkdir(const &char path_ref) {
     return 0;
 }
 
-unsigned long TmpfsCtx::read(unsigned long inode, unsigned long offset, &unsigned char buf_ref, unsigned long len) {
+unsigned long TmpfsCtx::read(unsigned long inode, unsigned long offset, []unsigned char buf_s) {
+    unsigned long len = buf_s.len;
+    unsigned char* buf;
+    unsafe { buf = (unsigned char*)buf_s.ptr; }
     void* ctx;
     unsafe { ctx = (void*)self; }
-    unsigned char* buf = buf_ref;
     struct TmpfsCtx* tc;
     unsafe { tc = (struct TmpfsCtx*)ctx; }
     int idx = (int)inode;
@@ -223,10 +225,12 @@ unsigned long TmpfsCtx::read(unsigned long inode, unsigned long offset, &unsigne
     return avail;
 }
 
-unsigned long TmpfsCtx::write(unsigned long inode, unsigned long offset, const &unsigned char buf_ref, unsigned long len) {
+unsigned long TmpfsCtx::write(unsigned long inode, unsigned long offset, []const unsigned char buf_s) {
+    unsigned long len = buf_s.len;
+    const unsigned char* buf;
+    unsafe { buf = (const unsigned char*)buf_s.ptr; }
     void* ctx;
     unsafe { ctx = (void*)self; }
-    const unsigned char* buf = buf_ref;
     struct TmpfsCtx* tc;
     unsafe { tc = (struct TmpfsCtx*)ctx; }
     int idx = (int)inode;
@@ -254,7 +258,7 @@ unsigned long TmpfsCtx::write(unsigned long inode, unsigned long offset, const &
     return len;
 }
 
-int TmpfsCtx::readdir(unsigned long inode, fn void(&VfsNode, ?&void) cb, ?&void user) {
+int TmpfsCtx::readdir_raw_(unsigned long inode, fn void(&VfsNode, ?&Erased) cb, ?&Erased user) {
     void* ctx;
     unsafe { ctx = (void*)self; }
     struct TmpfsCtx* tc;

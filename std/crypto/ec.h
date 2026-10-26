@@ -20,6 +20,7 @@
 //
 // Freestanding-safe.
 #pragma once
+#include <std/crypto/buf.h>
 #include <std/crypto/rng.h>
 
 #define EC_P256 23            // secp256r1 / prime256v1
@@ -36,31 +37,45 @@ unsigned long ec_scalar_size(int curve);
 unsigned long ec_point_size(int curve);
 
 // A random private key (in [1, n-1]) and its public point. 1 on success.
-int ec_keygen(int curve, &RngCtx rng, &unsigned char priv, &unsigned char pub);
+int ec_keygen(int curve, &RngCtx rng, []unsigned char priv, []unsigned char pub);
+// internal: the (reference, length) core of ec_keygen()
+int ec_keygen_n_(int curve, &RngCtx rng, &unsigned char priv, &unsigned char pub);
 // pub = priv * G. 0 if priv is 0 or >= n.
-int ec_public_key(int curve, const &unsigned char priv, &unsigned char pub);
+int ec_public_key(int curve, []const unsigned char priv, []unsigned char pub);
+// internal: the (reference, length) core of ec_public_key()
+int ec_public_key_n_(int curve, const &unsigned char priv, &unsigned char pub);
 // 1 if pub[0..len) is an uncompressed point on the curve (not infinity).
-int ec_point_valid(int curve, const &unsigned char pub, unsigned long len);
+int ec_point_valid(int curve, []const unsigned char pub);
+// internal: the (reference, length) core of ec_point_valid()
+int ec_point_valid_n_(int curve, const &unsigned char pub, unsigned long len);
 
 // ECDH: out (ec_scalar_size bytes) = the x coordinate of priv * peer.
 // 0 if the peer point is invalid or the result is the point at infinity.
-int ecdh_shared(int curve, const &unsigned char priv, const &unsigned char peer, unsigned long peer_len,
+int ecdh_shared(int curve, []const unsigned char priv, []const unsigned char peer, []unsigned char out);
+// internal: the (reference, length) core of ecdh_shared()
+int ecdh_shared_n_(int curve, const &unsigned char priv, const &unsigned char peer, unsigned long peer_len,
                 &unsigned char out);
 
 // ECDSA verification of 'hash' (truncated to the curve's size as FIPS
 // 186-4 specifies) against (r, s) — each ec_scalar_size bytes — or a DER
 // Ecdsa-Sig-Value. 1 if valid.
-int ecdsa_verify(int curve, const &unsigned char pub, unsigned long pub_len,
+int ecdsa_verify(int curve, []const unsigned char pub, []const unsigned char hash, []const unsigned char r, []const unsigned char s);
+// internal: the (reference, length) core of ecdsa_verify()
+int ecdsa_verify_n_(int curve, const &unsigned char pub, unsigned long pub_len,
                  const &unsigned char hash, unsigned long hash_len,
                  const &unsigned char r, const &unsigned char s);
-int ecdsa_verify_der(int curve, const &unsigned char pub, unsigned long pub_len,
+int ecdsa_verify_der(int curve, []const unsigned char pub, []const unsigned char hash, []const unsigned char sig);
+// internal: the (reference, length) core of ecdsa_verify_der()
+int ecdsa_verify_der_n_(int curve, const &unsigned char pub, unsigned long pub_len,
                      const &unsigned char hash, unsigned long hash_len,
                      const &unsigned char sig, unsigned long sig_len);
 
 // ECDSA signature of 'hash' as DER (at most EC_MAX_SIG bytes) with an
 // RFC 6979 nonce (HMAC-SHA-256 for P-256, HMAC-SHA-384 for P-384). 1 on
 // success.
-int ecdsa_sign_der(int curve, const &unsigned char priv, const &unsigned char hash, unsigned long hash_len,
+int ecdsa_sign_der(int curve, []const unsigned char priv, []const unsigned char hash, []unsigned char sig, &unsigned long sig_len);
+// internal: the (reference, length) core of ecdsa_sign_der()
+int ecdsa_sign_der_n_(int curve, const &unsigned char priv, const &unsigned char hash, unsigned long hash_len,
                    &unsigned char sig, unsigned long sig_cap, &unsigned long sig_len);
 
 // A private key with its curve and public point, from DER: SEC1
@@ -71,7 +86,9 @@ struct EcPrivateKey {
     unsigned char pub[EC_MAX_POINT];
     unsigned long pub_len;
 
-    int  init_der(const &unsigned char der, unsigned long len);
+    int  init_der([]const unsigned char der);
+    // internal: the (reference, length) core of init_der()
+    int  init_der_n_(const &unsigned char der, unsigned long len);
     void destroy();
 };
 

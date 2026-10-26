@@ -108,7 +108,12 @@ void msg_type(int t) {
         else { msg_lit("["); msg_int((long)g_ty[t].n); msg_lit("]"); }
         return;
     }
-    if (k == TY_SLICE) { msg_lit("[]"); msg_type(g_ty[t].base); return; }
+    if (k == TY_SLICE) {
+        msg_lit("[]");
+        if ((g_ty[t].flags & TYF_CONST) != 0) { msg_lit("const "); }
+        msg_type(g_ty[t].base);
+        return;
+    }
     if (k == TY_OPT) { msg_lit("?"); msg_type(g_ty[t].base); return; }
     if (k == TY_FN) {
         msg_type(g_ty[t].base);
@@ -407,7 +412,7 @@ int resolve_type(int t) {
         }
         return ty_array_f(resolve_type(g_ty[t].base), n, g_ty[t].flags);
     }
-    if (k == TY_SLICE) { return ty_slice(resolve_type(g_ty[t].base)); }
+    if (k == TY_SLICE) { return ty_slice_f(resolve_type(g_ty[t].base), g_ty[t].flags); }
     if (k == TY_OPT) { return ty_opt(resolve_type(g_ty[t].base)); }
     if (k == TY_FN || k == TY_TUPLE) {
         int ps[64];
@@ -621,6 +626,15 @@ int can_convert(int from, int to) {
     if (ty_equal(from, to) == 1) { return 1; }
     int fk = g_ty[from].kind;
     int tk = g_ty[to].kind;
+    // '[]T' -> '[]const T' (dropping write access); byte slices interconvert
+    // across char / signed char / unsigned char
+    if (fk == TY_SLICE && tk == TY_SLICE) {
+        int fe = g_ty[from].base;
+        int te = g_ty[to].base;
+        int same = ty_equal(fe, te);
+        if (is8(fe) == 1 && is8(te) == 1) { same = 1; }
+        if (same == 1 && ((g_ty[to].flags & TYF_CONST) != 0 || (g_ty[from].flags & TYF_CONST) == 0)) { return 1; }
+    }
     int ff = fn_of(from);
     int tf = fn_of(to);
     if (ff != 0 && tf != 0) {

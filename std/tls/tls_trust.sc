@@ -38,10 +38,10 @@ void tls_trust_free_(&TlsTrust_ t) {
 
 int tls_trust_add_der_(&TlsTrust_ t, const &unsigned char der, unsigned long len) {
     struct TlsCert_ c;
-    c.der = Vec::from_arr(der, len);
+    unsafe { c.der = Vec::from_slice(((const unsigned char*)der)[0..len]); }
     match (c.der.data) {
         case some(d): {
-            if (x509_parse(d, len, &c.p) != 0) { c.drop(); return 0; }
+            if (x509_parse_n_(d, len, &c.p) != 0) { c.drop(); return 0; }
         }
         case null: { c.drop(); return 0; }
     }
@@ -111,14 +111,14 @@ static int tv_same_der_(const &TlsCert_ a, const &TlsCert_ b) {
 
 static int tv_issued_by_(const &TlsCert_ c, const &TlsCert_ issuer) {
     unsafe {
-        return x509_issued_by((const &unsigned char)tv_ptr_(c), &c.p,
+        return x509_issued_by_n_((const &unsigned char)tv_ptr_(c), &c.p,
                               (const &unsigned char)tv_ptr_(issuer), &issuer.p);
     }
 }
 
 static int tv_signed_by_(const &TlsCert_ c, const &TlsCert_ issuer) {
     unsafe {
-        return x509_verify_signed_by((const &unsigned char)tv_ptr_(c), &c.p,
+        return x509_verify_signed_by_n_((const &unsigned char)tv_ptr_(c), &c.p,
                                      (const &unsigned char)tv_ptr_(issuer), &issuer.p);
     }
 }
@@ -214,7 +214,7 @@ int tls_verify_chain_(const &Vec<struct Vec<unsigned char>> chain, const ?&TlsTr
         c.der = d.clone();
         int bad = 1;
         match (c.der.data) {
-            case some(p): { bad = x509_parse(p, c.der.len, &c.p) != 0; }
+            case some(p): { bad = x509_parse_n_(p, c.der.len, &c.p) != 0; }
             case null: { }
         }
         if (bad) {
@@ -259,7 +259,7 @@ int tls_verify_chain_(const &Vec<struct Vec<unsigned char>> chain, const ?&TlsTr
         match (host) {
             case some(h): {
                 unsafe {
-                    if (!x509_match_host((const &unsigned char)tv_ptr_(leaf), &leaf.p, h)) {
+                    if (!x509_match_host_n_((const &unsigned char)tv_ptr_(leaf), &leaf.p, h)) {
                         code = TLS_ERR_CERT_HOSTNAME;
                         why = "the certificate doesn't match the host name";
                     }

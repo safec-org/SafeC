@@ -58,7 +58,7 @@ int gui_window_uses_gpu(const &GuiWindow win) {
     return 0;
 }
 
-const char* gui_window_presenter_name(const &GuiWindow win) {
+const &char gui_window_presenter_name(const &GuiWindow win) {
     ?&GuiWindowState ost = gui_window_state(win);
     match (ost) {
         case null: return "cpu";

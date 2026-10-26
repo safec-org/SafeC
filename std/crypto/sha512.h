@@ -2,6 +2,7 @@
 // Freestanding-safe. No dynamic allocation.
 // Sha512Ctx conforms to hash.h's Hasher and BlockHash (generic hashing, Hmac).
 #pragma once
+#include <std/crypto/buf.h>
 
 #define SHA512_DIGEST_SIZE  64   // bytes
 #define SHA384_DIGEST_SIZE  48   // bytes
@@ -26,12 +27,16 @@ struct Sha512Ctx {
     static struct Sha512Ctx new_384();
 
     // Feed `len` bytes of data into the hash.
-    void update(const &unsigned char data, unsigned long len);
+    void update([]const unsigned char data);
+    // internal: the (reference, length) core of update()
+    void update_n_(const &unsigned char data, unsigned long len);
 
     // Finalise and write the digest.
     // For SHA-512: digest must be at least 64 bytes.
     // For SHA-384: digest must be at least 48 bytes.
-    void finish(&unsigned char digest);
+    void finish([]unsigned char digest);
+    // internal: the (reference, length) core of finish()
+    void finish_n_(&unsigned char digest);
 
     // 64 (SHA-512) or 48 (SHA-384) / SHA512_BLOCK_SIZE (hash.h's BlockHash).
     unsigned long digest_size() const;
@@ -39,11 +44,15 @@ struct Sha512Ctx {
 };
 
 // Convenience: hash `len` bytes and write the 64-byte digest.
-void sha512(const &unsigned char data, unsigned long len,
+void sha512([]const unsigned char data, []unsigned char digest);
+// internal: the (reference, length) core of sha512()
+void sha512_n_(const &unsigned char data, unsigned long len,
             &unsigned char digest);
 
 // Convenience: hash `len` bytes and write the 48-byte digest.
-void sha384(const &unsigned char data, unsigned long len,
+void sha384([]const unsigned char data, []unsigned char digest);
+// internal: the (reference, length) core of sha384()
+void sha384_n_(const &unsigned char data, unsigned long len,
             &unsigned char digest);
 
 } // namespace std

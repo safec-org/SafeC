@@ -47,8 +47,8 @@ static void ck_parse_into_(&CookieList list, const char* s) {
                 unsigned long vb = b;
                 if (vb - va >= 2UL && s[va] == '"' && s[vb - 1UL] == '"') { va = va + 1UL; vb = vb - 1UL; }
                 struct CookiePair p;
-                p.name = String::from_n(&s[a], ne - a);
-                p.value = String::from_n(&s[va], vb - va);
+                p.name = String::from_n_(&s[a], ne - a);
+                p.value = String::from_n_(&s[va], vb - va);
                 list.items.push(p);
             }
         }
@@ -156,14 +156,14 @@ struct SetCookie SetCookie::parse(const &char header_value, ?&int ok) {
             if (first) {
                 first = 0;
                 if (eq >= b || ke == a) { break; }
-                c.name.push_n(&s[a], ke - a);
+                c.name.push_n_(&s[a], ke - a);
                 unsigned long vb = b;
                 if (vb - va >= 2UL && s[va] == '"' && s[vb - 1UL] == '"') { va = va + 1UL; vb = vb - 1UL; }
-                c.value.push_n(&s[va], vb - va);
+                c.value.push_n_(&s[va], vb - va);
                 good = 1;
                 continue;
             }
-            struct String val = String::from_n(&s[va], b - va);
+            struct String val = String::from_n_(&s[va], b - va);
             if (ck_word_is_(s, a, ke, "path")) { c.path.clear(); c.path.push_str(&val); }
             else if (ck_word_is_(s, a, ke, "domain")) {
                 c.domain.clear();

@@ -8,7 +8,10 @@ namespace std {
 extern void* malloc(size_t size);
 extern void  free(void* ptr);
 
-inline struct BumpAllocator BumpAllocator::over(&unsigned char buffer, unsigned long cap) {
+inline struct BumpAllocator BumpAllocator::over([]unsigned char buffer_s) {
+    unsigned long cap = buffer_s.len;
+    &unsigned char buffer;
+    unsafe { buffer = (&unsigned char)buffer_s.ptr; }
     struct BumpAllocator a;
     unsafe { a.base = (&heap void)buffer; }
     a.owned = 0;

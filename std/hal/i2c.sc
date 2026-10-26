@@ -35,7 +35,10 @@ static int i2c_gen_start_(unsigned long base, unsigned int addrByte) {
     return r;
 }
 
-int I2cGeneric::write(unsigned long base, unsigned char addr, const &unsigned char data, unsigned long len) const {
+int I2cGeneric::write(unsigned long base, unsigned char addr, []const unsigned char data_s) const {
+    unsigned long len = data_s.len;
+    const &unsigned char data;
+    unsafe { data = (const &unsigned char)data_s.ptr; }
     int r = i2c_gen_start_(base, (unsigned int)addr << 1);
     if (r != I2C_OK) { return r; }
     unsigned long i = 0UL;
@@ -50,7 +53,10 @@ int I2cGeneric::write(unsigned long base, unsigned char addr, const &unsigned ch
     return I2C_OK;
 }
 
-int I2cGeneric::read(unsigned long base, unsigned char addr, &unsigned char data, unsigned long len) const {
+int I2cGeneric::read(unsigned long base, unsigned char addr, []unsigned char data_s) const {
+    unsigned long len = data_s.len;
+    &unsigned char data;
+    unsafe { data = (&unsigned char)data_s.ptr; }
     int r = i2c_gen_start_(base, ((unsigned int)addr << 1) | 1u);
     if (r != I2C_OK) { return r; }
     unsigned long i = 0UL;
@@ -135,7 +141,10 @@ static void st_i2c_clear_addr_(unsigned long base) {
     hal_rd32_(base, ST_SR2_);
 }
 
-int Stm32F4I2c::write(unsigned long base, unsigned char addr, const &unsigned char data, unsigned long len) const {
+int Stm32F4I2c::write(unsigned long base, unsigned char addr, []const unsigned char data_s) const {
+    unsigned long len = data_s.len;
+    const &unsigned char data;
+    unsafe { data = (const &unsigned char)data_s.ptr; }
     int r = st_i2c_start_(base, (unsigned int)addr << 1);
     if (r != I2C_OK) { return r; }
     st_i2c_clear_addr_(base);
@@ -154,7 +163,10 @@ int Stm32F4I2c::write(unsigned long base, unsigned char addr, const &unsigned ch
     return I2C_OK;
 }
 
-int Stm32F4I2c::read(unsigned long base, unsigned char addr, &unsigned char data, unsigned long len) const {
+int Stm32F4I2c::read(unsigned long base, unsigned char addr, []unsigned char data_s) const {
+    unsigned long len = data_s.len;
+    &unsigned char data;
+    unsafe { data = (&unsigned char)data_s.ptr; }
     if (len > 1UL) { hal_set32_(base, ST_CR1_, 0x400u); }      // ACK all but the last byte
     else { hal_clr32_(base, ST_CR1_, 0x400u); }
     int r = st_i2c_start_(base, ((unsigned int)addr << 1) | 1u);

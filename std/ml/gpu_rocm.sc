@@ -1764,7 +1764,7 @@ struct RocmBuf RocmBuf::alloc(unsigned long n) {
     return b;
 }
 
-int rocm_write(struct RocmBuf dst, const &float host, unsigned long n) {
+int rocm_write_n_(struct RocmBuf dst, const &float host, unsigned long n) {
     if (dst.dev == 0UL || n > dst.len || !rocm_ensure_()) return 0;
     unsafe {
         return hipMemcpyAsync((void*)dst.dev, (const void*)host, n * sizeof(float),
@@ -1772,19 +1772,43 @@ int rocm_write(struct RocmBuf dst, const &float host, unsigned long n) {
     }
 }
 
-struct RocmBuf RocmBuf::upload(const &float host, unsigned long n) {
+int rocm_write(struct RocmBuf dst, []const float host_s) {
+    unsigned long n = host_s.len;
+    float host_d_[1];
+    const &float host = &host_d_[0];
+    if (host_s.len > 0UL) { unsafe { host = (const &float)host_s.ptr; } }
+    return rocm_write_n_(dst, host, n);
+}
+
+struct RocmBuf RocmBuf::upload_n_(const &float host, unsigned long n) {
     struct RocmBuf b = RocmBuf::alloc(n);
-    if (b.dev != 0UL && !rocm_write(b, host, n)) b.free();
+    if (b.dev != 0UL && !rocm_write_n_(b, host, n)) b.free();
     return b;
 }
 
-int rocm_read(struct RocmBuf src, &float host, unsigned long n) {
+struct RocmBuf RocmBuf::upload([]const float host_s) {
+    unsigned long n = host_s.len;
+    float host_d_[1];
+    const &float host = &host_d_[0];
+    if (host_s.len > 0UL) { unsafe { host = (const &float)host_s.ptr; } }
+    return RocmBuf::upload_n_(host, n);
+}
+
+int rocm_read_n_(struct RocmBuf src, &float host, unsigned long n) {
     if (src.dev == 0UL || n > src.len || !rocm_ensure_()) return 0;
     unsafe {
         if (hipMemcpyAsync((void*)host, (const void*)src.dev, n * sizeof(float),
                            ROCM_D2H, g_rocm_stream) != ROCM_HIP_OK) return 0;
         return hipStreamSynchronize(g_rocm_stream) == ROCM_HIP_OK;
     }
+}
+
+int rocm_read(struct RocmBuf src, []float host_s) {
+    unsigned long n = host_s.len;
+    float host_d_[1];
+    &float host = &host_d_[0];
+    if (host_s.len > 0UL) { unsafe { host = (&float)host_s.ptr; } }
+    return rocm_read_n_(src, host, n);
 }
 
 void RocmBuf::free() {
@@ -1798,9 +1822,9 @@ int rocm_sync() {
     unsafe { return hipStreamSynchronize(g_rocm_stream) == ROCM_HIP_OK; }
 }
 
-?&void rocm_stream_handle() {
+?&RocmNativeStream rocm_stream_handle() {
     if (!rocm_ensure_()) return null;
-    unsafe { return (?&void)g_rocm_stream; }
+    unsafe { return (?&RocmNativeStream)g_rocm_stream; }
 }
 
 int rocm_copy(struct RocmBuf src, unsigned long srcOff, struct RocmBuf dst, unsigned long dstOff, unsigned long n) {
@@ -2039,20 +2063,36 @@ void RocmHalfBuf::free() {
     self.len = 0UL;
 }
 
-int rocm_half_write(struct RocmHalfBuf dst, const &unsigned short bits, unsigned long n) {
+int rocm_half_write_n_(struct RocmHalfBuf dst, const &unsigned short bits, unsigned long n) {
     if (dst.dev == 0UL || n > dst.len || !rocm_ensure_()) return 0;
     unsafe {
         return hipMemcpyAsync((void*)dst.dev, (const void*)bits, n * 2UL, ROCM_H2D, g_rocm_stream) == ROCM_HIP_OK;
     }
 }
 
-int rocm_half_read(struct RocmHalfBuf src, &unsigned short bits, unsigned long n) {
+int rocm_half_write(struct RocmHalfBuf dst, []const unsigned short bits_s) {
+    unsigned long n = bits_s.len;
+    unsigned short bits_d_[1];
+    const &unsigned short bits = &bits_d_[0];
+    if (bits_s.len > 0UL) { unsafe { bits = (const &unsigned short)bits_s.ptr; } }
+    return rocm_half_write_n_(dst, bits, n);
+}
+
+int rocm_half_read_n_(struct RocmHalfBuf src, &unsigned short bits, unsigned long n) {
     if (src.dev == 0UL || n > src.len || !rocm_ensure_()) return 0;
     unsafe {
         if (hipMemcpyAsync((void*)bits, (const void*)src.dev, n * 2UL, ROCM_D2H, g_rocm_stream) != ROCM_HIP_OK)
             return 0;
         return hipStreamSynchronize(g_rocm_stream) == ROCM_HIP_OK;
     }
+}
+
+int rocm_half_read(struct RocmHalfBuf src, []unsigned short bits_s) {
+    unsigned long n = bits_s.len;
+    unsigned short bits_d_[1];
+    &unsigned short bits = &bits_d_[0];
+    if (bits_s.len > 0UL) { unsafe { bits = (&unsigned short)bits_s.ptr; } }
+    return rocm_half_read_n_(src, bits, n);
 }
 
 static int rocm_convert_(int kernel, unsigned long a, unsigned long o, unsigned long n, int bf) {
@@ -2080,14 +2120,22 @@ int rocm_from_half(struct RocmHalfBuf src, struct RocmBuf dst) {
     return rocm_convert_(K_FROM_HALF, src.dev, dst.dev, n, src.dtype == ROCM_BF16);
 }
 
-struct RocmHalfBuf RocmHalfBuf::upload(const &float host, unsigned long n, int dtype) {
+struct RocmHalfBuf RocmHalfBuf::upload_n_(const &float host, unsigned long n, int dtype) {
     struct RocmHalfBuf h = RocmHalfBuf::alloc(n, dtype);
     if (h.dev == 0UL) return h;
-    struct RocmBuf tmp = RocmBuf::upload(host, n);
+    struct RocmBuf tmp = RocmBuf::upload_n_(host, n);
     int ok = tmp.dev != 0UL && rocm_to_half(tmp, h) && rocm_sync();
     tmp.free();
     if (!ok) h.free();
     return h;
+}
+
+struct RocmHalfBuf RocmHalfBuf::upload([]const float host_s, int dtype) {
+    unsigned long n = host_s.len;
+    float host_d_[1];
+    const &float host = &host_d_[0];
+    if (host_s.len > 0UL) { unsafe { host = (const &float)host_s.ptr; } }
+    return RocmHalfBuf::upload_n_(host, n, dtype);
 }
 
 // rocBLAS gemm_ex: 16-bit A and B, fp32 accumulation; C/D are 16-bit
@@ -2402,11 +2450,11 @@ void RocmGraph::free() {
 // ── Host-array convenience ops ───────────────────────────────────────────────
 
 static int rocm_host_binary_(int kernel, const &float a, const &float b, &float out, unsigned long n) {
-    struct RocmBuf da = RocmBuf::upload(a, n);
-    struct RocmBuf db = RocmBuf::upload(b, n);
+    struct RocmBuf da = RocmBuf::upload_n_(a, n);
+    struct RocmBuf db = RocmBuf::upload_n_(b, n);
     struct RocmBuf dout = RocmBuf::alloc(n);
     int ok = da.dev != 0UL && db.dev != 0UL && dout.dev != 0UL &&
-             rocm_binary_(kernel, da, db, dout) && rocm_read(dout, out, n);
+             rocm_binary_(kernel, da, db, dout) && rocm_read_n_(dout, out, n);
     da.free();
     db.free();
     dout.free();
@@ -2414,33 +2462,176 @@ static int rocm_host_binary_(int kernel, const &float a, const &float b, &float 
 }
 
 static int rocm_host_unary_(int kernel, const &float a, float k, &float out, unsigned long n) {
-    struct RocmBuf da = RocmBuf::upload(a, n);
+    struct RocmBuf da = RocmBuf::upload_n_(a, n);
     struct RocmBuf dout = RocmBuf::alloc(n);
     int ok = da.dev != 0UL && dout.dev != 0UL &&
-             rocm_unary_(kernel, da, k, dout) && rocm_read(dout, out, n);
+             rocm_unary_(kernel, da, k, dout) && rocm_read_n_(dout, out, n);
     da.free();
     dout.free();
     return ok;
 }
 
-int rocm_add_f32(const &float a, const &float b, &float out, unsigned long n) { return rocm_host_binary_(K_ADD, a, b, out, n); }
-int rocm_sub_f32(const &float a, const &float b, &float out, unsigned long n) { return rocm_host_binary_(K_SUB, a, b, out, n); }
-int rocm_mul_f32(const &float a, const &float b, &float out, unsigned long n) { return rocm_host_binary_(K_MUL, a, b, out, n); }
-int rocm_div_f32(const &float a, const &float b, &float out, unsigned long n) { return rocm_host_binary_(K_DIV, a, b, out, n); }
-int rocm_pow_f32(const &float a, const &float b, &float out, unsigned long n) { return rocm_host_binary_(K_POW, a, b, out, n); }
-int rocm_relu_f32(const &float a, &float out, unsigned long n) { return rocm_host_unary_(K_RELU, a, 0.0f, out, n); }
-int rocm_log_f32(const &float a, &float out, unsigned long n) { return rocm_host_unary_(K_LOG, a, 0.0f, out, n); }
-int rocm_exp_f32(const &float a, &float out, unsigned long n) { return rocm_host_unary_(K_EXP, a, 0.0f, out, n); }
-int rocm_sqrt_f32(const &float a, &float out, unsigned long n) { return rocm_host_unary_(K_SQRT, a, 0.0f, out, n); }
-int rocm_scale_f32(const &float a, float k, &float out, unsigned long n) { return rocm_host_unary_(K_SCALE, a, k, out, n); }
+int rocm_add_f32_n_(const &float a, const &float b, &float out, unsigned long n) { return rocm_host_binary_(K_ADD, a, b, out, n); }
 
-int rocm_sum_f32(const &float a, &float out1, unsigned long n) {
-    struct RocmBuf da = RocmBuf::upload(a, n);
+int rocm_add_f32([]const float a_s, []const float b_s, []float out_s) {
+    unsigned long n = out_s.len;
+    if (a_s.len < n || b_s.len < n) { return 0; }
+    float a_d_[1];
+    const &float a = &a_d_[0];
+    if (a_s.len > 0UL) { unsafe { a = (const &float)a_s.ptr; } }
+    float b_d_[1];
+    const &float b = &b_d_[0];
+    if (b_s.len > 0UL) { unsafe { b = (const &float)b_s.ptr; } }
+    float out_d_[1];
+    &float out = &out_d_[0];
+    if (out_s.len > 0UL) { unsafe { out = (&float)out_s.ptr; } }
+    return rocm_add_f32_n_(a, b, out, n);
+}
+int rocm_sub_f32_n_(const &float a, const &float b, &float out, unsigned long n) { return rocm_host_binary_(K_SUB, a, b, out, n); }
+
+int rocm_sub_f32([]const float a_s, []const float b_s, []float out_s) {
+    unsigned long n = out_s.len;
+    if (a_s.len < n || b_s.len < n) { return 0; }
+    float a_d_[1];
+    const &float a = &a_d_[0];
+    if (a_s.len > 0UL) { unsafe { a = (const &float)a_s.ptr; } }
+    float b_d_[1];
+    const &float b = &b_d_[0];
+    if (b_s.len > 0UL) { unsafe { b = (const &float)b_s.ptr; } }
+    float out_d_[1];
+    &float out = &out_d_[0];
+    if (out_s.len > 0UL) { unsafe { out = (&float)out_s.ptr; } }
+    return rocm_sub_f32_n_(a, b, out, n);
+}
+int rocm_mul_f32_n_(const &float a, const &float b, &float out, unsigned long n) { return rocm_host_binary_(K_MUL, a, b, out, n); }
+
+int rocm_mul_f32([]const float a_s, []const float b_s, []float out_s) {
+    unsigned long n = out_s.len;
+    if (a_s.len < n || b_s.len < n) { return 0; }
+    float a_d_[1];
+    const &float a = &a_d_[0];
+    if (a_s.len > 0UL) { unsafe { a = (const &float)a_s.ptr; } }
+    float b_d_[1];
+    const &float b = &b_d_[0];
+    if (b_s.len > 0UL) { unsafe { b = (const &float)b_s.ptr; } }
+    float out_d_[1];
+    &float out = &out_d_[0];
+    if (out_s.len > 0UL) { unsafe { out = (&float)out_s.ptr; } }
+    return rocm_mul_f32_n_(a, b, out, n);
+}
+int rocm_div_f32_n_(const &float a, const &float b, &float out, unsigned long n) { return rocm_host_binary_(K_DIV, a, b, out, n); }
+
+int rocm_div_f32([]const float a_s, []const float b_s, []float out_s) {
+    unsigned long n = out_s.len;
+    if (a_s.len < n || b_s.len < n) { return 0; }
+    float a_d_[1];
+    const &float a = &a_d_[0];
+    if (a_s.len > 0UL) { unsafe { a = (const &float)a_s.ptr; } }
+    float b_d_[1];
+    const &float b = &b_d_[0];
+    if (b_s.len > 0UL) { unsafe { b = (const &float)b_s.ptr; } }
+    float out_d_[1];
+    &float out = &out_d_[0];
+    if (out_s.len > 0UL) { unsafe { out = (&float)out_s.ptr; } }
+    return rocm_div_f32_n_(a, b, out, n);
+}
+int rocm_pow_f32_n_(const &float a, const &float b, &float out, unsigned long n) { return rocm_host_binary_(K_POW, a, b, out, n); }
+
+int rocm_pow_f32([]const float a_s, []const float b_s, []float out_s) {
+    unsigned long n = out_s.len;
+    if (a_s.len < n || b_s.len < n) { return 0; }
+    float a_d_[1];
+    const &float a = &a_d_[0];
+    if (a_s.len > 0UL) { unsafe { a = (const &float)a_s.ptr; } }
+    float b_d_[1];
+    const &float b = &b_d_[0];
+    if (b_s.len > 0UL) { unsafe { b = (const &float)b_s.ptr; } }
+    float out_d_[1];
+    &float out = &out_d_[0];
+    if (out_s.len > 0UL) { unsafe { out = (&float)out_s.ptr; } }
+    return rocm_pow_f32_n_(a, b, out, n);
+}
+int rocm_relu_f32_n_(const &float a, &float out, unsigned long n) { return rocm_host_unary_(K_RELU, a, 0.0f, out, n); }
+
+int rocm_relu_f32([]const float a_s, []float out_s) {
+    unsigned long n = out_s.len;
+    if (a_s.len < n) { return 0; }
+    float a_d_[1];
+    const &float a = &a_d_[0];
+    if (a_s.len > 0UL) { unsafe { a = (const &float)a_s.ptr; } }
+    float out_d_[1];
+    &float out = &out_d_[0];
+    if (out_s.len > 0UL) { unsafe { out = (&float)out_s.ptr; } }
+    return rocm_relu_f32_n_(a, out, n);
+}
+int rocm_log_f32_n_(const &float a, &float out, unsigned long n) { return rocm_host_unary_(K_LOG, a, 0.0f, out, n); }
+
+int rocm_log_f32([]const float a_s, []float out_s) {
+    unsigned long n = out_s.len;
+    if (a_s.len < n) { return 0; }
+    float a_d_[1];
+    const &float a = &a_d_[0];
+    if (a_s.len > 0UL) { unsafe { a = (const &float)a_s.ptr; } }
+    float out_d_[1];
+    &float out = &out_d_[0];
+    if (out_s.len > 0UL) { unsafe { out = (&float)out_s.ptr; } }
+    return rocm_log_f32_n_(a, out, n);
+}
+int rocm_exp_f32_n_(const &float a, &float out, unsigned long n) { return rocm_host_unary_(K_EXP, a, 0.0f, out, n); }
+
+int rocm_exp_f32([]const float a_s, []float out_s) {
+    unsigned long n = out_s.len;
+    if (a_s.len < n) { return 0; }
+    float a_d_[1];
+    const &float a = &a_d_[0];
+    if (a_s.len > 0UL) { unsafe { a = (const &float)a_s.ptr; } }
+    float out_d_[1];
+    &float out = &out_d_[0];
+    if (out_s.len > 0UL) { unsafe { out = (&float)out_s.ptr; } }
+    return rocm_exp_f32_n_(a, out, n);
+}
+int rocm_sqrt_f32_n_(const &float a, &float out, unsigned long n) { return rocm_host_unary_(K_SQRT, a, 0.0f, out, n); }
+
+int rocm_sqrt_f32([]const float a_s, []float out_s) {
+    unsigned long n = out_s.len;
+    if (a_s.len < n) { return 0; }
+    float a_d_[1];
+    const &float a = &a_d_[0];
+    if (a_s.len > 0UL) { unsafe { a = (const &float)a_s.ptr; } }
+    float out_d_[1];
+    &float out = &out_d_[0];
+    if (out_s.len > 0UL) { unsafe { out = (&float)out_s.ptr; } }
+    return rocm_sqrt_f32_n_(a, out, n);
+}
+int rocm_scale_f32_n_(const &float a, float k, &float out, unsigned long n) { return rocm_host_unary_(K_SCALE, a, k, out, n); }
+
+int rocm_scale_f32([]const float a_s, float k, []float out_s) {
+    unsigned long n = out_s.len;
+    if (a_s.len < n) { return 0; }
+    float a_d_[1];
+    const &float a = &a_d_[0];
+    if (a_s.len > 0UL) { unsafe { a = (const &float)a_s.ptr; } }
+    float out_d_[1];
+    &float out = &out_d_[0];
+    if (out_s.len > 0UL) { unsafe { out = (&float)out_s.ptr; } }
+    return rocm_scale_f32_n_(a, k, out, n);
+}
+
+int rocm_sum_f32_n_(const &float a, &float out1, unsigned long n) {
+    struct RocmBuf da = RocmBuf::upload_n_(a, n);
     struct RocmBuf dout = RocmBuf::alloc(1UL);
-    int ok = da.dev != 0UL && dout.dev != 0UL && rocm_sum(da, dout) && rocm_read(dout, out1, 1UL);
+    int ok = da.dev != 0UL && dout.dev != 0UL && rocm_sum(da, dout) && rocm_read_n_(dout, out1, 1UL);
     da.free();
     dout.free();
     return ok;
+}
+
+int rocm_sum_f32([]const float a_s, &float out1) {
+    unsigned long n = a_s.len;
+    float a_d_[1];
+    const &float a = &a_d_[0];
+    if (a_s.len > 0UL) { unsafe { a = (const &float)a_s.ptr; } }
+    return rocm_sum_f32_n_(a, out1, n);
 }
 
 // ── Attention ────────────────────────────────────────────────────────────────
@@ -2621,15 +2812,15 @@ static int rocm_attention_f32_(const &float q, const &float k, const &float v, &
                                unsigned long headDim, float scale, int causal, int linear) {
     unsigned long nq = heads * seqLen * headDim;
     unsigned long nk = heads * kvLen * headDim;
-    struct RocmBuf dq = RocmBuf::upload(q, nq);
-    struct RocmBuf dk = RocmBuf::upload(k, nk);
-    struct RocmBuf dv = RocmBuf::upload(v, nk);
+    struct RocmBuf dq = RocmBuf::upload_n_(q, nq);
+    struct RocmBuf dk = RocmBuf::upload_n_(k, nk);
+    struct RocmBuf dv = RocmBuf::upload_n_(v, nk);
     struct RocmBuf dout = RocmBuf::alloc(nq);
     int ok = dq.dev != 0UL && dk.dev != 0UL && dv.dev != 0UL && dout.dev != 0UL;
     if (ok) {
         ok = linear ? rocm_linear_attention(dq, dk, dv, dout, heads, seqLen, kvLen, headDim, causal)
                     : rocm_flash_attention(dq, dk, dv, dout, heads, seqLen, kvLen, headDim, scale, causal);
-        ok = ok && rocm_read(dout, out, nq);
+        ok = ok && rocm_read_n_(dout, out, nq);
     }
     dq.free();
     dk.free();
@@ -2650,11 +2841,11 @@ int rocm_linear_attention_f32(const &float q, const &float k, const &float v, &f
     return rocm_attention_f32_(q, k, v, out, heads, seqLen, kvLen, headDim, 0.0f, causal, 1);
 }
 
-int rocm_matmul_f32(const &float a, const &float b, &float out,
+int rocm_matmul_f32_n_(const &float a, const &float b, &float out,
                     unsigned long M, unsigned long K, unsigned long N) {
     if (M > 2147483647UL || N > 2147483647UL || K > 2147483647UL) return 0;
-    struct RocmBuf da = RocmBuf::upload(a, M * K);
-    struct RocmBuf db = RocmBuf::upload(b, K * N);
+    struct RocmBuf da = RocmBuf::upload_n_(a, M * K);
+    struct RocmBuf db = RocmBuf::upload_n_(b, K * N);
     struct RocmBuf dc = RocmBuf::alloc(M * N);
     int ok = da.dev != 0UL && db.dev != 0UL && dc.dev != 0UL;
     if (ok) {
@@ -2673,7 +2864,7 @@ int rocm_matmul_f32(const &float a, const &float b, &float out,
                                        ROCM_BLOCK, 1U, 1U, 0U, g_rocm_stream,
                                        &params[0], (void**)0) == ROCM_HIP_OK;
         }
-        ok = ok && rocm_read(dc, out, M * N);
+        ok = ok && rocm_read_n_(dc, out, M * N);
     }
     da.free();
     db.free();
@@ -2681,17 +2872,45 @@ int rocm_matmul_f32(const &float a, const &float b, &float out,
     return ok;
 }
 
-int rocm_matmul_f32_blas(const &float a, const &float b, &float out,
+int rocm_matmul_f32([]const float a_s, []const float b_s, []float out_s, unsigned long M, unsigned long K, unsigned long N) {
+    if (a_s.len < M * K || b_s.len < K * N || out_s.len < M * N) { return 0; }
+    float a_d_[1];
+    const &float a = &a_d_[0];
+    if (a_s.len > 0UL) { unsafe { a = (const &float)a_s.ptr; } }
+    float b_d_[1];
+    const &float b = &b_d_[0];
+    if (b_s.len > 0UL) { unsafe { b = (const &float)b_s.ptr; } }
+    float out_d_[1];
+    &float out = &out_d_[0];
+    if (out_s.len > 0UL) { unsafe { out = (&float)out_s.ptr; } }
+    return rocm_matmul_f32_n_(a, b, out, M, K, N);
+}
+
+int rocm_matmul_f32_blas_n_(const &float a, const &float b, &float out,
                          unsigned long M, unsigned long K, unsigned long N) {
-    struct RocmBuf da = RocmBuf::upload(a, M * K);
-    struct RocmBuf db = RocmBuf::upload(b, K * N);
+    struct RocmBuf da = RocmBuf::upload_n_(a, M * K);
+    struct RocmBuf db = RocmBuf::upload_n_(b, K * N);
     struct RocmBuf dc = RocmBuf::alloc(M * N);
     int ok = da.dev != 0UL && db.dev != 0UL && dc.dev != 0UL &&
-             rocm_gemm(da, 0, db, 0, dc, M, N, K) && rocm_read(dc, out, M * N);
+             rocm_gemm(da, 0, db, 0, dc, M, N, K) && rocm_read_n_(dc, out, M * N);
     da.free();
     db.free();
     dc.free();
     return ok;
+}
+
+int rocm_matmul_f32_blas([]const float a_s, []const float b_s, []float out_s, unsigned long M, unsigned long K, unsigned long N) {
+    if (a_s.len < M * K || b_s.len < K * N || out_s.len < M * N) { return 0; }
+    float a_d_[1];
+    const &float a = &a_d_[0];
+    if (a_s.len > 0UL) { unsafe { a = (const &float)a_s.ptr; } }
+    float b_d_[1];
+    const &float b = &b_d_[0];
+    if (b_s.len > 0UL) { unsafe { b = (const &float)b_s.ptr; } }
+    float out_d_[1];
+    &float out = &out_d_[0];
+    if (out_s.len > 0UL) { unsafe { out = (&float)out_s.ptr; } }
+    return rocm_matmul_f32_blas_n_(a, b, out, M, K, N);
 }
 
 // ── Mixed precision ──────────────────────────────────────────────────────────

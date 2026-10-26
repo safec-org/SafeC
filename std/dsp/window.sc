@@ -8,7 +8,7 @@
 
 namespace std {
 
-void window_rectangular(&double w, unsigned long n) {
+void window_rectangular_n_(&double w, unsigned long n) {
     unsigned long i = 0UL;
     while (i < n) {
         unsafe { w[i] = 1.0; }
@@ -16,7 +16,7 @@ void window_rectangular(&double w, unsigned long n) {
     }
 }
 
-void window_hann(&double w, unsigned long n) {
+void window_hann_n_(&double w, unsigned long n) {
     if (n <= 1UL) {
         unsigned long i = 0UL;
         while (i < n) { unsafe { w[i] = 1.0; } i = i + 1UL; }
@@ -31,7 +31,7 @@ void window_hann(&double w, unsigned long n) {
     }
 }
 
-void window_hamming(&double w, unsigned long n) {
+void window_hamming_n_(&double w, unsigned long n) {
     if (n <= 1UL) {
         unsigned long i = 0UL;
         while (i < n) { unsafe { w[i] = 1.0; } i = i + 1UL; }
@@ -46,7 +46,7 @@ void window_hamming(&double w, unsigned long n) {
     }
 }
 
-void window_blackman(&double w, unsigned long n) {
+void window_blackman_n_(&double w, unsigned long n) {
     if (n <= 1UL) {
         unsigned long i = 0UL;
         while (i < n) { unsafe { w[i] = 1.0; } i = i + 1UL; }
@@ -62,7 +62,7 @@ void window_blackman(&double w, unsigned long n) {
     }
 }
 
-void window_apply(&double x, const &double w, unsigned long n) {
+void window_apply_n_(&double x, const &double w, unsigned long n) {
     unsigned long i = 0UL;
     while (i < n) {
         unsafe { x[i] = x[i] * w[i]; }
@@ -87,17 +87,72 @@ static void window_f32_(&float w, unsigned long n, int kind) {
     }
 }
 
-void window_rectangular_f32(&float w, unsigned long n) { window_f32_(w, n, 0); }
-void window_hann_f32(&float w, unsigned long n)        { window_f32_(w, n, 1); }
-void window_hamming_f32(&float w, unsigned long n)     { window_f32_(w, n, 2); }
-void window_blackman_f32(&float w, unsigned long n)    { window_f32_(w, n, 3); }
+void window_rectangular_f32_n_(&float w, unsigned long n) { window_f32_(w, n, 0); }
+void window_hann_f32_n_(&float w, unsigned long n)        { window_f32_(w, n, 1); }
+void window_hamming_f32_n_(&float w, unsigned long n)     { window_f32_(w, n, 2); }
+void window_blackman_f32_n_(&float w, unsigned long n)    { window_f32_(w, n, 3); }
 
-void window_apply_f32(&float x, const &float w, unsigned long n) {
+void window_apply_f32_n_(&float x, const &float w, unsigned long n) {
     unsigned long i = 0UL;
     while (i < n) {
         unsafe { x[i] = x[i] * w[i]; }
         i = i + 1UL;
     }
+}
+
+// ── Slice API (the public signatures; the (reference, length) cores above
+// are the *_n_ functions) ─────────────────────────────────────────────────────
+
+void window_rectangular([]double w) {
+    if (w.len == 0UL) return;
+    unsafe { window_rectangular_n_((&double)w.ptr, w.len); }
+}
+
+void window_hann([]double w) {
+    if (w.len == 0UL) return;
+    unsafe { window_hann_n_((&double)w.ptr, w.len); }
+}
+
+void window_hamming([]double w) {
+    if (w.len == 0UL) return;
+    unsafe { window_hamming_n_((&double)w.ptr, w.len); }
+}
+
+void window_blackman([]double w) {
+    if (w.len == 0UL) return;
+    unsafe { window_blackman_n_((&double)w.ptr, w.len); }
+}
+
+void window_rectangular_f32([]float w) {
+    if (w.len == 0UL) return;
+    unsafe { window_rectangular_f32_n_((&float)w.ptr, w.len); }
+}
+
+void window_hann_f32([]float w) {
+    if (w.len == 0UL) return;
+    unsafe { window_hann_f32_n_((&float)w.ptr, w.len); }
+}
+
+void window_hamming_f32([]float w) {
+    if (w.len == 0UL) return;
+    unsafe { window_hamming_f32_n_((&float)w.ptr, w.len); }
+}
+
+void window_blackman_f32([]float w) {
+    if (w.len == 0UL) return;
+    unsafe { window_blackman_f32_n_((&float)w.ptr, w.len); }
+}
+
+void window_apply([]double x, []const double w) {
+    unsigned long n = x.len < w.len ? x.len : w.len;
+    if (n == 0UL) return;
+    unsafe { window_apply_n_((&double)x.ptr, (const &double)w.ptr, n); }
+}
+
+void window_apply_f32([]float x, []const float w) {
+    unsigned long n = x.len < w.len ? x.len : w.len;
+    if (n == 0UL) return;
+    unsafe { window_apply_f32_n_((&float)x.ptr, (const &float)w.ptr, n); }
 }
 
 } // namespace std

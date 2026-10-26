@@ -1,4 +1,4 @@
-// SAFEC-ARGS: -I @STD@/std -I @STD@ --compat-preprocessor
+// SAFEC-ARGS: -I %root/std -I %root --compat-preprocessor
 // Shared counters: a static Mutex, and atomics lent to scoped threads.
 #include <std/thread.h>
 #include <std/atomic.h>

@@ -396,7 +396,7 @@ void GuiPath::circle(float cx, float cy, float r) {
     self.ellipse(cx, cy, r, r);
 }
 
-void GuiPath::polygon(const &float pts, int n) {
+void GuiPath::polygon_n_(const &float pts, int n) {
     if (n <= 0) { return; }
     unsafe {
         self.move_to(pts[0], pts[1]);
@@ -407,6 +407,15 @@ void GuiPath::polygon(const &float pts, int n) {
         }
     }
     self.close();
+}
+
+void GuiPath::polygon([]const float pts_s) {
+    unsigned long np = (unsigned long)pts_s.len;
+    float pts_d_[1];
+    const &float pts = &pts_d_[0];
+    if (pts_s.len > 0UL) { unsafe { pts = (const &float)pts_s.ptr; } }
+    int n = (int)(np / 2UL);
+    self.polygon_n_(pts, n);
 }
 
 void GuiPath::append(const &GuiPath other, struct GuiMatrix m) {

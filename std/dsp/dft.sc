@@ -130,15 +130,15 @@ static void dft_run_(const double* in, double* out, unsigned long n, int inv, in
     }
 }
 
-void dft(const &Complex in, &Complex out, unsigned long n) {
+void dft_n_(const &Complex in, &Complex out, unsigned long n) {
     unsafe { dft_run_((const double*)in, (double*)out, n, 0, 0); }
 }
 
-void dft_real(const &double in, &Complex out, unsigned long n) {
+void dft_real_n_(const &double in, &Complex out, unsigned long n) {
     unsafe { dft_run_((const double*)in, (double*)out, n, 0, 1); }
 }
 
-void idft(const &Complex in, &Complex out, unsigned long n) {
+void idft_n_(const &Complex in, &Complex out, unsigned long n) {
     unsafe { dft_run_((const double*)in, (double*)out, n, 1, 0); }
 }
 
@@ -159,19 +159,19 @@ static void dft_run_f32_(const float* in, float* out, unsigned long n, int inv, 
     }
 }
 
-void dft_f32(const &Complex32 in, &Complex32 out, unsigned long n) {
+void dft_f32_n_(const &Complex32 in, &Complex32 out, unsigned long n) {
     unsafe { dft_run_f32_((const float*)in, (float*)out, n, 0, 0); }
 }
 
-void dft_real_f32(const &float in, &Complex32 out, unsigned long n) {
+void dft_real_f32_n_(const &float in, &Complex32 out, unsigned long n) {
     unsafe { dft_run_f32_((const float*)in, (float*)out, n, 0, 1); }
 }
 
-void idft_f32(const &Complex32 in, &Complex32 out, unsigned long n) {
+void idft_f32_n_(const &Complex32 in, &Complex32 out, unsigned long n) {
     unsafe { dft_run_f32_((const float*)in, (float*)out, n, 1, 0); }
 }
 
-void fdft(const &FComplex in, &FComplex out, unsigned long n) {
+void fdft_n_(const &FComplex in, &FComplex out, unsigned long n) {
     unsigned long k = 0UL;
     while (k < n) {
         struct FComplex sum = FComplex::new((Fixed)0, (Fixed)0);
@@ -189,7 +189,7 @@ void fdft(const &FComplex in, &FComplex out, unsigned long n) {
     }
 }
 
-void fidft(const &FComplex in, &FComplex out, unsigned long n) {
+void fidft_n_(const &FComplex in, &FComplex out, unsigned long n) {
     if (n == 0UL) { return; }
     Fixed invN = fixed_div((Fixed)FIXED_ONE, fixed_from_int((int)n));
     unsigned long k = 0UL;
@@ -209,6 +209,65 @@ void fidft(const &FComplex in, &FComplex out, unsigned long n) {
         }
         k = k + 1UL;
     }
+}
+
+// ── Slice API (the public signatures; the (reference, length) cores above
+// are the *_n_ functions) ─────────────────────────────────────────────────────
+
+int dft([]const Complex in, []Complex out) {
+    if (out.len < in.len) return 0;
+    if (in.len == 0UL) return 1;
+    unsafe { dft_n_((const &Complex)in.ptr, (&Complex)out.ptr, in.len); }
+    return 1;
+}
+
+int dft_real([]const double in, []Complex out) {
+    if (out.len < in.len) return 0;
+    if (in.len == 0UL) return 1;
+    unsafe { dft_real_n_((const &double)in.ptr, (&Complex)out.ptr, in.len); }
+    return 1;
+}
+
+int idft([]const Complex in, []Complex out) {
+    if (out.len < in.len) return 0;
+    if (in.len == 0UL) return 1;
+    unsafe { idft_n_((const &Complex)in.ptr, (&Complex)out.ptr, in.len); }
+    return 1;
+}
+
+int dft_f32([]const Complex32 in, []Complex32 out) {
+    if (out.len < in.len) return 0;
+    if (in.len == 0UL) return 1;
+    unsafe { dft_f32_n_((const &Complex32)in.ptr, (&Complex32)out.ptr, in.len); }
+    return 1;
+}
+
+int dft_real_f32([]const float in, []Complex32 out) {
+    if (out.len < in.len) return 0;
+    if (in.len == 0UL) return 1;
+    unsafe { dft_real_f32_n_((const &float)in.ptr, (&Complex32)out.ptr, in.len); }
+    return 1;
+}
+
+int idft_f32([]const Complex32 in, []Complex32 out) {
+    if (out.len < in.len) return 0;
+    if (in.len == 0UL) return 1;
+    unsafe { idft_f32_n_((const &Complex32)in.ptr, (&Complex32)out.ptr, in.len); }
+    return 1;
+}
+
+int fdft([]const FComplex in, []FComplex out) {
+    if (out.len < in.len) return 0;
+    if (in.len == 0UL) return 1;
+    unsafe { fdft_n_((const &FComplex)in.ptr, (&FComplex)out.ptr, in.len); }
+    return 1;
+}
+
+int fidft([]const FComplex in, []FComplex out) {
+    if (out.len < in.len) return 0;
+    if (in.len == 0UL) return 1;
+    unsafe { fidft_n_((const &FComplex)in.ptr, (&FComplex)out.ptr, in.len); }
+    return 1;
 }
 
 } // namespace std

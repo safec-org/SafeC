@@ -45,11 +45,17 @@ struct RocmBuf {
     void free();   // dev := 0
 
     static struct RocmBuf alloc(unsigned long n);   // uninitialized; dev == 0 on failure
-    static struct RocmBuf upload(const &float host, unsigned long n);   // dev == 0 on failure
+    static struct RocmBuf upload([]const float host);
+    // internal: the (reference, length) core of upload()
+    static struct RocmBuf upload_n_(const &float host, unsigned long n);   // dev == 0 on failure
 };
 
-int  rocm_write(struct RocmBuf dst, const &float host, unsigned long n);  // 1 on success
-int  rocm_read(struct RocmBuf src, &float host, unsigned long n);         // waits for queued work
+int  rocm_write(struct RocmBuf dst, []const float host);
+// internal: the (reference, length) core of rocm_write()
+int  rocm_write_n_(struct RocmBuf dst, const &float host, unsigned long n);  // 1 on success
+int  rocm_read(struct RocmBuf src, []float host);
+// internal: the (reference, length) core of rocm_read()
+int  rocm_read_n_(struct RocmBuf src, &float host, unsigned long n);         // waits for queued work
 int  rocm_sync();                                                 // wait for all queued work
 
 // ── Queued device ops (1 = enqueued, 0 = invalid buffer/size or no GPU) ─────
@@ -121,11 +127,17 @@ struct RocmHalfBuf {
     void free();
 
     static struct RocmHalfBuf alloc(unsigned long n, int dtype);   // uninitialized
-    static struct RocmHalfBuf upload(const &float host, unsigned long n, int dtype);   // rounded on the GPU
+    static struct RocmHalfBuf upload([]const float host, int dtype);
+    // internal: the (reference, length) core of upload()
+    static struct RocmHalfBuf upload_n_(const &float host, unsigned long n, int dtype);   // rounded on the GPU
 };
 
-int  rocm_half_write(struct RocmHalfBuf dst, const &unsigned short bits, unsigned long n);  // raw bits
-int  rocm_half_read(struct RocmHalfBuf src, &unsigned short bits, unsigned long n);         // waits
+int  rocm_half_write(struct RocmHalfBuf dst, []const unsigned short bits);
+// internal: the (reference, length) core of rocm_half_write()
+int  rocm_half_write_n_(struct RocmHalfBuf dst, const &unsigned short bits, unsigned long n);  // raw bits
+int  rocm_half_read(struct RocmHalfBuf src, []unsigned short bits);
+// internal: the (reference, length) core of rocm_half_read()
+int  rocm_half_read_n_(struct RocmHalfBuf src, &unsigned short bits, unsigned long n);         // waits
 
 // Queued conversions over dst.len elements.
 int rocm_to_half(struct RocmBuf src, struct RocmHalfBuf dst);     // round to dst.dtype
@@ -235,7 +247,10 @@ int  rocm_graph_launch(struct RocmGraph g);   // queued like any other op
 // The hipStream_t every op above is queued on (MIOpen and hipFFT queue their
 // work on it too); null if there is no GPU. Work another library queues on
 // it is ordered with this backend's ops and recorded by graph capture.
-?&void rocm_stream_handle();
+// Opaque: never constructed, only passed back to HIP / MIOpen / hipFFT
+// (a ?&RocmNativeStream converts to their C 'void*' parameters).
+struct RocmNativeStream { char opaque_; };   // hipStream_t
+?&RocmNativeStream rocm_stream_handle();
 
 // ── Attention ────────────────────────────────────────────────────────────────
 // fp32, batched over heads: q and out are [heads][seqLen][headDim], k and v
@@ -275,17 +290,39 @@ int rocm_attention_use_mfma(int on);
 // ── Host-array convenience ops (upload → compute → read back) ────────────────
 // 1 on success, 0 on failure (no GPU, allocation failure).
 
-int rocm_add_f32(const &float a, const &float b, &float out, unsigned long n);
-int rocm_sub_f32(const &float a, const &float b, &float out, unsigned long n);
-int rocm_mul_f32(const &float a, const &float b, &float out, unsigned long n);
-int rocm_div_f32(const &float a, const &float b, &float out, unsigned long n);
-int rocm_pow_f32(const &float a, const &float b, &float out, unsigned long n);
-int rocm_relu_f32(const &float a, &float out, unsigned long n);
-int rocm_log_f32(const &float a, &float out, unsigned long n);
-int rocm_exp_f32(const &float a, &float out, unsigned long n);
-int rocm_sqrt_f32(const &float a, &float out, unsigned long n);
-int rocm_scale_f32(const &float a, float k, &float out, unsigned long n);
-int rocm_sum_f32(const &float a, &float out1, unsigned long n);
+int rocm_add_f32([]const float a, []const float b, []float out);
+// internal: the (reference, length) core of rocm_add_f32()
+int rocm_add_f32_n_(const &float a, const &float b, &float out, unsigned long n);
+int rocm_sub_f32([]const float a, []const float b, []float out);
+// internal: the (reference, length) core of rocm_sub_f32()
+int rocm_sub_f32_n_(const &float a, const &float b, &float out, unsigned long n);
+int rocm_mul_f32([]const float a, []const float b, []float out);
+// internal: the (reference, length) core of rocm_mul_f32()
+int rocm_mul_f32_n_(const &float a, const &float b, &float out, unsigned long n);
+int rocm_div_f32([]const float a, []const float b, []float out);
+// internal: the (reference, length) core of rocm_div_f32()
+int rocm_div_f32_n_(const &float a, const &float b, &float out, unsigned long n);
+int rocm_pow_f32([]const float a, []const float b, []float out);
+// internal: the (reference, length) core of rocm_pow_f32()
+int rocm_pow_f32_n_(const &float a, const &float b, &float out, unsigned long n);
+int rocm_relu_f32([]const float a, []float out);
+// internal: the (reference, length) core of rocm_relu_f32()
+int rocm_relu_f32_n_(const &float a, &float out, unsigned long n);
+int rocm_log_f32([]const float a, []float out);
+// internal: the (reference, length) core of rocm_log_f32()
+int rocm_log_f32_n_(const &float a, &float out, unsigned long n);
+int rocm_exp_f32([]const float a, []float out);
+// internal: the (reference, length) core of rocm_exp_f32()
+int rocm_exp_f32_n_(const &float a, &float out, unsigned long n);
+int rocm_sqrt_f32([]const float a, []float out);
+// internal: the (reference, length) core of rocm_sqrt_f32()
+int rocm_sqrt_f32_n_(const &float a, &float out, unsigned long n);
+int rocm_scale_f32([]const float a, float k, []float out);
+// internal: the (reference, length) core of rocm_scale_f32()
+int rocm_scale_f32_n_(const &float a, float k, &float out, unsigned long n);
+int rocm_sum_f32([]const float a, &float out1);
+// internal: the (reference, length) core of rocm_sum_f32()
+int rocm_sum_f32_n_(const &float a, &float out1, unsigned long n);
 // The attention ops above on host arrays (same layouts).
 int rocm_flash_attention_f32(const &float q, const &float k, const &float v, &float out,
                              unsigned long heads, unsigned long seqLen, unsigned long kvLen,
@@ -297,10 +334,14 @@ int rocm_linear_attention_f32(const &float q, const &float k, const &float v, &f
 // out[M,N] = a[M,K] * b[K,N] with this library's own tiled HIP kernel
 // (64x64 tiles in LDS, 4x4 per thread). Kept as a dependency-free
 // reference; rocm_matmul_f32_blas is several times faster at every size.
-int rocm_matmul_f32(const &float a, const &float b, &float out,
+int rocm_matmul_f32([]const float a, []const float b, []float out, unsigned long M, unsigned long K, unsigned long N);
+// internal: the (reference, length) core of rocm_matmul_f32()
+int rocm_matmul_f32_n_(const &float a, const &float b, &float out,
                     unsigned long M, unsigned long K, unsigned long N);
 // Same product through rocBLAS.
-int rocm_matmul_f32_blas(const &float a, const &float b, &float out,
+int rocm_matmul_f32_blas([]const float a, []const float b, []float out, unsigned long M, unsigned long K, unsigned long N);
+// internal: the (reference, length) core of rocm_matmul_f32_blas()
+int rocm_matmul_f32_blas_n_(const &float a, const &float b, &float out,
                          unsigned long M, unsigned long K, unsigned long N);
 
 } // namespace std

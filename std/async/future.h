@@ -40,6 +40,7 @@
 // that produce nothing return struct Poll<Unit> (Unit is an int; pass
 // UNIT).
 #pragma once
+#include <std/erased.h>
 #include <std/sync/spinlock.h>
 #include <std/ownership.h>
 #include <std/panic.h>
@@ -90,8 +91,9 @@ struct Poll {
 // ── Waker ──────────────────────────────────────────────────────────────────
 // A handle that tells an executor "poll the task this belongs to again".
 // It is a type-erased (data, functions) pair, like Rust's RawWaker and its
-// vtable, made only through the generic constructors below, which take a
-// matching fn(?&T, ...) and ?&T so every erased call is well-typed:
+// vtable (see std/erased.h), made only through the generic constructors
+// below, which take a matching fn(?&T, ...) and ?&T so every erased call is
+// well-typed:
 //
 //   wake      (data, tag): schedule the task. Called by wake/wake_by_ref.
 //   clone, drop (data, tag): a copy of this waker was made / let go of —
@@ -104,11 +106,11 @@ struct Poll {
 // hook) and release them with drop(). wake() consumes the waker,
 // wake_by_ref() doesn't.
 struct Waker {
-    void*         data_;    // ?&T
-    void*         wake_;    // fn void(?&T, unsigned long)
-    void*         clone_;   // fn void(?&T, unsigned long), or null
-    void*         drop_;    // fn void(?&T, unsigned long), or null
-    unsigned long tag_;     // passed back to the functions (a slot, a generation, ...)
+    ?&Erased                               data_;    // the ?&T
+    ?fn void(?&Erased, unsigned long)      wake_;    // wake(T), null once dropped
+    ?fn void(?&Erased, unsigned long)      clone_;   // or null
+    ?fn void(?&Erased, unsigned long)      drop_;    // or null
+    unsigned long                          tag_;     // passed back to the functions (a slot, a generation, ...)
 
     // A waker calling wake(data, tag); copies need no bookkeeping.
     generic<T> static struct Waker new(fn void(?&T, unsigned long) wake, ?&T data, unsigned long tag);
@@ -121,8 +123,8 @@ struct Waker {
     // A waker that does nothing (Rust's Waker::noop): for polling a future
     // by hand, in tests, or where nobody needs to be told.
     static struct Waker noop();
-    // Type-erased constructor behind new/counted.
-    static struct Waker raw_(void* wake, void* clone, void* drop, void* data, unsigned long tag);
+    // A waker that wakes nothing, with no hooks: an empty WakerSlot's.
+    static struct Waker empty_();
 
     void wake() consume;                 // wake_by_ref(), then drop()
     void wake_by_ref() const;
@@ -136,7 +138,13 @@ struct Waker {
 
 generic<T>
 struct Waker Waker::new(fn void(?&T, unsigned long) wake, ?&T data, unsigned long tag) {
-    unsafe { return Waker::raw_((void*)wake, (void*)0, (void*)0, (void*)data, tag); }
+    struct Waker w = Waker::empty_();
+    unsafe {
+        w.wake_ = (?fn void(?&Erased, unsigned long))wake;
+        w.data_ = (?&Erased)data;
+    }
+    w.tag_ = tag;
+    return w;
 }
 
 generic<T>
@@ -144,7 +152,12 @@ struct Waker Waker::counted(fn void(?&T, unsigned long) wake,
                             fn void(?&T, unsigned long) clone,
                             fn void(?&T, unsigned long) drop,
                             ?&T data, unsigned long tag) {
-    unsafe { return Waker::raw_((void*)wake, (void*)clone, (void*)drop, (void*)data, tag); }
+    struct Waker w = Waker::new(wake, data, tag);
+    unsafe {
+        w.clone_ = (?fn void(?&Erased, unsigned long))clone;
+        w.drop_  = (?fn void(?&Erased, unsigned long))drop;
+    }
+    return w;
 }
 
 // ── WakerSlot ──────────────────────────────────────────────────────────────
@@ -233,7 +246,10 @@ struct TimerQueue {
 
     // Internal, with 'lock' held: register cb(ctx) for 'deadline_ms'
     // (0 = the wheel is full, or the deadline has passed), and cancel one.
-    int       add_locked_(long long deadline_ms, void* cb, void* ctx);
+    generic<T> int add_locked_(long long deadline_ms, fn void(?&T) cb, ?&T ctx);
+    // The wheel tick for 'deadline_ms' (setting the origin on first use);
+    // 0 if the deadline has passed.
+    unsigned long tick_for_locked_(long long deadline_ms);
     void      cancel_locked_(int id);
     // Internal, with 'lock' held: wait in 'overflow' for a free slot (0 =
     // that is full too), and leave it.
@@ -253,14 +269,16 @@ struct TimerQueue {
 //           has none (Context::from_waker), and then sleeping is an error.
 //   io_     the executor's I/O driver (std/async/net.h's IoDriver), or
 //           null: the futures there read it through io_driver(cx).
-//   exec_, spawn_  the executor, and its type-erased spawn: what
-//           Context::spawn uses to start another task from inside a task.
+//   exec_, spawn_  the executor, and its spawn function (see
+//           std/erased.h): what async_spawn uses to start another task
+//           from inside a task. Set by the executor through
+//           context_set_spawn_ (std/async/executor.h).
 struct Context {
-    struct Waker      waker;
-    ?&TimerQueue      timers;
-    void*             io_;
-    void*             exec_;
-    void*             spawn_;    // fn int(void* exec, ?&TaskHeader task)
+    struct Waker                         waker;
+    ?&TimerQueue                         timers;
+    ?&struct IoDriver                    io_;     // std/async/net.h
+    ?&Erased                             exec_;
+    ?fn int(?&Erased, ?&struct TaskHeader) spawn_; // TaskHeader: std/async/executor.h
 
     // A context with only a waker: no timers, no I/O, no spawning.
     static struct Context from_waker(struct Waker w);
@@ -323,6 +341,13 @@ generic<T> T Poll::unwrap() {
     return self.value;
 }
 generic<T> void Poll::drop() { if (self.ready_ != 0) drop(self.value); }
+
+generic<T>
+int TimerQueue::add_locked_(long long deadline_ms, fn void(?&T) cb, ?&T ctx) {
+    unsigned long tick = self.tick_for_locked_(deadline_ms);
+    if (tick == 0UL) return 0;
+    return self.wheel.add(tick, cb, ctx);
+}
 
 generic<T> struct Ready<T> Ready::new(T v) { struct Ready<T> r; r.value = v; r.done = 0; return r; }
 generic<T> struct Poll<T> Ready::poll(&Context cx) { self.done = 1; return Poll::ready(self.value); }

@@ -14,12 +14,12 @@ namespace std {
 // The shared core (resample_core.h) on double samples; resample_f32.sc
 // builds it on float samples.
 #define RS_T        double
-#define RS_NEAREST  resample_nearest
-#define RS_LINEAR   resample_linear
-#define RS_SINC     resample_sinc
+#define RS_NEAREST  resample_nearest_n_
+#define RS_LINEAR   resample_linear_n_
+#define RS_SINC     resample_sinc_n_
 #include <std/dsp/resample_core.h>
 
-void fresample_nearest(const &Fixed in, unsigned long inLen, &Fixed out, unsigned long outLen) {
+void fresample_nearest_n_(const &Fixed in, unsigned long inLen, &Fixed out, unsigned long outLen) {
     if (inLen == 0UL || outLen == 0UL) { return; }
     double scale = (double)inLen / (double)outLen;
     unsigned long i = 0UL;
@@ -36,7 +36,7 @@ void fresample_nearest(const &Fixed in, unsigned long inLen, &Fixed out, unsigne
     }
 }
 
-void fresample_linear(const &Fixed in, unsigned long inLen, &Fixed out, unsigned long outLen) {
+void fresample_linear_n_(const &Fixed in, unsigned long inLen, &Fixed out, unsigned long outLen) {
     if (inLen == 0UL || outLen == 0UL) { return; }
     if (inLen == 1UL) {
         Fixed v;
@@ -71,6 +71,34 @@ void fresample_linear(const &Fixed in, unsigned long inLen, &Fixed out, unsigned
         unsafe { out[i] = interp; }
         i = i + 1UL;
     }
+}
+
+// ── Slice API (the public signatures; the (reference, length) cores above
+// are the *_n_ functions) ─────────────────────────────────────────────────────
+
+void resample_nearest([]const double in, []double out) {
+    if (in.len == 0UL || out.len == 0UL) return;
+    unsafe { resample_nearest_n_((const &double)in.ptr, in.len, (&double)out.ptr, out.len); }
+}
+
+void resample_linear([]const double in, []double out) {
+    if (in.len == 0UL || out.len == 0UL) return;
+    unsafe { resample_linear_n_((const &double)in.ptr, in.len, (&double)out.ptr, out.len); }
+}
+
+void resample_sinc([]const double in, []double out, unsigned long kernelHalfWidth) {
+    if (in.len == 0UL || out.len == 0UL) return;
+    unsafe { resample_sinc_n_((const &double)in.ptr, in.len, (&double)out.ptr, out.len, kernelHalfWidth); }
+}
+
+void fresample_nearest([]const Fixed in, []Fixed out) {
+    if (in.len == 0UL || out.len == 0UL) return;
+    unsafe { fresample_nearest_n_((const &Fixed)in.ptr, in.len, (&Fixed)out.ptr, out.len); }
+}
+
+void fresample_linear([]const Fixed in, []Fixed out) {
+    if (in.len == 0UL || out.len == 0UL) return;
+    unsafe { fresample_linear_n_((const &Fixed)in.ptr, in.len, (&Fixed)out.ptr, out.len); }
 }
 
 } // namespace std

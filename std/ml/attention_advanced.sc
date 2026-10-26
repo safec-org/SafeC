@@ -121,7 +121,7 @@ void EgMla::drop() {
 
 // ── Shifted-window attention ─────────────────────────────────────────────────
 static &FloatTensor __row_slice(&FloatTensor in, unsigned long startRow, unsigned long numRows) {
-    unsafe { tensor_host_write_((void*)in); }
+    unsafe { tensor_host_write_raw_((void*)in); }
     unsigned long cols;
     unsafe { cols = in->shape[1]; }
     &FloatTensor out = FloatTensor::new_2d(numRows, cols, 0);
@@ -140,7 +140,7 @@ static &FloatTensor __row_slice(&FloatTensor in, unsigned long startRow, unsigne
 }
 
 static void __row_set(&FloatTensor dst, unsigned long startRow, &FloatTensor src) {
-    unsafe { tensor_host_write_((void*)dst); tensor_host_write_((void*)src); }
+    unsafe { tensor_host_write_raw_((void*)dst); tensor_host_write_raw_((void*)src); }
     unsigned long cols; unsigned long numRows;
     unsafe { cols = dst->shape[1]; numRows = src->shape[0]; }
     unsafe {
@@ -157,7 +157,7 @@ static void __row_set(&FloatTensor dst, unsigned long startRow, &FloatTensor src
 }
 
 static &FloatTensor __row_cyclic_shift(&FloatTensor in, unsigned long shift) {
-    unsafe { tensor_host_write_((void*)in); }
+    unsafe { tensor_host_write_raw_((void*)in); }
     unsigned long rows; unsigned long cols;
     unsafe { rows = in->shape[0]; cols = in->shape[1]; }
     &FloatTensor out = FloatTensor::new_2d(rows, cols, 0);
@@ -178,7 +178,7 @@ static &FloatTensor __row_cyclic_shift(&FloatTensor in, unsigned long shift) {
 
 &FloatTensor windowed_attention_forward(const &FloatTensor Q, const &FloatTensor K, const &FloatTensor V,
                                     unsigned long windowSize, unsigned long shift) {
-    unsafe { tensor_host_((void*)Q); }
+    unsafe { tensor_host_raw_((void*)Q); }
     unsigned long seqLen; unsigned long dim;
     unsafe { seqLen = Q->shape[0]; dim = Q->shape[1]; }
 
@@ -253,7 +253,7 @@ void GatedDeltaNet::drop() {
 }
 
 &FloatTensor GatedDeltaNet::forward(const &FloatTensor X, const &FloatTensor Q, const &FloatTensor K, const &FloatTensor V) const {
-    unsafe { tensor_host_((void*)X); tensor_host_((void*)Q); tensor_host_((void*)K); tensor_host_((void*)V); }
+    unsafe { tensor_host_raw_((void*)X); tensor_host_raw_((void*)Q); tensor_host_raw_((void*)K); tensor_host_raw_((void*)V); }
     unsigned long seqLen; unsigned long dModel;
     unsigned long keyDim; unsigned long valueDim;
     unsafe {

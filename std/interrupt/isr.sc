@@ -9,7 +9,7 @@ inline struct IsrTable IsrTable::new() {
     t.count = 0;
     int i = 0;
     while (i < ISR_MAX) {
-        t.handlers[i] = (void*)0;
+        t.handlers[i] = null;
         i = i + 1;
     }
     return t;
@@ -18,15 +18,15 @@ inline struct IsrTable IsrTable::new() {
 inline int IsrTable::register_(int irq, fn void() handler) {
     if (irq < 0 || irq >= ISR_MAX) { return 0; }
     // Re-registering an IRQ replaces its handler; count only new slots.
-    if (self.handlers[irq] == (void*)0) { self.count = self.count + 1; }
-    unsafe { self.handlers[irq] = (void*)handler; }
+    if (self.handlers[irq].is_null()) { self.count = self.count + 1; }
+    self.handlers[irq] = handler;
     return 1;
 }
 
 inline void IsrTable::unregister_(int irq) {
     if (irq >= 0 && irq < ISR_MAX) {
-        if (self.handlers[irq] != (void*)0) {
-            self.handlers[irq] = (void*)0;
+        if (!self.handlers[irq].is_null()) {
+            self.handlers[irq] = null;
             self.count = self.count - 1;
         }
     }
@@ -34,12 +34,11 @@ inline void IsrTable::unregister_(int irq) {
 
 inline int IsrTable::dispatch(int irq) {
     if (irq < 0 || irq >= ISR_MAX) { return 0; }
-    if (self.handlers[irq] == (void*)0) { return 0; }
-    unsafe {
-        fn void(void) handler = (fn void(void))self.handlers[irq];
-        handler();
+    match (self.handlers[irq]) {
+        case some(handler): { handler(); return 1; }
+        case null: return 0;
     }
-    return 1;
+    return 0;
 }
 
 // Masks/unmasks IRQs at the CPU on bare metal (privileged code). A hosted

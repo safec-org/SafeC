@@ -39,7 +39,7 @@ static void __cast_backward(void* selfPtr) {
 }
 
 &FloatTensor FloatTensor::cast(int dtype) const {
-    unsafe { tensor_host_((void*)self); }
+    unsafe { tensor_host_raw_((void*)self); }
     &FloatTensor out = __tensor_alloc_uninit_like(self);
     unsafe {
         unsigned long i = 0UL;
@@ -75,7 +75,7 @@ static int __is_finite(float x) {
 }
 
 int LossScaler::unscale(&FloatTensor p) {
-    unsafe { tensor_host_write_((void*)p); }
+    unsafe { tensor_host_write_raw_((void*)p); }
     int finite = 1;
     unsafe {
         if (p->grad == (float*)0) return 1;
@@ -513,17 +513,33 @@ static int half_gemv_batch_(const unsigned short* w, const &unsigned long shape,
     return 1;
 }
 
-int HalfTensor::gemv_batch(const &float x, unsigned long m, &float y) const {
-    unsafe { tensor_host_((void*)self); }
+int HalfTensor::gemv_batch_n_(const &float x, unsigned long m, &float y) const {
+    unsafe { tensor_host_raw_((void*)self); }
     unsafe { return half_gemv_batch_((const unsigned short*)self.data, (const &unsigned long)self.shape, self.ndim, 0, x, m, y); }
 }
 
-int BF16Tensor::gemv_batch(const &float x, unsigned long m, &float y) const {
-    unsafe { tensor_host_((void*)self); }
+int BF16Tensor::gemv_batch_n_(const &float x, unsigned long m, &float y) const {
+    unsafe { tensor_host_raw_((void*)self); }
     unsafe { return half_gemv_batch_((const unsigned short*)self.data, (const &unsigned long)self.shape, self.ndim, 1, x, m, y); }
 }
 
-int HalfTensor::gemv(const &float x, &float y) const { return self.gemv_batch(x, 1UL, y); }
-int BF16Tensor::gemv(const &float x, &float y) const { return self.gemv_batch(x, 1UL, y); }
+int HalfTensor::gemv_batch([]const float x, unsigned long m, []float y) const {
+    if (self.ndim != 2UL || m == 0UL) { return 0; }
+    unsigned long n;
+    unsigned long k;
+    unsafe { n = self.shape[0]; k = self.shape[1]; }
+    if (x.len < m * k || y.len < m * n) { return 0; }
+    unsafe { return self.gemv_batch_n_((const &float)x.ptr, m, (&float)y.ptr); }
+}
+int HalfTensor::gemv([]const float x, []float y) const { return self.gemv_batch(x, 1UL, y); }
+int BF16Tensor::gemv_batch([]const float x, unsigned long m, []float y) const {
+    if (self.ndim != 2UL || m == 0UL) { return 0; }
+    unsigned long n;
+    unsigned long k;
+    unsafe { n = self.shape[0]; k = self.shape[1]; }
+    if (x.len < m * k || y.len < m * n) { return 0; }
+    unsafe { return self.gemv_batch_n_((const &float)x.ptr, m, (&float)y.ptr); }
+}
+int BF16Tensor::gemv([]const float x, []float y) const { return self.gemv_batch(x, 1UL, y); }
 
 } // namespace std

@@ -46,10 +46,10 @@ int GuiImage::load_png_file(const &char path) {
             unsigned char* buf;
             unsafe { buf = (unsigned char*)alloc_raw_((unsigned long)n); }
             int ok;
-            unsafe { ok = read_exact(f, (&unsigned char)buf, (unsigned long)n); }
+            unsafe { ok = read_exact(f, ((unsigned char*)buf)[0..(unsigned long)n]); }
             f.close();
             int r = 0;
-            if (ok) { unsafe { r = self.load_png((const unsigned char*)buf, (unsigned long)n); } }
+            if (ok) { unsafe { r = self.load_png_n_((const unsigned char*)buf, (unsigned long)n); } }
             unsafe { dealloc_raw_((void*)buf); }
             return r;
         }
@@ -109,9 +109,9 @@ static int __gui_png_chunk(&File f, const char* type, const unsigned char* data,
     __gui_be32(&tail[0], crc);
     int ok = 1;
     unsafe {
-        if (write_all(f, (const &unsigned char)&head[0], 8UL) == 0) { ok = 0; }
-        if (n > 0UL && write_all(f, (const &unsigned char)data, n) == 0) { ok = 0; }
-        if (write_all(f, (const &unsigned char)&tail[0], 4UL) == 0) { ok = 0; }
+        if (write_all(f, head[0..8UL]) == 0) { ok = 0; }
+        if (n > 0UL && write_all(f, ((const unsigned char*)data)[0..n]) == 0) { ok = 0; }
+        if (write_all(f, tail[0..4UL]) == 0) { ok = 0; }
     }
     return ok;
 }
@@ -202,7 +202,7 @@ int GuiImage::save_png(const &char path) const {
             ihdr[10] = (unsigned char)0; ihdr[11] = (unsigned char)0; ihdr[12] = (unsigned char)0;
             ok = 1;
             unsafe {
-                if (write_all(f, (const &unsigned char)&sig[0], 8UL) == 0) { ok = 0; }
+                if (write_all(f, sig[0..8UL]) == 0) { ok = 0; }
             }
             if (!__gui_png_chunk(f, "IHDR", &ihdr[0], 13UL)) { ok = 0; }
             if (!__gui_png_chunk(f, "IDAT", z, o)) { ok = 0; }

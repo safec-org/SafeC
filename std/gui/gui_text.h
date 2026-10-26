@@ -111,8 +111,12 @@ struct GuiTypeface {
     int  load_file_index(const &char path, int index);
     // 'flags': GUI_FONT_COPY to keep a copy (otherwise 'bytes' must outlive
     // the face), GUI_FONT_ALLOW_NO_OUTLINES.
-    int  load_memory(const &unsigned char bytes, unsigned long size, int flags);
-    int  load_memory_index(const &unsigned char bytes, unsigned long size, int index, int flags);
+    int  load_memory([]const unsigned char bytes, int flags);
+    // internal: the (reference, length) core of load_memory()
+    int  load_memory_n_(const &unsigned char bytes, unsigned long size, int flags);
+    int  load_memory_index([]const unsigned char bytes, int index, int flags);
+    // internal: the (reference, length) core of load_memory_index()
+    int  load_memory_index_n_(const &unsigned char bytes, unsigned long size, int index, int flags);
 
     // The built-in fallback face (process lifetime; never free it).
     static &GuiTypeface fallback();
@@ -144,7 +148,9 @@ struct GuiTypeface {
     // Width in pixels of one line of UTF-8 text at 'size' (kerning applied,
     // glyphs this face lacks measured from the fallback face).
     float measure(const &char text, float size) const;
-    float measure_n(const &char text, unsigned long len, float size) const;
+    float measure_n([]const char text, float size) const;
+    // internal: the (reference, length) core of measure_n()
+    float measure_n_n_(const &char text, unsigned long len, float size) const;
 
     // ── the glyph cache (used by GuiCanvas; rarely needed directly) ──────
     ?&GuiGlyphBitmap cache_find(int glyph, int sizeKey, int subpixel) const;
@@ -199,7 +205,9 @@ struct GuiTextLayout {
     // (Re)builds the layout of text[0..len) — 'len' may be (unsigned
     // long)-1 for a NUL-terminated string. maxWidth <= 0: no wrapping.
     // align: GUI_TEXT_LEFT/CENTER/RIGHT within maxWidth (or the widest line).
-    void  build(const &GuiTypeface face, float size, const &char text, unsigned long len,
+    void  build(const &GuiTypeface face, float size, []const char text, float maxWidth, int align);
+    // internal: the (reference, length) core of build()
+    void  build_n_(const &GuiTypeface face, float size, const &char text, unsigned long len,
                 float maxWidth, int align);
     // The byte offset whose caret position is nearest (x, y) (layout
     // coordinates).

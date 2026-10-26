@@ -75,7 +75,8 @@ static ?&int run_http(?&int arg) {
     return null;
 }
 
-static struct RpcResult rpc_upper(const &unsigned char data, unsigned long len) {
+static struct RpcResult rpc_upper([]const unsigned char data) {
+    unsigned long len = data.len;
     struct RpcResult r;
     unsafe {
         ?&heap unsigned char out = (?&heap unsigned char)alloc(len);
@@ -135,7 +136,7 @@ static ?&int run_ws(?&int arg) {
         while (c.recv(&m) == 1) {
             if (m.opcode == WS_OPCODE_TEXT) {
                 struct String echo = String::from("echo:");
-                echo.push_n((const char*)m.data, m.len);
+                echo.push_bytes(((const char*)m.data)[0..m.len]);
                 c.send_text(echo.as_ptr());
                 echo.free();
             } else if (m.opcode == WS_OPCODE_PING) {
@@ -193,8 +194,7 @@ void t_http_roundtrip() {
         r.free();
 
         const &char body = "posted payload";
-        r = http_post("127.0.0.1", g_http_port, "/echo", "text/plain",
-                      (const unsigned char*)body, str_len(body), &ok);
+        r = http_post("127.0.0.1", g_http_port, "/echo", "text/plain", str_bytes(body), &ok);
         ASSERT_TRUE(ok);
         ASSERT_STR_EQ(r.body.as_ptr(), "posted payload");
         r.free();
@@ -202,8 +202,7 @@ void t_http_roundtrip() {
         // A body many reads long, both ways (server and client read it
         // after the header block through a BufReader<TcpStream>).
         struct String large = String::repeat_str("0123456789abcdef", 6250UL);   // 100000 bytes
-        r = http_post("127.0.0.1", g_http_port, "/echo", "text/plain",
-                      (const unsigned char*)large.as_ptr(), large.length(), &ok);
+        r = http_post("127.0.0.1", g_http_port, "/echo", "text/plain", large.as_bytes(), &ok);
         ASSERT_TRUE(ok);
         ASSERT_EQ(r.body.length(), 100000);
         ASSERT_TRUE(r.body.eq_cstr(large.as_ptr()));
@@ -223,7 +222,7 @@ void t_http_roundtrip() {
         r.free();
 
         ASSERT_STR_EQ(http_reason_phrase(404), "Not Found");
-        struct String raw = http_build_response(200, "text/plain", (const unsigned char*)"hi", 2UL);
+        struct String raw = http_build_response(200, "text/plain", str_bytes("hi"));
         ASSERT_TRUE(raw.starts_with("HTTP/1.1 200"));
         ASSERT_TRUE(raw.ends_with("\r\n\r\nhi"));
         raw.free();
@@ -248,9 +247,9 @@ void t_tcp_stream() {
         if (fd < 0) return;
         struct TcpStream s = TcpStream::from_fd(fd);
         const &char req = "POST /echo HTTP/1.1\r\nHost: x\r\nContent-Length: 5\r\nConnection: close\r\n\r\nhello";
-        ASSERT_EQ(write_all(&s, (const &unsigned char)req, str_len(req)), 1);
+        ASSERT_EQ(write_all(&s, str_bytes(req)), 1);
         unsigned char status[12];
-        ASSERT_EQ(read_exact(&s, &status[0], 12UL), 1);
+        ASSERT_EQ(read_exact(&s, status[0..12UL]), 1);
         ASSERT_EQ(status[9], '2');
         ASSERT_EQ(status[11], '0');
         struct Pipe p;
@@ -260,7 +259,7 @@ void t_tcp_stream() {
         ASSERT_EQ(s.close(), 0);
         p.close_write();
         unsigned char tail[4096];
-        long long n = p.read(&tail[0], 4096UL);
+        long long n = p.read(tail[0..4096UL]);
         ASSERT_EQ(n, rest);
         if (n >= 5LL) { ASSERT_EQ(tail[n - 1LL], 'o'); }   // body "hello" last
         p.close_read();
@@ -283,8 +282,8 @@ int buffered_exchange(&S s, const &char path, const &char payload, &String body)
     hdr.push("\r\n\r\n");
     int ok = 1;
     unsafe {
-        ok = write_all(&out, (const &unsigned char)hdr.as_ptr(), hdr.length())
-          && write_all(&out, (const &unsigned char)payload, str_len(payload))
+        ok = write_all(&out, hdr.as_bytes())
+          && write_all(&out, str_bytes(payload))
           && out.flush() == 0;
     }
     hdr.free();
@@ -302,10 +301,10 @@ int buffered_exchange(&S s, const &char path, const &char payload, &String body)
         unsigned long n = (unsigned long)cl.parse_int(&pok);
         cl.free();
         unsigned char buf[256];
-        if (n > 256UL || !read_exact(&in, &buf[0], n)) {
+        if (n > 256UL || !read_exact(&in, buf[0..n])) {
             status = 0;
         } else {
-            unsafe { body.push_n((const &char)(const char*)&buf[0], n); }
+            body.push_bytes(buf[0..n]);
         }
     }
     head.free();
@@ -402,7 +401,7 @@ void t_rpc() {
         struct RpcResult r;
         int tries = 0;
         while (1) {
-            r = rpc_call("127.0.0.1", g_rpc_port, "/upper", (const unsigned char*)"hello rpc", 9UL);
+            r = rpc_call("127.0.0.1", g_rpc_port, "/upper", str_bytes("hello rpc"));
             if (r.ok || tries >= 50) break;
             r.free();
             thread_sleep_ms(20UL);
@@ -410,6 +409,8 @@ void t_rpc() {
         }
         ASSERT_TRUE(r.ok);
         ASSERT_EQ(r.len, 9);
+        ASSERT_EQ(r.bytes().len, 9);
+        ASSERT_EQ(r.bytes()[1], 'E');
         match (r.data) {
             case null: { ASSERT_TRUE(0); }
             case some(d): {
@@ -418,7 +419,7 @@ void t_rpc() {
             }
         }
         r.free();
-        struct RpcResult miss = rpc_call("127.0.0.1", g_rpc_port, "/nope", (const unsigned char*)"x", 1UL);
+        struct RpcResult miss = rpc_call("127.0.0.1", g_rpc_port, "/nope", str_bytes("x"));
         ASSERT_FALSE(miss.ok);
         miss.free();
 
@@ -470,8 +471,8 @@ void t_ws_frame_with_handshake() {
         frame[0] = (unsigned char)0x81; frame[1] = (unsigned char)0x82;
         frame[2] = (unsigned char)0; frame[3] = (unsigned char)0; frame[4] = (unsigned char)0; frame[5] = (unsigned char)0;
         frame[6] = (unsigned char)'h'; frame[7] = (unsigned char)'i';
-        out.push_n((const char*)&frame[0], 8UL);
-        ASSERT_TRUE(write_all(&s, (const &unsigned char)out.as_ptr(), out.length()));
+        out.push_bytes(frame[0..8]);
+        ASSERT_TRUE(write_all(&s, out.as_bytes()));
         out.free();
 
         struct BufReader<TcpStream> in = BufReader::over(&s);
@@ -480,7 +481,7 @@ void t_ws_frame_with_handshake() {
         ASSERT_TRUE(head.index_of("101") >= 0L);
         head.free();
         unsigned char reply[9];   // unmasked text frame "echo:hi"
-        ASSERT_TRUE(read_exact(&in, &reply[0], 9UL));
+        ASSERT_TRUE(read_exact(&in, reply[0..9UL]));
         ASSERT_EQ(reply[0], (unsigned char)0x81);
         ASSERT_EQ(reply[1], (unsigned char)7);
         ASSERT_EQ(reply[2], (unsigned char)'e');
@@ -604,8 +605,7 @@ void t_connect_timeout() {
         if (lfd < 0) return;
 
         t0 = time_mono_ns();
-        struct HttpResponse r = http_request_timeout("127.0.0.1", silentPort, "GET", "/",
-                                                     null, null, 0UL, 2000, 300, &ok);
+        struct HttpResponse r = http_request_timeout("127.0.0.1", silentPort, "GET", "/", null, str_bytes(""), 2000, 300, &ok);
         ASSERT_FALSE(ok);
         ASSERT_TRUE(ms_since(t0) < 2000LL);
         r.free();
@@ -618,8 +618,7 @@ void t_connect_timeout() {
         close(lfd);
 
         // The same limits don't get in the way of a server that answers.
-        r = http_request_timeout("127.0.0.1", g_http_port, "GET", "/echo",
-                                 null, null, 0UL, 2000, 2000, &ok);
+        r = http_request_timeout("127.0.0.1", g_http_port, "GET", "/echo", null, str_bytes(""), 2000, 2000, &ok);
         ASSERT_TRUE(ok);
         ASSERT_EQ(r.status, 200);
         r.free();
@@ -656,9 +655,7 @@ void t_write_to_closed_peer() {
         int tries = 0;
         // Retry while the closer thread comes up (connect refused until then).
         while (1) {
-            struct HttpResponse r = http_request_timeout("127.0.0.1", g_closer_port, "POST", "/",
-                                                         null, (const unsigned char*)body.as_ptr(), n,
-                                                         2000, 2000, &ok);
+            struct HttpResponse r = http_request_timeout("127.0.0.1", g_closer_port, "POST", "/", null, ((const unsigned char*)body.as_ptr())[0..n], 2000, 2000, &ok);
             r.free();
             tries = tries + 1;
             if (tries >= 20) break;

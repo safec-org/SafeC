@@ -47,29 +47,53 @@ static int fmt_u64_(&char buf, unsigned long cap, unsigned long long v,
     }
 }
 
-inline int fmt_int(&char buf, unsigned long cap, long long v) {
+inline int fmt_int([]char buf_s, long long v) {
+    unsigned long cap = buf_s.len;
+    char buf_d_[1];
+    &char buf = &buf_d_[0];
+    if (cap > 0UL) { unsafe { buf = (&char)buf_s.ptr; } }
     // Negate in unsigned arithmetic so LLONG_MIN doesn't overflow.
     unsigned long long mag = v < 0LL ? 0ULL - (unsigned long long)v : (unsigned long long)v;
     return fmt_u64_(buf, cap, mag, 10u, 0, v < 0LL);
 }
 
-inline int fmt_uint(&char buf, unsigned long cap, unsigned long long v) {
+inline int fmt_uint([]char buf_s, unsigned long long v) {
+    unsigned long cap = buf_s.len;
+    char buf_d_[1];
+    &char buf = &buf_d_[0];
+    if (cap > 0UL) { unsafe { buf = (&char)buf_s.ptr; } }
     return fmt_u64_(buf, cap, v, 10u, 0, 0);
 }
 
-inline int fmt_hex(&char buf, unsigned long cap, unsigned long long v) {
+inline int fmt_hex([]char buf_s, unsigned long long v) {
+    unsigned long cap = buf_s.len;
+    char buf_d_[1];
+    &char buf = &buf_d_[0];
+    if (cap > 0UL) { unsafe { buf = (&char)buf_s.ptr; } }
     return fmt_u64_(buf, cap, v, 16u, 0, 0);
 }
 
-inline int fmt_hex_upper(&char buf, unsigned long cap, unsigned long long v) {
+inline int fmt_hex_upper([]char buf_s, unsigned long long v) {
+    unsigned long cap = buf_s.len;
+    char buf_d_[1];
+    &char buf = &buf_d_[0];
+    if (cap > 0UL) { unsafe { buf = (&char)buf_s.ptr; } }
     return fmt_u64_(buf, cap, v, 16u, 1, 0);
 }
 
-inline int fmt_bool(&char buf, unsigned long cap, int v) {
+inline int fmt_bool([]char buf_s, int v) {
+    unsigned long cap = buf_s.len;
+    char buf_d_[1];
+    &char buf = &buf_d_[0];
+    if (cap > 0UL) { unsafe { buf = (&char)buf_s.ptr; } }
     return v ? fmt_emit_(buf, cap, "true", 4) : fmt_emit_(buf, cap, "false", 5);
 }
 
-inline int fmt_float(&char buf, unsigned long cap, double v, int decimals) {
+inline int fmt_float([]char buf_s, double v, int decimals) {
+    unsigned long cap = buf_s.len;
+    char buf_d_[1];
+    &char buf = &buf_d_[0];
+    if (cap > 0UL) { unsafe { buf = (&char)buf_s.ptr; } }
 #ifndef __SAFEC_FREESTANDING__
     unsafe { return snprintf(buf, cap, "%.*f", decimals, v); }
 #else
@@ -108,7 +132,11 @@ inline int fmt_float(&char buf, unsigned long cap, double v, int decimals) {
 #endif
 }
 
-inline int fmt_str(&char dst, unsigned long cap, const &char src) {
+inline int fmt_str([]char dst_s, const &char src) {
+    unsigned long cap = dst_s.len;
+    char dst_d_[1];
+    &char dst = &dst_d_[0];
+    if (cap > 0UL) { unsafe { dst = (&char)dst_s.ptr; } }
     if (cap == (unsigned long)0) return 0;
     unsafe {
         unsigned long n = strlen(src);
@@ -119,7 +147,11 @@ inline int fmt_str(&char dst, unsigned long cap, const &char src) {
     }
 }
 
-inline int fmt_append(&char dst, unsigned long cap, const &char src) {
+inline int fmt_append([]char dst_s, const &char src) {
+    unsigned long cap = dst_s.len;
+    char dst_d_[1];
+    &char dst = &dst_d_[0];
+    if (cap > 0UL) { unsafe { dst = (&char)dst_s.ptr; } }
     unsafe {
         unsigned long dlen = strlen(dst);
         unsigned long slen = strlen(src);

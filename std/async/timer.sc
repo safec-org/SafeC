@@ -98,15 +98,15 @@ int TimerQueue::pending() const {
     return n;
 }
 
-int TimerQueue::add_locked_(long long deadline_ms, void* cb, void* ctx) {
+unsigned long TimerQueue::tick_for_locked_(long long deadline_ms) {
     if (self.started == 0) {
         self.started = 1;
         self.origin_ms = self.now_ms_;
     }
-    if (deadline_ms <= self.now_ms_) return 0;
+    if (deadline_ms <= self.now_ms_) return 0UL;
     unsigned long tick = (unsigned long)(deadline_ms - self.origin_ms);
-    if (tick <= self.wheel.current_tick) return 0;
-    return self.wheel.add_raw_(tick, cb, ctx);
+    if (tick <= self.wheel.current_tick) return 0UL;
+    return tick;
 }
 
 void TimerQueue::cancel_locked_(int id) {
@@ -193,7 +193,7 @@ struct Poll<Unit> Sleep::poll(&Context cx) {
             int busy = 0;
             if (self.id == 0) {
                 fn void(?&Sleep) cb = sleep_fire_;
-                unsafe { self.id = tq.add_locked_(self.deadline, (void*)cb, (void*)self); }
+                self.id = tq.add_locked_(self.deadline, cb, (?&Sleep)self);
                 if (self.id != 0) {
                     if (self.ovf_id != 0) { tq.overflow.remove(self.ovf_id); self.ovf_id = 0; }
                 } else {

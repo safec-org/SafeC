@@ -25,13 +25,16 @@
 // Thread count: SAFEC_NUM_THREADS if set, else the number of online CPUs
 // (at most PARALLEL_MAX_THREADS), including the calling thread.
 
+#include <std/erased.h>
+
 namespace std {
 
 #define PARALLEL_MAX_THREADS 64
 
-// Runtime entry point (bodies are called through an untyped pointer);
+// Runtime entry point (the body and its context erased, see std/erased.h);
 // call parallel_for below instead.
-void parallel_for_raw_(unsigned long n, unsigned long grain, void* body, void* ctx);
+void parallel_for_raw_(unsigned long n, unsigned long grain,
+                       fn void(&Erased, unsigned long, unsigned long) body, &Erased ctx);
 
 // struct Job { const &float x; &float y; };
 // static void work(&Job j, unsigned long lo, unsigned long hi) { ... }
@@ -39,7 +42,9 @@ void parallel_for_raw_(unsigned long n, unsigned long grain, void* body, void* c
 generic<T>
 void parallel_for(unsigned long n, unsigned long grain,
                   fn void(&T, unsigned long, unsigned long) body, &T ctx) {
-    unsafe { parallel_for_raw_(n, grain, (void*)body, (void*)ctx); }
+    unsafe {
+        parallel_for_raw_(n, grain, (fn void(&Erased, unsigned long, unsigned long))body, (&Erased)ctx);
+    }
 }
 
 // Threads a parallel_for uses, counting the caller (>= 1).

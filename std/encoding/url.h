@@ -63,9 +63,9 @@ struct QueryParams {
     // Parses 'qs' (a leading '?' is skipped). Empty segments ("a=1&&b=2")
     // are dropped; a segment without '=' is a key with an empty value.
     static struct QueryParams parse(const &char qs);
-    // parse() over 'n' raw bytes (e.g. a request body, which is not
+    // parse() over raw bytes (e.g. a request body, which is not
     // NUL-terminated in general).
-    static struct QueryParams parse_n(const &char qs, unsigned long n);
+    static struct QueryParams parse_bytes([]const char qs);
 
     unsigned long length() const;
     // The first value for 'key', or null if absent. The reference aliases

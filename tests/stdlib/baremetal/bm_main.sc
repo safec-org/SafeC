@@ -75,9 +75,9 @@ static void t_core() {
     CHECK(std::char_to_upper('q') == 'Q');
     unsafe {
         char buf[32];
-        std::fmt_int(buf, 32UL, -9223372036854775807LL);
+        std::fmt_int(buf[0..32], -9223372036854775807LL);
         CHECK(str_is(buf, "-9223372036854775807"));
-        std::fmt_hex(buf, 32UL, 0xDEADBEEFCAFEULL);
+        std::fmt_hex(buf[0..32], 0xDEADBEEFCAFEULL);
         CHECK(std::str_find(buf, "deadbeefcafe") != null);
         int ok = 0;
         CHECK(std::str_to_int("-123456789012", &ok) == -123456789012LL);
@@ -154,16 +154,16 @@ static unsigned char g_ring_store[64];
 
 static void t_ring_alloc() {
     unsafe {
-        struct RingBuffer r = std::RingBuffer::over((&static unsigned char)g_ring_store, 64UL);
+        struct RingBuffer r = std::RingBuffer::over(g_ring_store[0..64]);
         unsigned char in[40];
         unsigned char out[40];
         int i = 0;
         while (i < 40) { in[i] = (unsigned char)i; i = i + 1; }
-        r.write(in, 40UL);
-        r.read(out, 30UL);
-        r.write(in, 40UL);                       // wraps
+        r.write(in[0..40]);
+        r.read(out[0..30]);
+        r.write(in[0..40]);                       // wraps
         CHECK(r.length() == 50UL);
-        r.read(out, 10UL);
+        r.read(out[0..10]);
         CHECK(out[9] == 39);
 
         struct TlsfAllocator t = std::TlsfAllocator::new(32768UL);
@@ -196,26 +196,25 @@ static void t_crypto() {
     unsafe {
         unsigned char d[64];
         char h[160];
-        std::sha256((const unsigned char*)"abc", 3UL, d);
+        std::sha256(str_bytes("abc"), d[..]);
         hex(d, 32UL, h);
         CHECK(str_is(h, "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"));
-        std::sha512((const unsigned char*)"abc", 3UL, d);
+        std::sha512(str_bytes("abc"), d[..]);
         hex(d, 64UL, h);
         CHECK(str_is(h, "ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f"));
-        std::hmac_sha256((const unsigned char*)"Jefe", 4UL,
-                         (const unsigned char*)"what do ya want for nothing?", 28UL, (unsigned char*)d);
+        std::hmac_sha256(str_bytes("Jefe"), str_bytes("what do ya want for nothing?"), d[..]);
         hex(d, 32UL, h);
         CHECK(str_is(h, "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843"));
         unsigned char key[16];
         unsigned char blk[16];
         int i = 0;
         while (i < 16) { key[i] = (unsigned char)i; blk[i] = (unsigned char)(i * 17); i = i + 1; }
-        struct AesCtx c = std::AesCtx::new_128(key);
-        c.encrypt_block(blk);
+        struct AesCtx c = std::AesCtx::new_128(key[..]);
+        c.encrypt_block(blk[..]);
         hex(blk, 16UL, h);
         CHECK(str_is(h, "69c4e0d86a7b0430d8cdb78070b4c55a"));
 
-        struct String e = std::base64_encode((const unsigned char*)"bare-metal!", 11UL);
+        struct String e = std::base64_encode(std::str_bytes("bare-metal!"));
         CHECK(e.eq_cstr("YmFyZS1tZXRhbCE="));
         e.free();
         CHECK(std::utf8_len("h€llo") == 5UL);
@@ -240,7 +239,7 @@ static void t_fixed_net() {
             (unsigned short)1234, (unsigned short)5678, (unsigned short)0);
         CHECK(off == 42UL);
         CHECK(pkt.data[14 + 12] == 10);
-        CHECK(std::ip_checksum((const unsigned char*)&pkt.data[14], 20UL) == (unsigned short)0);
+        CHECK(std::ip_checksum(pkt.data[14..34]) == (unsigned short)0);
     }
 }
 

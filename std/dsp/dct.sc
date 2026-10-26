@@ -123,11 +123,11 @@ static void dct_run_(const double* in, double* out, unsigned long n, int inverse
     }
 }
 
-void dct2(const &double in, &double out, unsigned long n) {
+void dct2_n_(const &double in, &double out, unsigned long n) {
     unsafe { dct_run_((const double*)in, (double*)out, n, 0); }
 }
 
-void idct3(const &double in, &double out, unsigned long n) {
+void idct3_n_(const &double in, &double out, unsigned long n) {
     unsafe { dct_run_((const double*)in, (double*)out, n, 1); }
 }
 
@@ -147,15 +147,15 @@ static void dct_run_f32_(const float* in, float* out, unsigned long n, int inver
     }
 }
 
-void dct2_f32(const &float in, &float out, unsigned long n) {
+void dct2_f32_n_(const &float in, &float out, unsigned long n) {
     unsafe { dct_run_f32_((const float*)in, (float*)out, n, 0); }
 }
 
-void idct3_f32(const &float in, &float out, unsigned long n) {
+void idct3_f32_n_(const &float in, &float out, unsigned long n) {
     unsafe { dct_run_f32_((const float*)in, (float*)out, n, 1); }
 }
 
-void fdct2(const &Fixed in, &Fixed out, unsigned long n) {
+void fdct2_n_(const &Fixed in, &Fixed out, unsigned long n) {
     if (n == 0UL) { return; }
     double nD = (double)n;
     unsigned long k = 0UL;
@@ -175,7 +175,7 @@ void fdct2(const &Fixed in, &Fixed out, unsigned long n) {
     }
 }
 
-void fidct3(const &Fixed in, &Fixed out, unsigned long n) {
+void fidct3_n_(const &Fixed in, &Fixed out, unsigned long n) {
     if (n == 0UL) { return; }
     double nD = (double)n;
     Fixed x0F;
@@ -196,6 +196,51 @@ void fidct3(const &Fixed in, &Fixed out, unsigned long n) {
         unsafe { out[i] = fixed_from_float(sum / nD); }
         i = i + 1UL;
     }
+}
+
+// ── Slice API (the public signatures; the (reference, length) cores above
+// are the *_n_ functions) ─────────────────────────────────────────────────────
+
+int dct2([]const double in, []double out) {
+    if (out.len < in.len) return 0;
+    if (in.len == 0UL) return 1;
+    unsafe { dct2_n_((const &double)in.ptr, (&double)out.ptr, in.len); }
+    return 1;
+}
+
+int idct3([]const double in, []double out) {
+    if (out.len < in.len) return 0;
+    if (in.len == 0UL) return 1;
+    unsafe { idct3_n_((const &double)in.ptr, (&double)out.ptr, in.len); }
+    return 1;
+}
+
+int dct2_f32([]const float in, []float out) {
+    if (out.len < in.len) return 0;
+    if (in.len == 0UL) return 1;
+    unsafe { dct2_f32_n_((const &float)in.ptr, (&float)out.ptr, in.len); }
+    return 1;
+}
+
+int idct3_f32([]const float in, []float out) {
+    if (out.len < in.len) return 0;
+    if (in.len == 0UL) return 1;
+    unsafe { idct3_f32_n_((const &float)in.ptr, (&float)out.ptr, in.len); }
+    return 1;
+}
+
+int fdct2([]const Fixed in, []Fixed out) {
+    if (out.len < in.len) return 0;
+    if (in.len == 0UL) return 1;
+    unsafe { fdct2_n_((const &Fixed)in.ptr, (&Fixed)out.ptr, in.len); }
+    return 1;
+}
+
+int fidct3([]const Fixed in, []Fixed out) {
+    if (out.len < in.len) return 0;
+    if (in.len == 0UL) return 1;
+    unsafe { fidct3_n_((const &Fixed)in.ptr, (&Fixed)out.ptr, in.len); }
+    return 1;
 }
 
 } // namespace std

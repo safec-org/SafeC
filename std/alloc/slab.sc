@@ -62,14 +62,13 @@ static unsigned long slab_slot_size_(unsigned long obj_size) {
     return (sz + 7UL) & ~7UL;
 }
 
-// The caller's buffer is taken to be obj_size * count bytes. Rounding the
-// slot size (and aligning the buffer's start) can fit fewer slots than
-// 'count'; cap says how many there are.
-inline struct SlabAllocator SlabAllocator::over(&unsigned char buffer, unsigned long obj_size, unsigned long count) {
+// Rounding the slot size (and aligning the buffer's start) can fit fewer
+// slots than buffer.len / obj_size; cap says how many there are.
+inline struct SlabAllocator SlabAllocator::over([]unsigned char buffer, unsigned long obj_size) {
     struct SlabAllocator a;
-    unsigned long bytes = checked_mul_size(obj_size, count);
+    unsigned long bytes = buffer.len;
     unsigned long addr;
-    unsafe { addr = (unsigned long)buffer; }
+    unsafe { addr = (unsigned long)buffer.ptr; }
     unsigned long skip = ((addr + 7UL) & ~7UL) - addr;
     unsafe { a.base = (&heap void)(addr + skip); }
     a.owned = 0;

@@ -15,7 +15,7 @@ inline struct ThreadSched ThreadSched::new() {
     return s;
 }
 
-inline Thread ThreadSched::spawn_raw_(void* func, void* arg, int priority) {
+inline Thread ThreadSched::spawn_raw_(fn int(?&Erased, int) func, ?&Erased arg, int priority) {
     int id = self.inner.spawn_raw_(func, arg);
     if (id == -1) { return (Thread)THREAD_NONE; }
     self.priority[id] = priority;
@@ -56,9 +56,8 @@ int ThreadSched::tick() {
             self.inner.current          = idx;
             self.inner.tasks[idx].state = TASK_RUNNING;
             unsafe {
-                fn int(void*, int) taskfn = (fn int(void*, int))self.inner.tasks[idx].func;
-                int result = taskfn(
-                    self.inner.tasks[idx].arg,
+                int result = self.inner.tasks[idx].func_(
+                    self.inner.tasks[idx].arg_,
                     self.inner.tasks[idx].resume_point);
                 if (result == 0) {
                     self.inner.tasks[idx].state = TASK_DONE;

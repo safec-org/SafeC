@@ -178,7 +178,7 @@ static long long __web_now_ns() {
 static int __web_clip_set(const &char utf8, unsigned long n) {
     if (!gWebClipInit) { gWebClip = String::new(); gWebClipInit = 1; }
     gWebClip.free();
-    gWebClip = String::from_n(utf8, n);
+    gWebClip = String::from_n_(utf8, n);
     unsafe { return std_gui_web_clipboard_set(utf8, (int)n); }
 }
 
@@ -191,7 +191,7 @@ static int __web_clip_get(&String out) {
         char* buf = (char*)alloc_raw_((unsigned long)n + 1UL);
         int got = std_gui_web_clipboard_get(buf, n);
         if (got > n) { got = n; }
-        out.push_n((const char*)buf, (unsigned long)got);
+        out.push_n_((const char*)buf, (unsigned long)got);
         dealloc_raw_((void*)buf);
         return 1;
     }

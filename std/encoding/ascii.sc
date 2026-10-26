@@ -4,7 +4,8 @@
 
 namespace std {
 
-int ascii_is_valid_n(const &char s, unsigned long len) {
+int ascii_is_valid_bytes([]const char s) {
+    unsigned long len = s.len;
     unsigned long i = 0UL;
     while (i < len) {
         char c;

@@ -11,7 +11,7 @@ inline struct TaskScheduler TaskScheduler::new() {
     return s;
 }
 
-inline int TaskScheduler::spawn_raw_(void* func, void* arg) {
+inline int TaskScheduler::spawn_raw_(fn int(?&Erased, int) func, ?&Erased arg) {
     // Reuse a finished task's slot before growing count. Without this, a
     // long-running scheduler (e.g. std::http's reactor-based server,
     // accepting new connections for as long as the process runs) would
@@ -23,8 +23,8 @@ inline int TaskScheduler::spawn_raw_(void* func, void* arg) {
     int i = 0;
     while (i < self.count) {
         if (self.tasks[i].state == 2) { // TASK_DONE
-            self.tasks[i].func           = func;
-            self.tasks[i].arg            = arg;
+            self.tasks[i].func_          = func;
+            self.tasks[i].arg_           = arg;
             self.tasks[i].state          = 0; // TASK_READY
             self.tasks[i].resume_point   = 0;
             self.tasks[i].blocked        = 0;
@@ -38,8 +38,8 @@ inline int TaskScheduler::spawn_raw_(void* func, void* arg) {
         return -1;
     }
     int idx = self.count;
-    self.tasks[idx].func           = func;
-    self.tasks[idx].arg          = arg;
+    self.tasks[idx].func_        = func;
+    self.tasks[idx].arg_         = arg;
     self.tasks[idx].state        = 0; // TASK_READY
     self.tasks[idx].resume_point = 0;
     self.tasks[idx].blocked      = 0;
@@ -65,10 +65,9 @@ int TaskScheduler::tick() {
                 self.current = i;
                 self.tasks[i].state = 1; // TASK_RUNNING
                 unsafe {
-                    // Call: int func(void* arg, int resume_point)
-                    fn int(void*, int) taskfn = (fn int(void*, int))self.tasks[i].func;
-                    int result = taskfn(
-                        self.tasks[i].arg, self.tasks[i].resume_point);
+                    // Call: int func(?&T arg, int resume_point)
+                    int result = self.tasks[i].func_(
+                        self.tasks[i].arg_, self.tasks[i].resume_point);
                     if (result == 0) {
                         self.tasks[i].state = 2; // TASK_DONE
                         self.tasks[i].blocked = 0;

@@ -158,23 +158,23 @@ static void run_case(const char* what, struct CudaAttnShape s, int dtype, int ca
     while (i < qn) { got.push(0.0f); i = i + 1UL; }
     int ok = 0;
     if (dtype == 0) {
-        struct CudaBuf dq = CudaBuf::upload(q.at(0UL), qn);
-        struct CudaBuf dk = CudaBuf::upload(k.at(0UL), kn);
-        struct CudaBuf dv = CudaBuf::upload(v.at(0UL), kn);
+        struct CudaBuf dq = CudaBuf::upload(q.as_slice()[0..qn]);
+        struct CudaBuf dk = CudaBuf::upload(k.as_slice()[0..kn]);
+        struct CudaBuf dv = CudaBuf::upload(v.as_slice()[0..kn]);
         struct CudaBuf dout = CudaBuf::alloc(qn);
         ok = lin ? std::cuda_linear_attention_ex(dq, dk, dv, dout, s, causal)
                  : std::cuda_flash_attention_ex(dq, dk, dv, dout, s, 0.0f, causal);
-        ok = ok && std::cuda_read(dout, got.at(0UL), qn);
+        ok = ok && std::cuda_read(dout, got.as_slice()[0..qn]);
         dq.free(); dk.free(); dv.free(); dout.free();
     } else {
-        struct CudaHalfBuf hq = CudaHalfBuf::upload(q.at(0UL), qn, dtype);
-        struct CudaHalfBuf hk = CudaHalfBuf::upload(k.at(0UL), kn, dtype);
-        struct CudaHalfBuf hv = CudaHalfBuf::upload(v.at(0UL), kn, dtype);
+        struct CudaHalfBuf hq = CudaHalfBuf::upload(q.as_slice()[0..qn], dtype);
+        struct CudaHalfBuf hk = CudaHalfBuf::upload(k.as_slice()[0..kn], dtype);
+        struct CudaHalfBuf hv = CudaHalfBuf::upload(v.as_slice()[0..kn], dtype);
         struct CudaHalfBuf hout = CudaHalfBuf::alloc(qn, dtype);
         struct CudaBuf dout = CudaBuf::alloc(qn);
         ok = lin ? std::cuda_half_linear_attention(hq, hk, hv, hout, s, causal)
                  : std::cuda_half_flash_attention(hq, hk, hv, hout, s, 0.0f, causal);
-        ok = ok && std::cuda_from_half(hout, dout) && std::cuda_read(dout, got.at(0UL), qn);
+        ok = ok && std::cuda_from_half(hout, dout) && std::cuda_read(dout, got.as_slice()[0..qn]);
         hq.free(); hk.free(); hv.free(); hout.free();
         dout.free();
     }
@@ -253,17 +253,17 @@ int main() {
     struct Vec<float> q = data(qn, 4UL, (float)0.5, 0);
     struct Vec<float> k = data(kn, 5UL, (float)0.5, 0);
     struct Vec<float> v = data(kn, 6UL, (float)1.0, 0);
-    struct CudaBuf dq = CudaBuf::upload(q.at(0UL), qn);
-    struct CudaBuf dk = CudaBuf::upload(k.at(0UL), kn);
-    struct CudaBuf dv = CudaBuf::upload(v.at(0UL), kn);
+    struct CudaBuf dq = CudaBuf::upload(q.as_slice()[0..qn]);
+    struct CudaBuf dk = CudaBuf::upload(k.as_slice()[0..kn]);
+    struct CudaBuf dv = CudaBuf::upload(v.as_slice()[0..kn]);
     struct CudaBuf dout = CudaBuf::alloc(qn);
     struct Vec<float> got = std::Vec::with_cap(qn);
     struct Vec<float> cpu = std::Vec::with_cap(qn);
     unsigned long i = 0UL;
     while (i < qn) { got.push(0.0f); cpu.push(0.0f); i = i + 1UL; }
-    &FloatTensor tq = FloatTensor::from_2d(q.at(0UL), 40UL, 64UL, 0);
-    &FloatTensor tk = FloatTensor::from_2d(k.at(0UL), 56UL, 64UL, 0);
-    &FloatTensor tv = FloatTensor::from_2d(v.at(0UL), 56UL, 64UL, 0);
+    &FloatTensor tq = FloatTensor::from_2d(q.as_slice()[0..40UL * 64UL], 40UL, 64UL, 0);
+    &FloatTensor tk = FloatTensor::from_2d(k.as_slice()[0..56UL * 64UL], 56UL, 64UL, 0);
+    &FloatTensor tv = FloatTensor::from_2d(v.as_slice()[0..56UL * 64UL], 56UL, 64UL, 0);
     int l = 0;
     while (l < 2) {
         &FloatTensor tr = l ? std::linear_attention_forward(tq, tk, tv) : std::flash_attention_forward(tq, tk, tv, 16UL);
@@ -273,7 +273,7 @@ int main() {
         // the rocm_*-compatible argument form
         int ok = l ? std::cuda_linear_attention(dq, dk, dv, dout, 1UL, 40UL, 56UL, 64UL, 0)
                    : std::cuda_flash_attention(dq, dk, dv, dout, 1UL, 40UL, 56UL, 64UL, (float)0.0, 0);
-        ok = ok && std::cuda_read(dout, got.at(0UL), qn);
+        ok = ok && std::cuda_read(dout, got.as_slice()[0..qn]);
         double e = relerr(&got, &cpu);
         check(ok && e <= 1.0e-5, l ? "linear matches attention.h" : "flash matches attention.h");
         unsafe { printf("  %-46s err %.2e\n", l ? "linear vs attention.h linear_attention_forward" : "flash vs attention.h flash_attention_forward", e); }
@@ -305,10 +305,10 @@ int main() {
     check(g.exec != 0UL, "attention capture end");
     check(std::cuda_graph_launch(g) && std::cuda_graph_launch(g), "attention graph launch");
     struct Vec<float> want = ref_attn(&q, &k, &v, one, 1, 0);
-    check(std::cuda_read(dout, got.at(0UL), qn) && relerr(&got, &want) <= 2.0e-5, "graph replay flash");
+    check(std::cuda_read(dout, got.as_slice()[0..qn]) && relerr(&got, &want) <= 2.0e-5, "graph replay flash");
     want.free();
     want = ref_attn(&q, &k, &v, one, 0, 1);
-    check(std::cuda_read(dout2, got.at(0UL), qn) && relerr(&got, &want) <= 2.0e-5, "graph replay linear");
+    check(std::cuda_read(dout2, got.as_slice()[0..qn]) && relerr(&got, &want) <= 2.0e-5, "graph replay linear");
     want.free();
     g.free();
 

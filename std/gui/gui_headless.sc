@@ -155,7 +155,7 @@ static long long __hl_now_ns() {
 
 static int __hl_clip_set(const &char utf8, unsigned long n) {
     if (gHeadlessClipSet) { gHeadlessClip.free(); }
-    gHeadlessClip = String::from_n(utf8, n);
+    gHeadlessClip = String::from_n_(utf8, n);
     gHeadlessClipSet = 1;
     return 1;
 }
@@ -163,7 +163,7 @@ static int __hl_clip_set(const &char utf8, unsigned long n) {
 static int __hl_clip_get(&String out) {
     out.clear();
     if (!gHeadlessClipSet) { return 0; }
-    unsafe { out.push_n((const char*)gHeadlessClip.data, gHeadlessClip.len); }
+    unsafe { out.push_n_((const char*)gHeadlessClip.data, gHeadlessClip.len); }
     return 1;
 }
 
@@ -288,7 +288,7 @@ void gui_headless_type(&GuiWindow win, const &char text) {
     unsafe { while (text[n] != '\0') { n = n + 1UL; } }
     unsigned long i = 0UL;
     while (i < n) {
-        unsigned int cp = gui_utf8_next(text, n, &i);
+        unsigned int cp = gui_utf8_next_n_(text, n, &i);
         int key = GUI_KEY_UNKNOWN;
         if (cp >= 97U && cp <= 122U) { key = (int)(cp - 32U); }
         else if ((cp >= 65U && cp <= 90U) || (cp >= 48U && cp <= 57U)) { key = (int)cp; }

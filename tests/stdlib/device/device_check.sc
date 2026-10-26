@@ -468,7 +468,7 @@ static &FloatTensor at_out_(&FloatTensor Q, &FloatTensor K, &FloatTensor V) {
 }
 
 static void at_grads_(&FloatTensor t, &float out) {
-    unsafe { tensor_grad_host_((void*)t); unsigned long i = 0UL; while (i < t->size) { out[i] = t->grad[i]; i = i + 1UL; } }
+    unsafe { tensor_grad_host_raw_((void*)t); unsigned long i = 0UL; while (i < t->size) { out[i] = t->grad[i]; i = i + 1UL; } }
 }
 
 static float at_maxrel_(const &float a, const &float b, unsigned long n) {
@@ -628,7 +628,7 @@ static float cv_err_(const &float a, const &float b, unsigned long n) {
 }
 
 static void cv_values_(&FloatTensor t, &float out) {
-    unsafe { tensor_host_((void*)t); unsigned long i = 0UL; while (i < t->size) { out[i] = t->data[i]; i = i + 1UL; } }
+    unsafe { tensor_host_raw_((void*)t); unsigned long i = 0UL; while (i < t->size) { out[i] = t->data[i]; i = i + 1UL; } }
 }
 
 // The fp16 loss scale a trainer leaves after a few overflowing steps

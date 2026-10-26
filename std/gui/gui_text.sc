@@ -227,20 +227,20 @@ static void __tt_read_name(&GuiTypeface f) {
             }
             char enc[4];
             int nb = gui_utf8_encode(u, &enc[0]);
-            unsafe { f.family.push_n(&enc[0], (unsigned long)nb); }
+            unsafe { f.family.push_n_(&enc[0], (unsigned long)nb); }
         }
     } else {
         unsigned int k = 0U;
         while (k < bestLen) {
             char enc[4];
             int nb = gui_utf8_encode(__tt_u8(f, bestOff + (unsigned long)k), &enc[0]);
-            unsafe { f.family.push_n(&enc[0], (unsigned long)nb); }
+            unsafe { f.family.push_n_(&enc[0], (unsigned long)nb); }
             k = k + 1U;
         }
     }
 }
 
-int GuiTypeface::load_memory_index(const &unsigned char bytes, unsigned long size, int index, int flags) {
+int GuiTypeface::load_memory_index_n_(const &unsigned char bytes, unsigned long size, int index, int flags) {
     __tt_blank(self);
     if (size < 12UL) { return 0; }
     if ((flags & GUI_FONT_COPY) != 0) {
@@ -332,8 +332,24 @@ int GuiTypeface::load_memory_index(const &unsigned char bytes, unsigned long siz
     return 1;
 }
 
-int GuiTypeface::load_memory(const &unsigned char bytes, unsigned long size, int flags) {
-    return self.load_memory_index(bytes, size, 0, flags);
+int GuiTypeface::load_memory_index([]const unsigned char bytes_s, int index, int flags) {
+    unsigned long size = (unsigned long)bytes_s.len;
+    unsigned char bytes_d_[1];
+    const &unsigned char bytes = &bytes_d_[0];
+    if (bytes_s.len > 0UL) { unsafe { bytes = (const &unsigned char)bytes_s.ptr; } }
+    return self.load_memory_index_n_(bytes, size, index, flags);
+}
+
+int GuiTypeface::load_memory_n_(const &unsigned char bytes, unsigned long size, int flags) {
+    return self.load_memory_index_n_(bytes, size, 0, flags);
+}
+
+int GuiTypeface::load_memory([]const unsigned char bytes_s, int flags) {
+    unsigned long size = (unsigned long)bytes_s.len;
+    unsigned char bytes_d_[1];
+    const &unsigned char bytes = &bytes_d_[0];
+    if (bytes_s.len > 0UL) { unsafe { bytes = (const &unsigned char)bytes_s.ptr; } }
+    return self.load_memory_n_(bytes, size, flags);
 }
 
 int GuiTypeface::load_file_index(const &char path, int index) {
@@ -347,11 +363,11 @@ int GuiTypeface::load_file_index(const &char path, int index) {
             unsigned char* buf;
             unsafe { buf = (unsigned char*)alloc_raw_((unsigned long)n); }
             int ok;
-            unsafe { ok = read_exact(f, (&unsigned char)buf, (unsigned long)n); }
+            unsafe { ok = read_exact(f, ((unsigned char*)buf)[0..(unsigned long)n]); }
             f.close();
             if (!ok) { unsafe { dealloc_raw_((void*)buf); } return 0; }
             int r;
-            unsafe { r = self.load_memory_index((const unsigned char*)buf, (unsigned long)n, index, 0); }
+            unsafe { r = self.load_memory_index_n_((const unsigned char*)buf, (unsigned long)n, index, 0); }
             if (!r) { unsafe { dealloc_raw_((void*)buf); } return 0; }
             self.owned = 1;    // the buffer is ours now
             return 1;
@@ -816,7 +832,7 @@ int GuiTypeface::glyph_path(int glyph, &GuiPath out, float size, float x, float 
 
 // ── measuring ─────────────────────────────────────────────────────────────
 
-float GuiTypeface::measure_n(const &char text, unsigned long len, float size) const {
+float GuiTypeface::measure_n_n_(const &char text, unsigned long len, float size) const {
     &GuiTypeface fb = GuiTypeface::fallback();
     float w = 0.0f;
     int prev = 0;
@@ -824,7 +840,7 @@ float GuiTypeface::measure_n(const &char text, unsigned long len, float size) co
     int self_is_fb;
     unsafe { self_is_fb = ((const void*)self == (const void*)fb) ? 1 : 0; }
     while (i < len) {
-        unsigned int cp = gui_utf8_next(text, len, &i);
+        unsigned int cp = gui_utf8_next_n_(text, len, &i);
         if (cp == 0U) { break; }
         int g = self.glyph_index(cp);
         if (g == 0 && !self_is_fb) {
@@ -838,10 +854,18 @@ float GuiTypeface::measure_n(const &char text, unsigned long len, float size) co
     return w;
 }
 
+float GuiTypeface::measure_n([]const char text_s, float size) const {
+    unsigned long len = (unsigned long)text_s.len;
+    char text_d_[1];
+    const &char text = &text_d_[0];
+    if (text_s.len > 0UL) { unsafe { text = (const &char)text_s.ptr; } }
+    return self.measure_n_n_(text, len, size);
+}
+
 float GuiTypeface::measure(const &char text, float size) const {
     unsigned long n = 0UL;
     unsafe { while (text[n] != '\0') { n = n + 1UL; } }
-    return self.measure_n(text, n, size);
+    return self.measure_n_n_(text, n, size);
 }
 
 // ── glyph cache ───────────────────────────────────────────────────────────

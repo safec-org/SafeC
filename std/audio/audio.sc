@@ -95,13 +95,13 @@ static ?&AudioBackendVt_ audio_backend_for_(int api) {
     return null;
 }
 
-int audio_compiled_apis(&int out, int cap) {
+int audio_compiled_apis([]int out) {
     ?&AudioBackendVt_ list[AUDIO_API_COUNT];
     int n = audio_backends_(&list[0], AUDIO_API_COUNT);
     int k = 0;
-    for (int i = 0; i < n && k < cap; i = i + 1) {
+    for (int i = 0; i < n && (unsigned long)k < out.len; i = i + 1) {
         match (list[i]) {
-            case some(vt): { unsafe { out[k] = vt.api; } k = k + 1; }
+            case some(vt): { out[k] = vt.api; k = k + 1; }
             case null: {}
         }
     }
@@ -253,7 +253,7 @@ struct Audio Audio::closed() {
 }
 
 static ?&AudioHost_ audio_host_of_(const &Audio a) {
-    unsafe { return (?&AudioHost_)a.impl; }
+    return a.impl;
 }
 
 static int audio_host_probe_(&AudioHost_ h) {
@@ -296,7 +296,7 @@ static struct Result<Audio, AudioError> audio_open_api_(int api) {
             }
             struct Audio a;
             a.api_id = api;
-            unsafe { a.impl = (?&void)h; }
+            a.impl = h;
             return Result::new_ok(a);
         }
         case null: {}
@@ -550,15 +550,14 @@ static ?&AudioBackendVt_ audio_stream_vt_(&AudioStreamState_ st) {
 
 struct Result<AudioStream, AudioError> Audio::open_stream_raw_(?&AudioStreamParams output, ?&AudioStreamParams input,
                                                                unsigned int format, unsigned int sample_rate,
-                                                               &unsigned int frames, void* callback, void* user,
-                                                               ?&AudioStreamOptions opts) {
+                                                               &unsigned int frames, AudioCallbackRaw_ callback,
+                                                               ?&Erased user, ?&AudioStreamOptions opts) {
     ?&AudioHost_ hp = audio_host_of_(self);
     if (hp.is_null()) return audio_stream_err_(AUDIO_ERR_INVALID_USE, "audio: not open");
     if (output.is_null() && input.is_null())
         return audio_stream_err_(AUDIO_ERR_INVALID_PARAM, "audio: a stream needs output and/or input parameters");
     if (!audio_format_valid_(format)) return audio_stream_err_(AUDIO_ERR_INVALID_PARAM, "audio: invalid sample format");
     if (sample_rate == 0U) return audio_stream_err_(AUDIO_ERR_INVALID_PARAM, "audio: sample rate must be > 0");
-    unsafe { if (callback == (void*)0) return audio_stream_err_(AUDIO_ERR_INVALID_PARAM, "audio: no callback"); }
     ?&AudioBackendVt_ vtp = audio_backend_for_(self.api_id);
     if (vtp.is_null()) return audio_stream_err_(AUDIO_ERR_UNSUPPORTED, "audio: API not compiled in");
 
@@ -627,7 +626,7 @@ struct Result<AudioStream, AudioError> Audio::open_stream_raw_(?&AudioStreamPara
                             *frames = st.buffer_frames;
                             unsafe { atomic_store((_Atomic int*)&st.state, AUDIO_STREAM_STOPPED); }
                             struct AudioStream s;
-                            unsafe { s.impl = (?&void)st; }
+                            s.impl = st;
                             return Result::new_ok(s);
                         }
                     }
@@ -690,25 +689,35 @@ void audio_stream_silence_(&AudioStreamState_ st, unsigned int frames) {
     }
 }
 
+// The bytes of one period of direction 'd''s user / device buffer.
+static []unsigned char audio_user_bytes_(&AudioStreamState_ st, int d, unsigned int frames) {
+    unsigned long n = (unsigned long)frames * (unsigned long)st.user_channels[d] *
+                      (unsigned long)audio_format_bytes(st.user_format);
+    unsafe { return ((unsigned char*)st.user_buf[d])[0..n]; }
+}
+static []unsigned char audio_device_bytes_(&AudioStreamState_ st, int d, unsigned int frames) {
+    unsigned long n = (unsigned long)frames * audio_stream_device_frame_bytes_(st, d);
+    unsafe { return ((unsigned char*)st.device_buf[d])[0..n]; }
+}
+
 int audio_stream_process_(&AudioStreamState_ st, unsigned int frames) {
     unsigned int n = frames;
     if (n > st.max_frames) n = st.max_frames;
     if (st.mode_in && st.convert[AUDIO_DIR_IN]) {
-        unsafe {
-            audio_copy_frames_raw_(st.user_buf[AUDIO_DIR_IN], st.user_format, st.user_channels[AUDIO_DIR_IN],
-                                   st.user_interleaved, 0,
-                                   (const void*)st.device_buf[AUDIO_DIR_IN], st.device_format[AUDIO_DIR_IN],
-                                   st.device_channels[AUDIO_DIR_IN], st.device_interleaved[AUDIO_DIR_IN],
-                                   st.first_channel[AUDIO_DIR_IN], st.user_channels[AUDIO_DIR_IN],
-                                   (unsigned long)n);
-        }
+        audio_copy_frames(audio_user_bytes_(st, AUDIO_DIR_IN, n), st.user_format, st.user_channels[AUDIO_DIR_IN],
+                          st.user_interleaved, 0,
+                          audio_device_bytes_(st, AUDIO_DIR_IN, n), st.device_format[AUDIO_DIR_IN],
+                          st.device_channels[AUDIO_DIR_IN], st.device_interleaved[AUDIO_DIR_IN],
+                          st.first_channel[AUDIO_DIR_IN], st.user_channels[AUDIO_DIR_IN],
+                          (unsigned long)n);
     }
     struct AudioIo io;
+    unsigned char none_[1];
+    io.output_ = none_[0..0];
+    io.input_ = none_[0..0];
+    if (st.mode_out) io.output_ = audio_user_bytes_(st, AUDIO_DIR_OUT, n);
+    if (st.mode_in) io.input_ = audio_user_bytes_(st, AUDIO_DIR_IN, n);
     unsafe {
-        io.output = null;
-        io.input = null;
-        if (st.mode_out) io.output = (?&void)st.user_buf[AUDIO_DIR_OUT];
-        if (st.mode_in) io.input = (?&void)st.user_buf[AUDIO_DIR_IN];
         long long done = atomic_load((_Atomic long long*)&st.frames_done);
         io.stream_time = (double)(done + st.frames_offset) / (double)st.sample_rate;
         io.status = atomic_exchange((_Atomic unsigned int*)&st.pending_status, 0U);
@@ -720,27 +729,19 @@ int audio_stream_process_(&AudioStreamState_ st, unsigned int frames) {
     io.interleaved = st.user_interleaved;
     io.sample_rate = st.sample_rate;
     int r = AUDIO_CB_CONTINUE;
-    unsafe {
-        AudioCallbackRaw_ cb = (AudioCallbackRaw_)st.callback;
-        r = cb(&io, st.user);
-    }
-    if (st.mode_out) {
-        unsafe {
-            if (st.convert[AUDIO_DIR_OUT]) {
-                // Device channels outside the stream's range stay silent.
-                unsigned long bytes = (unsigned long)n * audio_stream_device_frame_bytes_(st, AUDIO_DIR_OUT);
-                if (st.device_channels[AUDIO_DIR_OUT] != st.user_channels[AUDIO_DIR_OUT]) {
-                    unsigned char* p = (unsigned char*)st.device_buf[AUDIO_DIR_OUT];
-                    for (unsigned long i = 0UL; i < bytes; i = i + 1UL) p[i] = (unsigned char)0;
-                }
-                audio_copy_frames_raw_(st.device_buf[AUDIO_DIR_OUT], st.device_format[AUDIO_DIR_OUT],
-                                       st.device_channels[AUDIO_DIR_OUT], st.device_interleaved[AUDIO_DIR_OUT],
-                                       st.first_channel[AUDIO_DIR_OUT],
-                                       (const void*)st.user_buf[AUDIO_DIR_OUT], st.user_format,
-                                       st.user_channels[AUDIO_DIR_OUT], st.user_interleaved, 0,
-                                       st.user_channels[AUDIO_DIR_OUT], (unsigned long)n);
-            }
+    r = st.callback(&io, st.user);
+    if (st.mode_out && st.convert[AUDIO_DIR_OUT]) {
+        []unsigned char dev = audio_device_bytes_(st, AUDIO_DIR_OUT, n);
+        // Device channels outside the stream's range stay silent.
+        if (st.device_channels[AUDIO_DIR_OUT] != st.user_channels[AUDIO_DIR_OUT]) {
+            for (unsigned long i = 0UL; i < dev.len; i = i + 1UL) dev[i] = (unsigned char)0;
         }
+        audio_copy_frames(dev, st.device_format[AUDIO_DIR_OUT],
+                          st.device_channels[AUDIO_DIR_OUT], st.device_interleaved[AUDIO_DIR_OUT],
+                          st.first_channel[AUDIO_DIR_OUT],
+                          audio_user_bytes_(st, AUDIO_DIR_OUT, n), st.user_format,
+                          st.user_channels[AUDIO_DIR_OUT], st.user_interleaved, 0,
+                          st.user_channels[AUDIO_DIR_OUT], (unsigned long)n);
     }
     unsafe { atomic_fetch_add((_Atomic long long*)&st.frames_done, (long long)n); }
     if (r == AUDIO_CB_STOP || r == AUDIO_CB_ABORT) audio_stream_request_stop_(st, r);
@@ -803,7 +804,7 @@ struct AudioStream AudioStream::closed() {
 }
 
 static ?&AudioStreamState_ audio_state_of_(const &AudioStream s) {
-    unsafe { return (?&AudioStreamState_)s.impl; }
+    return s.impl;
 }
 
 static int audio_state_load_(&AudioStreamState_ st) {
@@ -984,120 +985,50 @@ int AudioStream::pump() {
 
 // ── AudioIo ──────────────────────────────────────────────────────────────
 
-static unsigned long audio_io_samples_(&AudioIo io, int out) {
+static unsigned long audio_io_samples_(const &AudioIo io, int out) {
     return (unsigned long)io.frames * (unsigned long)(out ? io.output_channels : io.input_channels);
 }
 
-static ?&void audio_io_buf_(&AudioIo io, int out, unsigned int format) {
-    if (io.format != format) return null;
-    return out ? io.output : io.input;
+// 'b' viewed as n samples of an E: empty unless the stream's format is
+// 'format' and b holds them.
+generic<E>
+static []E audio_io_view_(const &AudioIo io, []unsigned char b, int out, unsigned int format) {
+    unsigned long n = audio_io_samples_(io, out);
+    if (io.format != format || b.len < n * sizeof(E)) n = 0UL;
+    unsafe { return ((E*)b.ptr)[0..n]; }
 }
 
-struct Slice<float> AudioIo::output_f32() {
-    struct Slice<float> s; s.ptr = null; s.len = 0UL;
-    ?&void b = audio_io_buf_(self, 1, AUDIO_FORMAT_F32);
-    unsafe { if (!b.is_null()) { s.ptr = (?&float)b; s.len = audio_io_samples_(self, 1); } }
-    return s;
-}
-struct Slice<float> AudioIo::input_f32() {
-    struct Slice<float> s; s.ptr = null; s.len = 0UL;
-    ?&void b = audio_io_buf_(self, 0, AUDIO_FORMAT_F32);
-    unsafe { if (!b.is_null()) { s.ptr = (?&float)b; s.len = audio_io_samples_(self, 0); } }
-    return s;
-}
-struct Slice<double> AudioIo::output_f64() {
-    struct Slice<double> s; s.ptr = null; s.len = 0UL;
-    ?&void b = audio_io_buf_(self, 1, AUDIO_FORMAT_F64);
-    unsafe { if (!b.is_null()) { s.ptr = (?&double)b; s.len = audio_io_samples_(self, 1); } }
-    return s;
-}
-struct Slice<double> AudioIo::input_f64() {
-    struct Slice<double> s; s.ptr = null; s.len = 0UL;
-    ?&void b = audio_io_buf_(self, 0, AUDIO_FORMAT_F64);
-    unsafe { if (!b.is_null()) { s.ptr = (?&double)b; s.len = audio_io_samples_(self, 0); } }
-    return s;
-}
-struct Slice<short> AudioIo::output_i16() {
-    struct Slice<short> s; s.ptr = null; s.len = 0UL;
-    ?&void b = audio_io_buf_(self, 1, AUDIO_FORMAT_I16);
-    unsafe { if (!b.is_null()) { s.ptr = (?&short)b; s.len = audio_io_samples_(self, 1); } }
-    return s;
-}
-struct Slice<short> AudioIo::input_i16() {
-    struct Slice<short> s; s.ptr = null; s.len = 0UL;
-    ?&void b = audio_io_buf_(self, 0, AUDIO_FORMAT_I16);
-    unsafe { if (!b.is_null()) { s.ptr = (?&short)b; s.len = audio_io_samples_(self, 0); } }
-    return s;
-}
-struct Slice<int> AudioIo::output_i32() {
-    struct Slice<int> s; s.ptr = null; s.len = 0UL;
-    ?&void b = audio_io_buf_(self, 1, AUDIO_FORMAT_I32);
-    unsafe { if (!b.is_null()) { s.ptr = (?&int)b; s.len = audio_io_samples_(self, 1); } }
-    return s;
-}
-struct Slice<int> AudioIo::input_i32() {
-    struct Slice<int> s; s.ptr = null; s.len = 0UL;
-    ?&void b = audio_io_buf_(self, 0, AUDIO_FORMAT_I32);
-    unsafe { if (!b.is_null()) { s.ptr = (?&int)b; s.len = audio_io_samples_(self, 0); } }
-    return s;
-}
-struct Slice<signed char> AudioIo::output_i8() {
-    struct Slice<signed char> s; s.ptr = null; s.len = 0UL;
-    ?&void b = audio_io_buf_(self, 1, AUDIO_FORMAT_I8);
-    unsafe { if (!b.is_null()) { s.ptr = (?&signed char)b; s.len = audio_io_samples_(self, 1); } }
-    return s;
-}
-struct Slice<signed char> AudioIo::input_i8() {
-    struct Slice<signed char> s; s.ptr = null; s.len = 0UL;
-    ?&void b = audio_io_buf_(self, 0, AUDIO_FORMAT_I8);
-    unsafe { if (!b.is_null()) { s.ptr = (?&signed char)b; s.len = audio_io_samples_(self, 0); } }
-    return s;
-}
-struct Slice<unsigned char> AudioIo::output_bytes() {
-    struct Slice<unsigned char> s; s.ptr = null; s.len = 0UL;
-    unsafe {
-        if (!self.output.is_null()) {
-            s.ptr = (?&unsigned char)self.output;
-            s.len = audio_io_samples_(self, 1) * (unsigned long)audio_format_bytes(self.format);
-        }
-    }
-    return s;
-}
-struct Slice<unsigned char> AudioIo::input_bytes() {
-    struct Slice<unsigned char> s; s.ptr = null; s.len = 0UL;
-    unsafe {
-        if (!self.input.is_null()) {
-            s.ptr = (?&unsigned char)self.input;
-            s.len = audio_io_samples_(self, 0) * (unsigned long)audio_format_bytes(self.format);
-        }
-    }
-    return s;
-}
-struct Slice<float> AudioIo::output_channel_f32(int channel) {
-    struct Slice<float> all = self.output_f32();
-    struct Slice<float> s; s.ptr = null; s.len = 0UL;
-    if (self.interleaved || channel < 0 || channel >= self.output_channels) return s;
+[]float AudioIo::output_f32() const { []float v = audio_io_view_(self, self.output_, 1, AUDIO_FORMAT_F32); return v; }
+[]const float AudioIo::input_f32() const { []float v = audio_io_view_(self, self.input_, 0, AUDIO_FORMAT_F32); return v; }
+[]double AudioIo::output_f64() const { []double v = audio_io_view_(self, self.output_, 1, AUDIO_FORMAT_F64); return v; }
+[]const double AudioIo::input_f64() const { []double v = audio_io_view_(self, self.input_, 0, AUDIO_FORMAT_F64); return v; }
+[]short AudioIo::output_i16() const { []short v = audio_io_view_(self, self.output_, 1, AUDIO_FORMAT_I16); return v; }
+[]const short AudioIo::input_i16() const { []short v = audio_io_view_(self, self.input_, 0, AUDIO_FORMAT_I16); return v; }
+[]int AudioIo::output_i32() const { []int v = audio_io_view_(self, self.output_, 1, AUDIO_FORMAT_I32); return v; }
+[]const int AudioIo::input_i32() const { []int v = audio_io_view_(self, self.input_, 0, AUDIO_FORMAT_I32); return v; }
+[]signed char AudioIo::output_i8() const { []signed char v = audio_io_view_(self, self.output_, 1, AUDIO_FORMAT_I8); return v; }
+[]const signed char AudioIo::input_i8() const { []signed char v = audio_io_view_(self, self.input_, 0, AUDIO_FORMAT_I8); return v; }
+[]S24 AudioIo::output_i24() const { []S24 v = audio_io_view_(self, self.output_, 1, AUDIO_FORMAT_I24); return v; }
+[]const S24 AudioIo::input_i24() const { []S24 v = audio_io_view_(self, self.input_, 0, AUDIO_FORMAT_I24); return v; }
+
+[]unsigned char AudioIo::output_bytes() const { return self.output_; }
+[]const unsigned char AudioIo::input_bytes() const { return self.input_; }
+
+[]float AudioIo::output_channel_f32(int channel) const {
+    []float all = self.output_f32();
+    if (self.interleaved || channel < 0 || channel >= self.output_channels || all.len == 0UL) return all[0..0];
     unsigned long f = (unsigned long)self.frames;
-    return all.sub((unsigned long)channel * f, (unsigned long)(channel + 1) * f);
+    return all[(unsigned long)channel * f..(unsigned long)(channel + 1) * f];
 }
-struct Slice<float> AudioIo::input_channel_f32(int channel) {
-    struct Slice<float> all = self.input_f32();
-    struct Slice<float> s; s.ptr = null; s.len = 0UL;
-    if (self.interleaved || channel < 0 || channel >= self.input_channels) return s;
+[]const float AudioIo::input_channel_f32(int channel) const {
+    []const float all = self.input_f32();
+    if (self.interleaved || channel < 0 || channel >= self.input_channels || all.len == 0UL) return all[0..0];
     unsigned long f = (unsigned long)self.frames;
-    return all.sub((unsigned long)channel * f, (unsigned long)(channel + 1) * f);
+    return all[(unsigned long)channel * f..(unsigned long)(channel + 1) * f];
 }
-void AudioIo::clear_output() {
-    struct Slice<unsigned char> b = self.output_bytes();
-    unsafe {
-        match (b.ptr) {
-            case some(p): {
-                unsigned char* q = (unsigned char*)p;
-                for (unsigned long i = 0UL; i < b.len; i = i + 1UL) q[i] = (unsigned char)0;
-            }
-            case null: {}
-        }
-    }
+void AudioIo::clear_output() const {
+    []unsigned char b = self.output_;
+    for (unsigned long i = 0UL; i < b.len; i = i + 1UL) b[i] = (unsigned char)0;
 }
 
 } // namespace std

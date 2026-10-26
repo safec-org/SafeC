@@ -1,6 +1,7 @@
 // SafeC Standard Library — Network Core
 // Packet buffer and network interface abstraction. Freestanding-safe.
 #pragma once
+#include <std/erased.h>
 
 #define NET_MTU        1514   // Ethernet max frame size (excl. preamble/FCS)
 #define NET_MAC_LEN       6
@@ -47,8 +48,8 @@ struct PacketBuf {
 // fills in mac[] and the addresses.
 
 trait NetDriver {
-    // Sends one frame of len bytes. 0 on success.
-    int transmit(const &unsigned char frame, unsigned long len);
+    // Sends one frame. 0 on success.
+    int transmit([]const unsigned char frame);
 }
 
 struct NetIf {
@@ -59,11 +60,11 @@ struct NetIf {
 
     // The driver's transmit and context, stored type-erased (one stack
     // may run interfaces from different drivers); NetIf::new<T> is the
-    // only writer and always pairs T's thunk with a &T.
-    void*         tx_fn;               // fn int(&T, const &unsigned char buf, unsigned long len)
-    void*         iface_ctx;           // &T
+    // only writer and always pairs T's thunk with a &T (see std/erased.h).
+    ?fn int(&Erased, []const unsigned char) tx_fn;   // null for an interface with no driver
+    ?&Erased      iface_ctx;           // the &T
 
-    // An interface whose tx() calls drv.transmit(frame, len). drv must
+    // An interface whose tx() calls drv.transmit(frame). drv must
     // outlive it.
     generic<T: NetDriver>
     static struct NetIf new(&T drv);
@@ -73,8 +74,8 @@ struct NetIf {
 };
 
 generic<T: NetDriver>
-int netif_tx_thunk_(&T drv, const &unsigned char frame, unsigned long len) {
-    return drv.transmit(frame, len);
+int netif_tx_thunk_(&T drv, []const unsigned char frame) {
+    return drv.transmit(frame);
 }
 
 generic<T: NetDriver>
@@ -85,10 +86,10 @@ struct NetIf NetIf::new(&T drv) {
     nif.ip4 = 0U;
     nif.gateway = 0U;
     nif.netmask = 0U;
-    fn int(&T, const &unsigned char, unsigned long) tx = netif_tx_thunk_;
+    fn int(&T, []const unsigned char) tx = netif_tx_thunk_;
     unsafe {
-        nif.tx_fn = (void*)tx;
-        nif.iface_ctx = (void*)drv;
+        nif.tx_fn = (?fn int(&Erased, []const unsigned char))tx;
+        nif.iface_ctx = (?&Erased)drv;
     }
     return nif;
 }

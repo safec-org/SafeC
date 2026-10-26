@@ -29,7 +29,7 @@ static void deflate_crc_init_() {
     gDeflateCrcReady = 1;
 }
 
-unsigned int crc32_update(unsigned int crc, const &unsigned char data, unsigned long len) {
+static unsigned int crc32_update_n_(unsigned int crc, const &unsigned char data, unsigned long len) {
     if (!gDeflateCrcReady) { deflate_crc_init_(); }
     unsigned int c = crc ^ 0xFFFFFFFFU;
     unsafe {
@@ -42,11 +42,11 @@ unsigned int crc32_update(unsigned int crc, const &unsigned char data, unsigned 
     return c ^ 0xFFFFFFFFU;
 }
 
-unsigned int crc32(const &unsigned char data, unsigned long len) {
-    return crc32_update(0U, data, len);
+static unsigned int crc32_n_(const &unsigned char data, unsigned long len) {
+    return crc32_update_n_(0U, data, len);
 }
 
-unsigned int adler32_update(unsigned int adler, const &unsigned char data, unsigned long len) {
+static unsigned int adler32_update_n_(unsigned int adler, const &unsigned char data, unsigned long len) {
     unsigned int a = adler & 0xFFFFU;
     unsigned int b = (adler >> 16) & 0xFFFFU;
     unsafe {
@@ -67,8 +67,8 @@ unsigned int adler32_update(unsigned int adler, const &unsigned char data, unsig
     return (b << 16) | a;
 }
 
-unsigned int adler32(const &unsigned char data, unsigned long len) {
-    return adler32_update(1U, data, len);
+static unsigned int adler32_n_(const &unsigned char data, unsigned long len) {
+    return adler32_update_n_(1U, data, len);
 }
 
 // ── Output buffer ──────────────────────────────────────────────────────────
@@ -382,7 +382,7 @@ static int infl_dynamic_(struct InflState_* s) {
     return infl_codes_(s, &lencode, &distcode);
 }
 
-struct Vec<unsigned char> inflate_raw(const &unsigned char data, unsigned long len,
+static struct Vec<unsigned char> inflate_raw_n_(const &unsigned char data, unsigned long len,
                                       unsigned long max_out, ?&unsigned long consumed,
                                       ?&int ok) {
     struct InflState_ s;
@@ -872,7 +872,7 @@ static void defl_insert_(const unsigned char* src, unsigned long n, unsigned lon
     }
 }
 
-struct Vec<unsigned char> deflate_raw(const &unsigned char data, unsigned long len, int level) {
+static struct Vec<unsigned char> deflate_raw_n_(const &unsigned char data, unsigned long len, int level) {
     if (level < 0) { level = 0; }
     if (level > 9) { level = 9; }
     struct DeflState_ s;
@@ -977,8 +977,8 @@ static void defl_push_vec_(struct DeflateBuf_* b, &Vec<unsigned char> v) {
     }
 }
 
-struct Vec<unsigned char> zlib_compress(const &unsigned char data, unsigned long len, int level) {
-    struct Vec<unsigned char> body = deflate_raw(data, len, level);
+static struct Vec<unsigned char> zlib_compress_n_(const &unsigned char data, unsigned long len, int level) {
+    struct Vec<unsigned char> body = deflate_raw_n_(data, len, level);
     struct DeflateBuf_ b;
     dbuf_init_(&b, body.len + 8UL);
     unsigned int flevel = level <= 1 ? 0U : (level < 6 ? 1U : (level == 6 ? 2U : 3U));
@@ -989,7 +989,7 @@ struct Vec<unsigned char> zlib_compress(const &unsigned char data, unsigned long
     dbuf_push_(&b, (unsigned char)flg);
     defl_push_vec_(&b, &body);
     body.free();
-    unsigned int a = adler32(data, len);
+    unsigned int a = adler32_n_(data, len);
     dbuf_push_(&b, (unsigned char)(a >> 24));
     dbuf_push_(&b, (unsigned char)(a >> 16));
     dbuf_push_(&b, (unsigned char)(a >> 8));
@@ -997,7 +997,7 @@ struct Vec<unsigned char> zlib_compress(const &unsigned char data, unsigned long
     return dbuf_to_vec_(&b);
 }
 
-struct Vec<unsigned char> zlib_decompress(const &unsigned char data, unsigned long len,
+static struct Vec<unsigned char> zlib_decompress_n_(const &unsigned char data, unsigned long len,
                                           unsigned long max_out, ?&int ok) {
     int good = 1;
     unsigned int cmf = 0U;
@@ -1016,7 +1016,7 @@ struct Vec<unsigned char> zlib_decompress(const &unsigned char data, unsigned lo
     if (good) {
         unsigned long used = 0UL;
         int iok = 0;
-        unsafe { out = inflate_raw((const &unsigned char)&data[2], len - 2UL, max_out, &used, &iok); }
+        unsafe { out = inflate_raw_n_((const &unsigned char)&data[2], len - 2UL, max_out, &used, &iok); }
         if (!iok || 2UL + used + 4UL > len) {
             good = 0;
         } else {
@@ -1028,7 +1028,7 @@ struct Vec<unsigned char> zlib_decompress(const &unsigned char data, unsigned lo
             }
             unsigned int got = 1U;
             match (out.data) {
-                case some(d): { got = adler32(d, out.len); }
+                case some(d): { got = adler32_n_(d, out.len); }
                 case null: { }
             }
             if (got != want) { good = 0; }
@@ -1039,8 +1039,8 @@ struct Vec<unsigned char> zlib_decompress(const &unsigned char data, unsigned lo
     return out;
 }
 
-struct Vec<unsigned char> gzip_compress(const &unsigned char data, unsigned long len, int level) {
-    struct Vec<unsigned char> body = deflate_raw(data, len, level);
+static struct Vec<unsigned char> gzip_compress_n_(const &unsigned char data, unsigned long len, int level) {
+    struct Vec<unsigned char> body = deflate_raw_n_(data, len, level);
     struct DeflateBuf_ b;
     dbuf_init_(&b, body.len + 20UL);
     unsigned char hdr[10] = { (unsigned char)0x1F, (unsigned char)0x8B, (unsigned char)8, (unsigned char)0,
@@ -1053,7 +1053,7 @@ struct Vec<unsigned char> gzip_compress(const &unsigned char data, unsigned long
     }
     defl_push_vec_(&b, &body);
     body.free();
-    unsigned int c = crc32(data, len);
+    unsigned int c = crc32_n_(data, len);
     unsigned int sz = (unsigned int)(len & 0xFFFFFFFFUL);
     int k = 0;
     while (k < 4) { dbuf_push_(&b, (unsigned char)(c >> (8 * k))); k = k + 1; }
@@ -1062,12 +1062,12 @@ struct Vec<unsigned char> gzip_compress(const &unsigned char data, unsigned long
     return dbuf_to_vec_(&b);
 }
 
-int gzip_is_gzip(const &unsigned char data, unsigned long len) {
+static int gzip_is_gzip_n_(const &unsigned char data, unsigned long len) {
     if (len < 2UL) { return 0; }
     unsafe { return data[0] == (unsigned char)0x1F && data[1] == (unsigned char)0x8B; }
 }
 
-struct Vec<unsigned char> gzip_decompress(const &unsigned char data, unsigned long len,
+static struct Vec<unsigned char> gzip_decompress_n_(const &unsigned char data, unsigned long len,
                                           unsigned long max_out, ?&int ok) {
     struct DeflateBuf_ b;
     dbuf_init_(&b, len * 3UL);
@@ -1106,7 +1106,7 @@ struct Vec<unsigned char> gzip_decompress(const &unsigned char data, unsigned lo
                 if (b.len >= max_out) { good = 0; break; }
                 room = max_out - b.len;
             }
-            struct Vec<unsigned char> part = inflate_raw((const &unsigned char)&d[p], len - p, room, &used, &iok);
+            struct Vec<unsigned char> part = inflate_raw_n_((const &unsigned char)&d[p], len - p, room, &used, &iok);
             if (!iok || p + used + 8UL > len) { part.free(); good = 0; break; }
             unsigned long t = p + used;
             unsigned int wantCrc = (unsigned int)d[t] | ((unsigned int)d[t + 1UL] << 8) |
@@ -1115,7 +1115,7 @@ struct Vec<unsigned char> gzip_decompress(const &unsigned char data, unsigned lo
                                    ((unsigned int)d[t + 6UL] << 16) | ((unsigned int)d[t + 7UL] << 24);
             unsigned int gotCrc = 0U;
             match (part.data) {
-                case some(pd): { gotCrc = crc32(pd, part.len); }
+                case some(pd): { gotCrc = crc32_n_(pd, part.len); }
                 case null: { }
             }
             if (gotCrc != wantCrc || (unsigned int)(part.len & 0xFFFFFFFFUL) != wantLen) {
@@ -1135,5 +1135,26 @@ struct Vec<unsigned char> gzip_decompress(const &unsigned char data, unsigned lo
     }
     return dbuf_to_vec_(&b);
 }
+
+
+// ── Slice API (deflate.h) over the (pointer, length) cores above ──────────
+
+unsigned int crc32([]const unsigned char d) { unsafe { return crc32_n_((const &unsigned char)d.ptr, d.len); } }
+unsigned int crc32_update(unsigned int crc, []const unsigned char d) { unsafe { return crc32_update_n_(crc, (const &unsigned char)d.ptr, d.len); } }
+unsigned int adler32([]const unsigned char d) { unsafe { return adler32_n_((const &unsigned char)d.ptr, d.len); } }
+unsigned int adler32_update(unsigned int adler, []const unsigned char d) { unsafe { return adler32_update_n_(adler, (const &unsigned char)d.ptr, d.len); } }
+struct Vec<unsigned char> deflate_raw([]const unsigned char d, int level) { unsafe { return deflate_raw_n_((const &unsigned char)d.ptr, d.len, level); } }
+struct Vec<unsigned char> inflate_raw([]const unsigned char d, unsigned long max_out, ?&unsigned long consumed, ?&int ok) {
+    unsafe { return inflate_raw_n_((const &unsigned char)d.ptr, d.len, max_out, consumed, ok); }
+}
+struct Vec<unsigned char> zlib_compress([]const unsigned char d, int level) { unsafe { return zlib_compress_n_((const &unsigned char)d.ptr, d.len, level); } }
+struct Vec<unsigned char> zlib_decompress([]const unsigned char d, unsigned long max_out, ?&int ok) {
+    unsafe { return zlib_decompress_n_((const &unsigned char)d.ptr, d.len, max_out, ok); }
+}
+struct Vec<unsigned char> gzip_compress([]const unsigned char d, int level) { unsafe { return gzip_compress_n_((const &unsigned char)d.ptr, d.len, level); } }
+struct Vec<unsigned char> gzip_decompress([]const unsigned char d, unsigned long max_out, ?&int ok) {
+    unsafe { return gzip_decompress_n_((const &unsigned char)d.ptr, d.len, max_out, ok); }
+}
+int gzip_is_gzip([]const unsigned char d) { unsafe { return gzip_is_gzip_n_((const &unsigned char)d.ptr, d.len); } }
 
 } // namespace std

@@ -20,7 +20,7 @@ static void __hydrate_text_int_listener(?&HydrateTextBinding bq) {
         case some(b): {
             char buf[24];
             unsafe {
-                wasm_itoa((long long)b.signal.get(), buf, 24UL);
+                wasm_itoa((long long)b.signal.get(), buf[..]);
                 dom_set_text(b.elementHandle, buf);
             }
         }

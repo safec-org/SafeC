@@ -1885,7 +1885,7 @@ static int __wl_clip_set(const &char utf8, unsigned long n) {
     unsafe {
         if (gWl.dataDevice == (void*)0 || gWl.dead) { return 0; }
         gWl.clip.free();
-        gWl.clip = String::from_n(utf8, n);
+        gWl.clip = String::from_n_(utf8, n);
         struct GuiWlArgs a = __wl_args();
         void* src = __wl_new(gWl.ddm, 0U /* create_data_source */, gWlLib.iDataSource, &a);
         if (src == (void*)0) { return 0; }
@@ -1928,7 +1928,7 @@ static int __wl_clip_get(&String out) {
         if (gWl.selection < 0) { return 0; }
         // Is the selection ours? (Our own source shows up as an offer too.)
         if (gWl.source != (void*)0) {
-            out.push_n((const char*)gWl.clip.data, gWl.clip.len);
+            out.push_n_((const char*)gWl.clip.data, gWl.clip.len);
             return 1;
         }
         struct GuiWlOffer o = gWl.offers[gWl.selection];
@@ -1959,7 +1959,7 @@ static int __wl_clip_get(&String out) {
             long n = read(fds[0], (void*)&buf[0], 4096UL);
             if (n < 0L) { break; }
             if (n == 0L) { ok = 1; break; }
-            out.push_n((const char*)&buf[0], (unsigned long)n);
+            out.push_n_((const char*)&buf[0], (unsigned long)n);
         }
         close(fds[0]);
         return ok;

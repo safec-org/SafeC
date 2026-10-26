@@ -186,10 +186,10 @@ struct TlsStream {
     int handshake();
     // Up to n bytes of application data: the count, 0 once the peer closed
     // (close_notify or EOF), -1 on error, TLS_WANT_READ/WRITE.
-    long long read(&unsigned char buf, unsigned long n);
+    long long read([]unsigned char buf);
     // Up to n bytes (at most one record's worth may be accepted at a
     // time): the count, -1 on error, TLS_WANT_WRITE/READ.
-    long long write(const &unsigned char buf, unsigned long n);
+    long long write([]const unsigned char buf);
     // Sends close_notify (once). 0 on success.
     int shutdown();
     // shutdown() if open, frees the TLS state and closes the socket.
