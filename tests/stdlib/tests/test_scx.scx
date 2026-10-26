@@ -36,7 +36,7 @@ static struct String initializer(const char* name) {
 
 static void assign(&Holder h, int flag) {
     if (flag) {
-        h.s.free();
+        std::replace(&h.s, String::new()).drop();
         h.s = <b>{SCX_FIXTURE_TITLE}</b>;
     }
 }

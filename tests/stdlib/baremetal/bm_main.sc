@@ -292,7 +292,11 @@ struct Poll<int> BmProducer::poll(&Context cx) {
     ASYNC_RETURN(self.i - 1);
     ASYNC_END;
 }
-void BmProducer::drop() { self.st = ASYNC_DONE; }
+void BmProducer::drop() {
+    if (self.st == 1) self.d.drop();     // suspended at an await: that future is live
+    if (self.st == 2) self.tx.drop();
+    self.st = ASYNC_DONE;
+}
 
 struct BmConsumer {
     int st; int sum; ?int got; struct ChanRecv<int> rx; struct MutexLock l; struct YieldNow y;
@@ -315,7 +319,12 @@ struct Poll<int> BmConsumer::poll(&Context cx) {
     ASYNC_RETURN(self.sum);
     ASYNC_END;
 }
-void BmConsumer::drop() { self.st = ASYNC_DONE; }
+void BmConsumer::drop() {
+    if (self.st == 1) self.rx.drop();    // suspended at an await: that future is live
+    if (self.st == 2) self.l.drop();
+    if (self.st == 3) self.y.drop();
+    self.st = ASYNC_DONE;
+}
 
 static struct AsyncTask<struct BmProducer, int> g_bm_tp;
 static struct AsyncTask<struct BmConsumer, int> g_bm_tc[2];
@@ -329,17 +338,19 @@ static void t_async() {
     struct BmProducer p;
     p.st = ASYNC_INIT;
     g_bm_tp = AsyncTask::new(p);
-    struct BmConsumer c;
-    c.st = ASYNC_INIT;
-    c.sum = 0;
-    c.got = null;
-    g_bm_tc[0] = AsyncTask::new(c);
-    g_bm_tc[1] = AsyncTask::new(c);
+    for (int k = 0; k < 2; k = k + 1) {
+        struct BmConsumer c;
+        c.st = ASYNC_INIT;
+        c.sum = 0;
+        c.got = null;
+        unsafe { g_bm_tc[k] = AsyncTask::new(c); }
+    }
     struct JoinHandle<int> hp = g_bm_ex.spawn(&g_bm_tp);
-    g_bm_ex.spawn(&g_bm_tc[0]);
-    g_bm_ex.spawn(&g_bm_tc[1]);
+    g_bm_ex.spawn(&g_bm_tc[0]).drop();   // detached: the tasks are checked by take()
+    g_bm_ex.spawn(&g_bm_tc[1]).drop();
     g_bm_ex.run(&clk);
     CHECK(hp.is_finished());
+    hp.drop();
     CHECK(g_bm_tp.take().default(0) == 6);
     CHECK(g_bm_tc[0].take().default(0) + g_bm_tc[1].take().default(0) == 21);
     CHECK(clk.now == 30LL);
@@ -352,6 +363,7 @@ static void t_async() {
     CHECK(e.which == 1);
     CHECK(clk.now == 37LL);
     CHECK(g_bm_ex.timers.pending() == 0);
+    s.drop();
 }
 
 int main() {

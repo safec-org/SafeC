@@ -145,8 +145,7 @@ static struct String plain_to_md(const &String text) {
         prev_colon = line.ends_with(":");
     }
     if (in_code) { out.push("```\n"); }
-    for (unsigned long i = 0UL; i < lines.len; i = i + 1UL) { lines.at(i).free(); }
-    lines.free();
+    lines.free();   // and each line
     return out;
 }
 
@@ -265,9 +264,8 @@ static int render_hook(?&RenderCtx ctx, const &MdNode n, int entering, &String o
         return 2;
     }
     if (n.kind == MD_CODE_BLOCK && entering) {
-        struct String lang = String::new();
         long long sp = n.info.find_char(' ');
-        if (sp >= 0LL) { lang = n.info.substr(0UL, (unsigned long)sp); } else { lang.push_str(&n.info); }
+        struct String lang = sp >= 0LL ? n.info.substr(0UL, (unsigned long)sp) : n.info.clone();
         if (lang.len == 0UL) { lang.push("c"); }
         out.push("<div class=\"language-");
         util_push_esc(out, lang.as_ptr());

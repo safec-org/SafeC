@@ -1317,7 +1317,7 @@ struct Poll<long long> EchoConn::poll(&Context cx) {
         if (self.ok == 0) break;
         self.bytes = self.bytes + self.n;
     }
-    self.c.close();
+    unsafe { self.c.close(); }   // early, in place: drop() closes nothing again
     ASYNC_RETURN(self.bytes);
     ASYNC_END;
 }
@@ -1359,7 +1359,7 @@ struct Poll<int> EchoServer::poll(&Context cx) {
         }
         self.accepted = self.accepted + 1;
     }
-    self.l.close();
+    unsafe { self.l.close(); }   // early, in place: drop() closes nothing again
     ASYNC_RETURN(self.accepted);
     ASYNC_END;
 }
@@ -1409,7 +1409,7 @@ struct Poll<int> EchoClient::poll(&Context cx) {
         if (self.n <= 0LL) break;
         self.got = self.got + (unsigned long)self.n;
     }
-    self.s.close();
+    unsafe { self.s.close(); }   // early, in place: drop() closes nothing again
     if (self.got != 300UL) ASYNC_RETURN(-3);
     for (int i = 0; i < 300; i = i + 1) { if (self.in[i] != self.out[i]) ASYNC_RETURN(-4); }
     ASYNC_RETURN(self.id);
@@ -1479,8 +1479,8 @@ struct Poll<int> HttpOnce::poll(&Context cx) {
     self.n = (long long)put_str_(self.resp[0..128], HTTP_REPLY);
     self.wr = self.c.write_all(self.resp[0..(unsigned long)self.n]);
     AWAIT_INTO(3, self.ok, self.wr);
-    self.c.close();
-    self.l.close();
+    unsafe { self.c.close(); }   // early, in place: drop() closes nothing again
+    unsafe { self.l.close(); }   // early, in place: drop() closes nothing again
     // 1 if the request line was a GET of /hello.
     if (self.req[0] == (unsigned char)71 && self.req[4] == (unsigned char)47 && self.req[5] == (unsigned char)104) ASYNC_RETURN(1);
     ASYNC_RETURN(0);
@@ -1528,7 +1528,7 @@ struct Poll<int> HttpGet::poll(&Context cx) {
         self.have = self.have + (unsigned long)self.n;
     }
     self.resp[self.have] = (unsigned char)0;
-    self.s.close();
+    unsafe { self.s.close(); }   // early, in place: drop() closes nothing again
     ASYNC_RETURN((int)self.have);
     ASYNC_END;
 }

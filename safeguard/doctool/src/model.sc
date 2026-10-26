@@ -203,8 +203,7 @@ static long long ensure_module(&Crate c, const &String path) {
     long long parent = 0LL;
     long long slash = path.rfind_char('/');
     if (path.len > 0UL) {
-        struct String pp = String::new();
-        if (slash >= 0LL) { pp = path.substr(0UL, (unsigned long)slash); }
+        struct String pp = slash >= 0LL ? path.substr(0UL, (unsigned long)slash) : String::new();
         parent = ensure_module(c, &pp);
         pp.free();
     }
@@ -302,8 +301,8 @@ static int read_json(const &char path, &Value out) {
 
 int crate_load(&Crate c, const &char config_path) {
     if (!read_json(config_path, &c.cfg)) { return 0; }
-    struct Value doc;
-    if (!read_json(util_vstr(&c.cfg, "input", ""), &doc)) { return 0; }
+    struct Value doc = Value::null();
+    if (!read_json(util_vstr(&c.cfg, "input", ""), &doc)) { doc.drop(); return 0; }
     c.name = String::from(util_vstr(&c.cfg, "name", "crate"));
     c.version = String::from(util_vstr(&c.cfg, "version", ""));
     c.description = String::from(util_vstr(&c.cfg, "description", ""));

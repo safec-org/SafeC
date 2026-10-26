@@ -72,6 +72,7 @@ int check_links(const &char dir) {
     if (!dir_walk(dir, &files)) {
         eprint("safec-doc: cannot read ");
         eprintln(dir);
+        files.drop();
         return 1;
     }
     // Every "<page>#<id>" and every file.
@@ -93,7 +94,7 @@ int check_links(const &char dir) {
             struct String v = unescape_attr(found.at(k));
             key.push_str(&v);
             ids.insert(key.as_ptr(), 1);
-            key.free(); v.free(); found.at(k).free();
+            key.free(); v.free();
         }
         found.free();
         pages.push(rel.clone());
@@ -118,7 +119,7 @@ int check_links(const &char dir) {
             struct String frag = String::new();
             long long hash = v.find_char('#');
             if (hash >= 0LL) {
-                frag = v.substr((unsigned long)hash + 1UL, v.len);
+                std::replace(&frag, v.substr((unsigned long)hash + 1UL, v.len)).drop();
                 path.truncate((unsigned long)hash);
             }
             struct String target = String::new();
@@ -126,7 +127,7 @@ int check_links(const &char dir) {
                 target.push_str(rel);
             } else {
                 struct String joined = page_dir.len > 0UL && !page_dir.eq_cstr(".") ? path_join(page_dir.as_ptr(), path.as_ptr()) : path.clone();
-                target = path_normalize(joined.as_ptr());
+                std::replace(&target, path_normalize(joined.as_ptr())).drop();
                 joined.free();
                 if (target.ends_with("/") || target.eq_cstr(".")) { target.push("index.html"); }
                 struct String with_index = target.clone();
@@ -159,7 +160,6 @@ int check_links(const &char dir) {
             }
             v.free(); path.free(); frag.free(); target.free();
         }
-        for (unsigned long k = 0UL; k < refs.len; k = k + 1UL) { refs.at(k).free(); }
         refs.free();
         page_dir.free(); full.free(); html.free();
     }
@@ -170,8 +170,6 @@ int check_links(const &char dir) {
     print(" pages: ");
     print_int((long long)bad);
     println(" broken");
-    for (unsigned long i = 0UL; i < files.len; i = i + 1UL) { files.at(i).free(); }
-    for (unsigned long i = 0UL; i < pages.len; i = i + 1UL) { pages.at(i).free(); }
     files.free(); pages.free(); ids.free(); exists.free();
     return bad;
 }

@@ -82,6 +82,7 @@ int main(int argc, char** argv) {
     for (int i = 0; i < argc; i = i + 1) {
         unsafe { args.push(String::from(argv[i])); }
     }
+    defer args.drop();
     if (args.len < 2UL) { usage(); return 2; }
     &String cmd = args.at(1UL);
     if (cmd.eq_cstr("--version")) {
@@ -92,7 +93,10 @@ int main(int argc, char** argv) {
     &String arg = args.at(2UL);
     if (cmd.eq_cstr("build")) {
         struct Crate c;
-        if (!crate_load(&c, arg.as_ptr())) { return 1; }
+        if (!crate_load(&c, arg.as_ptr())) {
+            unsafe { forget(c); }   // partly loaded; the process is exiting
+            return 1;
+        }
         int ok = pages_build(&c);
         print("safec-doc: ");
         print_int((long long)c.items.len);
@@ -100,6 +104,7 @@ int main(int argc, char** argv) {
         print_int((long long)c.modules.len);
         print(" modules -> ");
         println(c.out.as_ptr());
+        drop(c);
         return ok ? 0 : 1;
     }
     if (cmd.eq_cstr("check")) {
