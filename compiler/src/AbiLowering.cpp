@@ -216,7 +216,8 @@ llvm::Function *rewriteParams(llvm::Function *f, const Rules &r) {
     llvm::Module *m = f->getParent();
     std::string name = f->getName().str();
     f->setName(name + ".pre_byref");
-    llvm::Function *nf = llvm::Function::Create(newFT, f->getLinkage(), f->getAddressSpace(), name, m);
+    llvm::Function *nf = llvm::Function::Create(newFT, f->getLinkage(), f->getAddressSpace(), name);
+    m->getFunctionList().insert(f->getIterator(), nf);   // in f's place: the module keeps its order
     nf->copyAttributesFrom(f);
     // copyAttributesFrom leaves the COMDAT behind. A monomorphized generic
     // is linkonce_odr in a COMDAT of its own name; without it COFF emits a
@@ -330,7 +331,8 @@ llvm::Function *rewriteFunction(llvm::Function *f, const Rules &r) {
     f->setName(name + ".pre_sret");
 
     llvm::Function *nf = llvm::Function::Create(newFT, f->getLinkage(),
-                                                f->getAddressSpace(), name, m);
+                                                f->getAddressSpace(), name);
+    m->getFunctionList().insert(f->getIterator(), nf);   // see rewriteParams
     nf->copyAttributesFrom(f);
     nf->setComdat(f->getComdat());   // see rewriteParams
     nf->setCallingConv(f->getCallingConv());
