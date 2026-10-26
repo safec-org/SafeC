@@ -1,0 +1,45 @@
+#include <stdio.h>
+int main() {
+    char c = (char)200;
+    int a = (int)c;
+    unsigned char u = (unsigned char)200;
+    int f = u;
+    printf("%d %d %d\n", a, f, (int)(c < (char)0));
+    char p = (char)100;
+    char q = (char)100;
+    int s = p + q;
+    printf("%d\n", s);
+    short sh = (short)30000;
+    int w = sh + sh;
+    printf("%d\n", w);
+    long l = 3000000000L;
+    printf("%ld %ld\n", l * 3L, l / 7L);
+    unsigned int ux = 4000000000U;
+    printf("%u %u\n", ux, ux / 3U);
+    int neg = -7;
+    printf("%d %d %d %d\n", neg / 2, neg % 2, neg >> 1, (int)((unsigned int)neg >> 28U));
+    long m = -1L;
+    unsigned long um = (unsigned long)m;
+    printf("%lu %lx\n", um, um);
+    printf("%x %X %o %#x %08d %-5d| %+d\n", 255, 255, 8, 255, 42, 7, 9);
+    int ov = 2147483647;
+    printf("%d %d %d\n", ov +| 1, ov +% 10, (-ov - 1) -% 1);
+    unsigned char sat = (unsigned char)250;
+    unsigned char sat2 = sat +% (unsigned char)10;
+    printf("%d\n", (int)sat2);
+    long big = 9223372036854775807L;
+    printf("%ld\n", big +% 1L);
+    int bits = 0b1011;
+    printf("%d %d %d\n", bits << 2, bits & 6, ~bits);
+    unsigned long hx = 0xFFFFFFFFFFUL;
+    printf("%lu\n", hx);
+    int x = 10;
+    x += 5; x -= 2; x *= 3; x /= 2; x %= 7; x <<= 3; x >>= 1; x |= 1; x &= 13; x ^= 6;
+    printf("%d\n", x);
+    long lx = 5L;
+    lx += 1;
+    printf("%ld\n", lx);
+    bool b = true;
+    printf("%d %d\n", (int)b, (int)!b);
+    return 0;
+}

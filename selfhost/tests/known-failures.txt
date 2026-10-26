@@ -1,0 +1,10 @@
+# Tests where scc and safec are known to disagree. difftest.py still runs
+# them, and fails if one starts passing (remove it here) or if a test not
+# listed here fails. Reasons are in SUBSET.md, "Not supported" and
+# "Differences".
+
+# SIMD vector types are not supported
+ctests/simd/vector_align.sc
+# a safec (C++ compiler) bug, not scc's: '!x' passed to a variadic function
+# is emitted as an unpromoted i1, so printf("%d", !x) prints 254 natively
+examples/stdlib_complete.sc
