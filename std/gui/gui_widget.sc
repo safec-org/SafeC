@@ -897,7 +897,7 @@ float __w_text_wn(const &GuiUi ui, const &Widget w, const &char s, unsigned long
         case null: { }
     }
     &GuiTypeface f = __w_face(ui, w);
-    return f.measure_n(s, n, __w_font_size(ui, w));
+    return f.measure_n_n_(s, n, __w_font_size(ui, w));
 }
 
 float __w_text_w(const &GuiUi ui, const &Widget w, const &char s) {
@@ -939,7 +939,7 @@ void __w_text_n(const &GuiUi ui, &GuiCanvas c, const &Widget w, const &char s, u
     c.set_text_align(GUI_TEXT_LEFT);
     c.set_text_baseline(GUI_BASELINE_ALPHABETIC);
     c.set_fill_color(col);
-    c.fill_text_n(s, n, x, floor_f(y + __w_ascent(ui, w) + 0.5f));
+    c.fill_text_n_n_(s, n, x, floor_f(y + __w_ascent(ui, w) + 0.5f));
 }
 
 void __w_text(const &GuiUi ui, &GuiCanvas c, const &Widget w, const &char s, float x, float y, struct GuiColor col) {
@@ -1040,7 +1040,7 @@ void __w_chevron(&GuiCanvas c, float cx, float cy, float size, int dir, struct G
     c.set_line_join(GUI_JOIN_ROUND);
     float noDash[1];
     noDash[0] = 0.0f;
-    c.set_dash(&noDash[0], 0, 0.0f);
+    c.set_dash_n_(&noDash[0], 0, 0.0f);
     c.begin_path();
     if (dir == 0) { c.move_to(cx - h, cy - q); c.line_to(cx, cy + q); c.line_to(cx + h, cy - q); }
     else if (dir == 1) { c.move_to(cx - q, cy - h); c.line_to(cx + q, cy); c.line_to(cx - q, cy + h); }
@@ -1058,7 +1058,7 @@ void __w_check_mark(&GuiCanvas c, float x, float y, float s, struct GuiColor col
     c.set_line_join(GUI_JOIN_ROUND);
     float noDash[1];
     noDash[0] = 0.0f;
-    c.set_dash(&noDash[0], 0, 0.0f);
+    c.set_dash_n_(&noDash[0], 0, 0.0f);
     c.begin_path();
     c.move_to(x + s * 0.22f, y + s * 0.52f);
     c.line_to(x + s * 0.42f, y + s * 0.72f);
@@ -1152,7 +1152,7 @@ int __w_height_for(&GuiUi ui, &Widget w, int width) {
         int inner = width - __w_pad(ui, w, 0) - __w_pad(ui, w, 2);
         if (inner < 1) { inner = 1; }
         struct GuiTextLayout l = GuiTextLayout::new();
-        unsafe { l.build(__w_face(ui, w), __w_font_size(ui, w), (const char*)w.text.data, w.text.len, (float)inner, w.textAlign); }
+        unsafe { l.build_n_(__w_face(ui, w), __w_font_size(ui, w), (const char*)w.text.data, w.text.len, (float)inner, w.textAlign); }
         int h = (int)ceil_f(l.height) + __w_pad(ui, w, 1) + __w_pad(ui, w, 3);
         l.free();
         if (w.minH > 0 && h < __w_ipx(ui, w.minH)) { h = __w_ipx(ui, w.minH); }

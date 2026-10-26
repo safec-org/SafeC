@@ -124,7 +124,9 @@ struct GuiPath {
     void ellipse(float cx, float cy, float rx, float ry);
     void circle(float cx, float cy, float r);
     // A closed polygon through n points (xy pairs: pts[0..2n)).
-    void polygon(const &float pts, int n);
+    void polygon([]const float pts);
+    // internal: the (reference, length) core of polygon()
+    void polygon_n_(const &float pts, int n);
 
     // Parses SVG path data ("M10 10 h 20 q 5 5 0 10 z ..." — every command
     // of SVG 1.1, absolute and relative) and appends it. Returns 1, or 0 at

@@ -48,7 +48,7 @@ static void __wb_text_block(&GuiUi ui, &Widget w, &int cw, &int ch) {
         }
         case null: { }
     }
-    unsafe { l.build(__w_face(ui, w), __w_font_size(ui, w), (const char*)w.text.data, w.text.len, 0.0f, w.textAlign); }
+    unsafe { l.build_n_(__w_face(ui, w), __w_font_size(ui, w), (const char*)w.text.data, w.text.len, 0.0f, w.textAlign); }
     *cw = (int)ceil_f(l.width);
     *ch = (int)ceil_f(l.height);
     l.free();
@@ -569,7 +569,7 @@ void __wk_basic_paint(&GuiUi ui, &GuiCanvas c, &Widget w) {
         }
         struct GuiTextLayout l = GuiTextLayout::new();
         unsafe {
-            l.build(__w_face(ui, w), __w_font_size(ui, w), (const char*)w.text.data, w.text.len,
+            l.build_n_(__w_face(ui, w), __w_font_size(ui, w), (const char*)w.text.data, w.text.len,
                     w.wrap ? (float)cw : 0.0f, w.textAlign);
         }
         float tx = (float)cx;

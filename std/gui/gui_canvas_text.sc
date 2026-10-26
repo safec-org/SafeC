@@ -141,11 +141,11 @@ float GuiCanvas::measure_text(const &char text) const {
     return face.measure(text, self.st.fontSize);
 }
 
-float GuiCanvas::fill_text_n(const &char text, unsigned long len, float x, float y) {
+float GuiCanvas::fill_text_n_n_(const &char text, unsigned long len, float x, float y) {
     &GuiTypeface face = __gui_canvas_face(self);
     &GuiTypeface fb = GuiTypeface::fallback();
     float size = self.st.fontSize;
-    float width = face.measure_n(text, len, size);
+    float width = face.measure_n_n_(text, len, size);
     if (self.st.textAlign == GUI_TEXT_CENTER) { x = x - width * 0.5f; }
     else if (self.st.textAlign == GUI_TEXT_RIGHT) { x = x - width; }
     float asc = face.ascent(size);
@@ -160,7 +160,7 @@ float GuiCanvas::fill_text_n(const &char text, unsigned long len, float x, float
     unsafe { selfFb = ((const void*)face == (const void*)fb) ? 1 : 0; }
     unsigned long i = 0UL;
     while (i < len) {
-        unsigned int cp = gui_utf8_next(text, len, &i);
+        unsigned int cp = gui_utf8_next_n_(text, len, &i);
         if (cp == 0U) { break; }
         int g = face.glyph_index(cp);
         if (g == 0 && !selfFb && fb.glyph_index(cp) != 0) {
@@ -178,10 +178,18 @@ float GuiCanvas::fill_text_n(const &char text, unsigned long len, float x, float
     return width;
 }
 
+float GuiCanvas::fill_text_n([]const char text_s, float x, float y) {
+    unsigned long len = (unsigned long)text_s.len;
+    char text_d_[1];
+    const &char text = &text_d_[0];
+    if (text_s.len > 0UL) { unsafe { text = (const &char)text_s.ptr; } }
+    return self.fill_text_n_n_(text, len, x, y);
+}
+
 float GuiCanvas::fill_text(const &char text, float x, float y) {
     unsigned long n = 0UL;
     unsafe { while (text[n] != '\0') { n = n + 1UL; } }
-    return self.fill_text_n(text, n, x, y);
+    return self.fill_text_n_n_(text, n, x, y);
 }
 
 void GuiCanvas::fill_text_layout(const &GuiTextLayout layout, float x, float y) {

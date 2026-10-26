@@ -255,7 +255,7 @@ void GuiCanvas::set_line_cap(int lineCap) { self.st.lineCap = lineCap; }
 void GuiCanvas::set_line_join(int lineJoin) { self.st.lineJoin = lineJoin; }
 void GuiCanvas::set_miter_limit(float limit) { self.st.miterLimit = limit < 1.0f ? 1.0f : limit; }
 
-void GuiCanvas::set_dash(const &float lengths, int n, float offset) {
+void GuiCanvas::set_dash_n_(const &float lengths, int n, float offset) {
     if (n <= 0) { self.st.ndash = 0; return; }
     if (n > GUI_DASH_MAX) { n = GUI_DASH_MAX; }
     float total = 0.0f;
@@ -281,6 +281,14 @@ void GuiCanvas::set_dash(const &float lengths, int n, float offset) {
     }
     self.st.ndash = n;
     self.st.dashOffset = offset;
+}
+
+void GuiCanvas::set_dash([]const float lengths_s, float offset) {
+    int n = (int)lengths_s.len;
+    float lengths_d_[1];
+    const &float lengths = &lengths_d_[0];
+    if (lengths_s.len > 0UL) { unsafe { lengths = (const &float)lengths_s.ptr; } }
+    self.set_dash_n_(lengths, n, offset);
 }
 
 void GuiCanvas::set_global_alpha(float a) { self.st.alpha = a < 0.0f ? 0.0f : (a > 1.0f ? 1.0f : a); }

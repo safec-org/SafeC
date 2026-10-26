@@ -63,7 +63,7 @@ static void __gui_layout_finish_line(&GuiTextLayout l, unsigned long firstGlyph,
     l.lines.push(line);
 }
 
-void GuiTextLayout::build(const &GuiTypeface face, float size, const &char text, unsigned long len,
+void GuiTextLayout::build_n_(const &GuiTypeface face, float size, const &char text, unsigned long len,
                           float maxWidth, int align) {
     self.glyphs.clear();
     self.lines.clear();
@@ -93,7 +93,7 @@ void GuiTextLayout::build(const &GuiTypeface face, float size, const &char text,
     unsigned long i = 0UL;
     while (i < len) {
         unsigned long start = i;
-        unsigned int cp = gui_utf8_next(text, len, &i);
+        unsigned int cp = gui_utf8_next_n_(text, len, &i);
         if (cp == 10U) {
             __gui_layout_finish_line(self, lineFirst, lineByte, start);
             lineFirst = self.glyphs.len;
@@ -207,6 +207,14 @@ void GuiTextLayout::build(const &GuiTypeface face, float size, const &char text,
         }
         li = li + 1UL;
     }
+}
+
+void GuiTextLayout::build(const &GuiTypeface face, float size, []const char text_s, float maxWidth, int align) {
+    unsigned long len = (unsigned long)text_s.len;
+    char text_d_[1];
+    const &char text = &text_d_[0];
+    if (text_s.len > 0UL) { unsafe { text = (const &char)text_s.ptr; } }
+    self.build_n_(face, size, text, len, maxWidth, align);
 }
 
 unsigned long GuiTextLayout::line_of(unsigned long pos) const {

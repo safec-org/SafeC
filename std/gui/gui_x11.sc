@@ -1032,13 +1032,13 @@ static void __gui_x11_handle(struct X11EventBuf* buf) {
             if (t == GUI_X11_KEY_PRESS_TYPE && n > 0 && (ev.modifiers & (GUI_MOD_CTRL | GUI_MOD_META)) == 0) {
                 text[n] = '\0';
                 unsigned long pos = 0UL;
-                unsigned int c = gui_utf8_next(&text[0], (unsigned long)n, &pos);
+                unsigned int c = gui_utf8_next_n_(&text[0], (unsigned long)n, &pos);
                 if (c >= 32U && c != 127U) { ev.codepoint = c; }
                 gui_backend_post(st, ev);
                 // Anything after the first character (a composed sequence)
                 // arrives as CHAR events.
                 while (pos < (unsigned long)n) {
-                    unsigned int c2 = gui_utf8_next(&text[0], (unsigned long)n, &pos);
+                    unsigned int c2 = gui_utf8_next_n_(&text[0], (unsigned long)n, &pos);
                     if (c2 >= 32U && c2 != 127U) {
                         struct GuiEvent ce = GuiEvent::new(GUI_EVENT_CHAR);
                         ce.codepoint = c2;

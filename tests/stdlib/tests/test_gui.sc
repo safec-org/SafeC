@@ -259,7 +259,7 @@ void t_draw() {
 void t_png() {
     unsafe {
         struct GuiImage img;
-        ASSERT_TRUE(img.load_png(&kPngRgba[0], 131UL));   // filters None/Sub/Up/Average/Paeth
+        ASSERT_TRUE(img.load_png(kPngRgba[0..131UL]));   // filters None/Sub/Up/Average/Paeth
         ASSERT_EQ(img.width, 4);
         ASSERT_EQ(img.height, 5);
         unsigned long o = (3UL * 4UL + 2UL) * 4UL;              // pixel (2, 3)
@@ -273,24 +273,24 @@ void t_png() {
         img.free();
         free_win(&win);
 
-        ASSERT_TRUE(img.load_png(&kPngRgb[0], 81UL));
+        ASSERT_TRUE(img.load_png(kPngRgb[0..81UL]));
         ASSERT_EQ(img.pixels[(1UL * 3UL + 1UL) * 4UL + 1UL], 50);   // (1, 1) = 40,50,60
         ASSERT_EQ(img.pixels[(1UL * 3UL + 1UL) * 4UL + 3UL], 255);  // opaque
         img.free();
-        ASSERT_TRUE(img.load_png(&kPngGray[0], 71UL));
+        ASSERT_TRUE(img.load_png(kPngGray[0..71UL]));
         ASSERT_EQ(img.pixels[(1UL * 2UL + 0UL) * 4UL + 2UL], 200);
         img.free();
-        ASSERT_TRUE(img.load_png(&kPngBig[0], 2399UL));       // dynamic-Huffman block
+        ASSERT_TRUE(img.load_png(kPngBig[0..2399UL]));       // dynamic-Huffman block
         unsigned long b = (9UL * 32UL + 5UL) * 4UL;
         ASSERT_EQ(img.pixels[b], 40);
         ASSERT_EQ(img.pixels[b + 1UL], 72);
         ASSERT_EQ(img.pixels[b + 2UL], 60);
         img.free();
-        ASSERT_TRUE(img.load_png(&kPngStored[0], 70UL));      // stored block
+        ASSERT_TRUE(img.load_png(kPngStored[0..70UL]));      // stored block
         ASSERT_EQ(img.pixels[4UL], 4);
         img.free();
-        ASSERT_FALSE(img.load_png(&kPngPal[0], 67UL));        // palette: unsupported
-        ASSERT_FALSE(img.load_png(&kPngRgb[0], 30UL));        // truncated
+        ASSERT_FALSE(img.load_png(kPngPal[0..67UL]));        // palette: unsupported
+        ASSERT_FALSE(img.load_png(kPngRgb[0..30UL]));        // truncated
     }
 }
 

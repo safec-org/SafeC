@@ -49,7 +49,7 @@ int GuiImage::load_png_file(const &char path) {
             unsafe { ok = read_exact(f, ((unsigned char*)buf)[0..(unsigned long)n]); }
             f.close();
             int r = 0;
-            if (ok) { unsafe { r = self.load_png((const unsigned char*)buf, (unsigned long)n); } }
+            if (ok) { unsafe { r = self.load_png_n_((const unsigned char*)buf, (unsigned long)n); } }
             unsafe { dealloc_raw_((void*)buf); }
             return r;
         }

@@ -737,12 +737,12 @@ static int __gui_cocoa_route(void* ev) {
                         unsigned long n = 0UL;
                         while (s[n] != '\0') { n = n + 1UL; }
                         unsigned long pos = 0UL;
-                        unsigned int c = gui_utf8_next(s, n, &pos);
+                        unsigned int c = gui_utf8_next_n_(s, n, &pos);
                         // Function keys come as private-use characters.
                         if (c >= 32U && c != 127U && !(c >= 0xF700U && c <= 0xF8FFU)) { e.codepoint = c; }
                         gui_backend_post(st, e);
                         while (pos < n) {
-                            unsigned int c2 = gui_utf8_next(s, n, &pos);
+                            unsigned int c2 = gui_utf8_next_n_(s, n, &pos);
                             if (c2 >= 32U && c2 != 127U && !(c2 >= 0xF700U && c2 <= 0xF8FFU)) {
                                 struct GuiEvent ce = GuiEvent::new(GUI_EVENT_CHAR);
                                 ce.codepoint = c2;

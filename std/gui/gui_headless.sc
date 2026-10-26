@@ -288,7 +288,7 @@ void gui_headless_type(&GuiWindow win, const &char text) {
     unsafe { while (text[n] != '\0') { n = n + 1UL; } }
     unsigned long i = 0UL;
     while (i < n) {
-        unsigned int cp = gui_utf8_next(text, n, &i);
+        unsigned int cp = gui_utf8_next_n_(text, n, &i);
         int key = GUI_KEY_UNKNOWN;
         if (cp >= 97U && cp <= 122U) { key = (int)(cp - 32U); }
         else if ((cp >= 65U && cp <= 90U) || (cp >= 48U && cp <= 57U)) { key = (int)cp; }

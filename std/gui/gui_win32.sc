@@ -214,7 +214,7 @@ static unsigned short* __gui_win32_wide(const &char s) {
         unsigned long i = 0UL;
         unsigned long o = 0UL;
         while (i < n) {
-            unsigned int cp = gui_utf8_next(s, n, &i);
+            unsigned int cp = gui_utf8_next_n_(s, n, &i);
             if (cp >= 0x10000U) {
                 cp = cp - 0x10000U;
                 w[o] = (unsigned short)(0xD800U + (cp >> 10));
@@ -759,7 +759,7 @@ static int __gui_win32_clip_set(const &char utf8, unsigned long n) {
         unsigned long i = 0UL;
         unsigned long o = 0UL;
         while (i < n) {
-            unsigned int cp = gui_utf8_next(utf8, n, &i);
+            unsigned int cp = gui_utf8_next_n_(utf8, n, &i);
             if (cp >= 0x10000U) {
                 cp = cp - 0x10000U;
                 buf[o] = (unsigned short)(0xD800U + (cp >> 10));
