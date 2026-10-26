@@ -10,8 +10,6 @@
 #include <std/mem.h>
 #include <std/collections/vec.h>
 #include <std/collections/string.h>
-extern void* memset(void* ptr, int val, size_t n);
-extern void* memcpy(void* dst, const void* src, size_t n);
 
 namespace std {
 
@@ -154,7 +152,7 @@ static int __gui_queue_pop(&GuiWindowState st, &GuiEvent out) {
 
 struct GuiEvent GuiEvent::new(int kind) {
     struct GuiEvent e;
-    unsafe { memset((void*)&e, 0, sizeof(struct GuiEvent)); }
+    safe_memset_obj(&e, 0);
     e.kind = kind;
     return e;
 }
@@ -300,7 +298,7 @@ struct GuiWindow GuiWindow::create_with(const &GuiWindowOptions opts) {
     win.width = st.pixelW;
     win.height = st.pixelH;
     win.pixels = __gui_alloc_pixels(win.width, win.height);
-    unsafe { win.platform = (void*)st; }
+    unsafe { win.platform = (?&GuiWindowState)st; }
     if (gui_gpu_wanted(opts.present)) { gui_window_use_gpu(&win); }
     return win;
 }
@@ -329,7 +327,7 @@ void GuiWindow::drop() {
             while (i < gGuiWindows.len) {
                 &GuiWindowState other = *gGuiWindows.at(i);
                 unsafe {
-                    if ((void*)other == (void*)st) { gGuiWindows.remove(i); break; }
+                    if ((const unsigned char*)other == (const unsigned char*)st) { gGuiWindows.remove(i); break; }
                 }
                 i = i + 1UL;
             }
@@ -342,7 +340,7 @@ void GuiWindow::drop() {
         case null: { }
     }
     unsafe {
-        if ((void*)self.pixels != (void*)0) { dealloc(self.pixels); }
+        if ((const unsigned char*)self.pixels != (const unsigned char*)0) { dealloc(self.pixels); }
         self.pixels = (&heap unsigned char)0;
     }
     self.platform = null;
@@ -359,7 +357,7 @@ static void __gui_window_apply_size(&GuiWindow win, &GuiWindowState st, int w, i
     if (w == win.width && h == win.height) { return; }
     &heap unsigned char px = __gui_alloc_pixels(w, h);
     unsafe {
-        if ((void*)win.pixels != (void*)0) { dealloc(win.pixels); }
+        if ((const unsigned char*)win.pixels != (const unsigned char*)0) { dealloc(win.pixels); }
     }
     win.pixels = px;
     win.width = w;
@@ -467,7 +465,7 @@ int gui_window_set_presenter(&GuiWindow win, ?&GuiPresenter p) {
                 case some(pp): {
                     &GuiBackend b = gui_backend();
                     struct GuiNativeHandle h = b.native_handle(st);
-                    unsafe { st.presenter = (void*)pp; }
+                    unsafe { st.presenter = (?&GuiPresenter)pp; }
                     if (!pp.attach(st, h)) {
                         st.presenter = null;
                         st.presenterData = null;

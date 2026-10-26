@@ -7,7 +7,6 @@
 #include <std/mem.h>
 #include <std/io_file.h>
 #include <std/io_traits.h>
-extern void* memcpy(void* dst, const void* src, size_t n);
 
 namespace std {
 
@@ -25,7 +24,8 @@ struct GuiImage GuiImage::new(int width, int height) {
 struct GuiImage GuiImage::from_window(const &GuiWindow win) {
     struct GuiImage img = GuiImage::new(win.width, win.height);
     unsafe {
-        memcpy((void*)img.pixels, (const void*)win.pixels, (unsigned long)win.width * (unsigned long)win.height * 4UL);
+        unsigned long n = (unsigned long)win.width * (unsigned long)win.height * 4UL;
+        safe_memcpy(((unsigned char*)img.pixels)[0..n], ((const unsigned char*)win.pixels)[0..n]);
     }
     return img;
 }
@@ -173,7 +173,7 @@ int GuiImage::save_png(const &char path) const {
             z[o + 3UL] = (unsigned char)(~n & 0xFFUL);
             z[o + 4UL] = (unsigned char)((~n >> 8) & 0xFFUL);
             o = o + 5UL;
-            memcpy((void*)(z + o), (const void*)(raw + pos), n);
+            safe_memcpy((z + o)[0..n], (raw + pos)[0..n]);
             unsigned long k = 0UL;
             while (k < n) {
                 s1 = (s1 + (unsigned int)raw[pos + k]) % 65521U;
@@ -265,7 +265,8 @@ void GuiImage::unpremultiply() {
 struct GuiImage GuiImage::copy() const {
     struct GuiImage img = GuiImage::new(self.width, self.height);
     unsafe {
-        memcpy((void*)img.pixels, (const void*)self.pixels, (unsigned long)self.width * (unsigned long)self.height * 4UL);
+        unsigned long n = (unsigned long)self.width * (unsigned long)self.height * 4UL;
+        safe_memcpy(((unsigned char*)img.pixels)[0..n], ((const unsigned char*)self.pixels)[0..n]);
     }
     img.premultiplied = self.premultiplied;
     return img;

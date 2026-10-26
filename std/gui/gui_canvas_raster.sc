@@ -19,7 +19,6 @@
 #include <std/mem.h>
 #include <std/math.h>
 #include <std/collections/vec.h>
-extern void* memset(void* ptr, int val, size_t n);
 
 namespace std {
 
@@ -665,7 +664,7 @@ static void __gui_raster(&GuiCanvas c, int rule, &GuiRasterSink sink) {
         // acc[k] is pixel x0 + k; two slots of slack past x1.
         int span = x1 - x0;
         float* acc = __gui_vf(&c.acc, (unsigned long)(span + 3));
-        memset((void*)acc, 0, (unsigned long)(span + 3) * sizeof(float));
+        safe_memset(acc[0..(unsigned long)(span + 3)], 0);
         float* cov = __gui_vf(&c.row, (unsigned long)(span + 1));
         int* active = __gui_vi(&c.active, (unsigned long)n);
         int nactive = 0;
