@@ -111,7 +111,8 @@ struct HashMap {
 
     // ── Lifecycle ────────────────────────────────────────────────────────────
     int           reserve(unsigned long n);   // room for n entries without resizing
-    void          free();
+    void          drop();
+    void          free() consume;   // = drop()
 
     // ── Internal ────────────────────────────────────────────────────────────
     long long     find_(const &K key, unsigned int h) const;
@@ -314,7 +315,10 @@ void HashMap::foreach(fn void(const &K, &V) func) {
 }
 
 generic<K, V>
-void HashMap::free() {
+void HashMap::free() { self.drop(); }
+
+generic<K, V>
+void HashMap::drop() {
     unsafe {
         dealloc_raw_((void*)self.keys); dealloc_raw_((void*)self.vals);
         dealloc_raw_((void*)self.hashes); dealloc_raw_((void*)self.states);
@@ -345,7 +349,8 @@ struct StrMap {
     int           is_empty() const;
     void          clear();
     void          foreach(fn void(const &char, &V) func);
-    void          free();
+    void          drop();
+    void          free() consume;   // = drop()
 
     long long     find_(const char* key, unsigned int h) const;
     int           rehash_(unsigned long new_cap);
@@ -513,7 +518,10 @@ void StrMap::foreach(fn void(const &char, &V) func) {
 }
 
 generic<V>
-void StrMap::free() {
+void StrMap::free() { self.drop(); }
+
+generic<V>
+void StrMap::drop() {
     self.clear();
     unsafe {
         dealloc_raw_((void*)self.keys); dealloc_raw_((void*)self.vals);

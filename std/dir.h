@@ -40,7 +40,8 @@ struct DirEntry {
     int kind;             // DIR_FILE / DIR_DIR / DIR_LINK / DIR_OTHER
 
     static struct DirEntry new();
-    void free();
+    void drop();
+    void free() consume;   // = drop()
 };
 
 // An open directory listing.
@@ -56,7 +57,8 @@ struct Dir {
     int  next(&DirEntry out);
 
     // Closes the listing (the handle is invalid afterwards).
-    void close();
+    void drop();
+    void close() consume;   // = drop()
 };
 
 // What file_stat reports.

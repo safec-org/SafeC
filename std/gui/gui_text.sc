@@ -376,7 +376,9 @@ void GuiTypeface::cache_clear() {
     self.cacheIndex.clear();
 }
 
-void GuiTypeface::free() {
+void GuiTypeface::free() { self.drop(); }
+
+void GuiTypeface::drop() {
     self.cache_clear();
     self.cache.free();
     self.cacheIndex.free();

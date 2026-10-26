@@ -388,6 +388,8 @@ struct AsyncTcpStream AsyncTcpStream::from_fd(int fd) {
     return s;
 }
 
+void AsyncTcpStream::drop() { self.close(); }
+
 int AsyncTcpStream::close() {
     if (self.fd < 0) return -1;
     int rc = async_sock_close(self.fd);
@@ -454,6 +456,8 @@ unsigned short AsyncTcpListener::local_port() const {
     if (self.fd < 0) return (unsigned short)0;
     return async_sock_local_port(self.fd);
 }
+
+void AsyncTcpListener::drop() { self.close(); }
 
 int AsyncTcpListener::close() {
     if (self.fd < 0) return -1;

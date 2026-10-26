@@ -780,6 +780,11 @@ struct MethodDecl {
     // *self, like drop(): the caller's value is dropped by the call. See
     // MemoryFlow.cpp's ownership checking.
     bool                     isConsume = false;
+    // 'void drop() if (needs_drop(T));' — a generic struct that is a Drop
+    // type only for the instances where the condition holds (a wrapper
+    // that owns something only when its payload does). Shared so
+    // MethodDecl stays copyable.
+    std::shared_ptr<Expr>    dropCond;
     std::vector<GenericParam> genericParams;    // 'generic<T> void m(...);': the method's own
     SourceLocation           loc;
 };

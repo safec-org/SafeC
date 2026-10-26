@@ -70,8 +70,9 @@ struct HttpResponse {
     // Replaces the body (Content-Type untouched).
     void          set_body(const &char body);
     void          set_body_bytes(const &unsigned char data, unsigned long len);
+    void drop();
 
-    void free();
+    void free() consume;   // = drop()
 };
 
 struct HttpRequest {
@@ -103,8 +104,9 @@ struct HttpRequest {
     // The value of cookie 'name' from the Cookie header(s); empty if unset.
     struct String cookie(const &char name) const;
     struct HttpRequest clone() const;
+    void drop();
 
-    void free();
+    void free() consume;   // = drop()
 };
 
 // A connected, blocking TCP socket: the connection http_request and
@@ -126,7 +128,8 @@ struct TcpStream {
     // At most n bytes; the count written, -1 on error.
     long long write(const &unsigned char buf, unsigned long n);
     // Closes the socket. 0 on success.
-    int close();
+    int close() consume;
+    void drop();   // close(), ignoring the result
 };
 
 // Resolves 'host' (a numeric IPv4 address or a hostname, via

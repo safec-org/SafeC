@@ -209,7 +209,8 @@ struct AudioStream {
     // Stops now, dropping what's queued.
     struct AudioError abort();
     // Stops (abort) if running and releases everything. Idempotent.
-    void close();
+    void drop();
+    void close() consume;   // = drop()
 
     int  is_open() const;
     // 1 while started — also 0 after the callback returned STOP/ABORT or
@@ -277,7 +278,8 @@ struct Audio {
                                                             ?&AudioStreamOptions opts);
 
     // Releases the device list. Streams opened from it stay valid.
-    void close();
+    void drop();
+    void close() consume;   // = drop()
 };
 
 generic<T>

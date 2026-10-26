@@ -40,7 +40,8 @@ struct Signal {
     int           changed(&unsigned long last_seen) const;
     void          notify();             // calls every subscriber in registration order
     void          unsubscribe_all();
-    void          free();               // frees the subscriber list
+    void          drop();               // frees the subscriber list
+    void          free() consume;   // = drop()
 };
 
 generic<T>
@@ -108,6 +109,9 @@ generic<T>
 void Signal::unsubscribe_all() { self.subs.clear(); }
 
 generic<T>
-void Signal::free() { self.subs.free(); }
+void Signal::free() { self.drop(); }
+
+generic<T>
+void Signal::drop() { self.subs.free(); }
 
 } // namespace std

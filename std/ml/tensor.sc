@@ -128,7 +128,9 @@ void TensorArena::reset() {
     }
 }
 
-void TensorArena::free() {
+void TensorArena::free() { self.drop(); }
+
+void TensorArena::drop() {
     self.reset();
     unsafe {
         unsigned long* c = (unsigned long*)self.first;

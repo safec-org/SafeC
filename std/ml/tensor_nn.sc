@@ -274,7 +274,9 @@ void AdamState::step(&FloatTensor param) {
     }
 }
 
-void AdamState::free() {
+void AdamState::free() { self.drop(); }
+
+void AdamState::drop() {
     unsafe {
         if (self.m != (float*)0) { free((void*)self.m); }
         if (self.v != (float*)0) { free((void*)self.v); }

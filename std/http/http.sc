@@ -362,12 +362,16 @@ unsigned long http_headers_remove(&String raw, const &char name) {
 
 // ── Request / response values ─────────────────────────────────────────────
 
-void HttpResponse::free() {
+void HttpResponse::free() { self.drop(); }
+
+void HttpResponse::drop() {
     self.headers.free();
     self.body.free();
 }
 
-void HttpRequest::free() {
+void HttpRequest::free() { self.drop(); }
+
+void HttpRequest::drop() {
     self.method.free();
     self.path.free();
     self.headers.free();
@@ -665,6 +669,8 @@ long long TcpStream::read(&unsigned char buf, unsigned long n) {
 long long TcpStream::write(const &unsigned char buf, unsigned long n) {
     unsafe { return (long long)sock_write_(self.fd, (const void*)buf, n); }
 }
+
+void TcpStream::drop() { self.close(); }
 
 int TcpStream::close() {
     unsafe { return sock_close_(self.fd); }

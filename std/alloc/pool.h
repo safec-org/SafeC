@@ -45,7 +45,8 @@ struct PoolAllocator {
     unsigned long available() const;
 
     // Free the backing buffer (only valid for heap-backed allocators from PoolAllocator::new).
-    void          destroy();
+    void          drop();
+    void          destroy() consume;   // = drop()
 
     // Internal: return the fixed header size in bytes.
     unsigned long header_size_() const;

@@ -96,7 +96,8 @@ struct QueryParams {
     // (no leading '?').
     struct String to_string() const;
     struct QueryParams clone() const;
-    void          free();
+    void          drop();
+    void          free() consume;   // = drop()
 };
 
 // ── URL ────────────────────────────────────────────────────────────────────
@@ -157,7 +158,8 @@ struct Url {
     int           is_absolute() const;     // has a scheme
 
     struct Url    clone() const;
-    void          free();
+    void          drop();
+    void          free() consume;   // = drop()
 };
 
 // RFC 3986 §5.2.4: "/a/b/../c/./d" -> "/a/c/d".

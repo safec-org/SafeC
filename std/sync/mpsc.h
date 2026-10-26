@@ -48,7 +48,8 @@ struct MpscQueue {
     int           is_empty() const;
     int           is_full() const;
     unsigned long length() const;
-    void          destroy();        // frees the buffer
+    void          drop();        // frees the buffer
+    void          destroy() consume;   // = drop()
 };
 
 generic<T>
@@ -97,7 +98,10 @@ generic<T>
 unsigned long MpscQueue::length() const { return self.count; }
 
 generic<T>
-void MpscQueue::destroy() {
+void MpscQueue::destroy() { self.drop(); }
+
+generic<T>
+void MpscQueue::drop() {
     unsafe { dealloc_raw_((void*)self.buffer); }
     self.buffer = null;
     self.cap = 0UL;

@@ -125,7 +125,8 @@ struct AsyncTcpStream {
     struct WriteFut write([]unsigned char buf);
     // All of buf: 1 when written, 0 on error.
     struct WriteAllFut write_all([]unsigned char buf);
-    int close();
+    int close() consume;
+    void drop();   // close(), ignoring the result
     int is_open() const;
 };
 
@@ -138,7 +139,8 @@ struct AsyncTcpListener {
     struct AcceptFut accept();
     // The port it listens on.
     unsigned short local_port() const;
-    int close();
+    int close() consume;
+    void drop();   // close(), ignoring the result
 };
 
 // Ready once 'fd' is ready for 'filter' (SCHED_READ / SCHED_WRITE), for

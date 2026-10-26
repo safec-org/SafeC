@@ -47,7 +47,8 @@ struct Oneshot {
     // already sent or the channel was closed.
     int  send(T v);
     // No value will come: the receiver gets null.
-    void close();
+    void drop();
+    void close() consume;   // = drop()
     // The receive future: Ready(some(v)), or Ready(null) once closed.
     struct OneshotRecv<T> recv();
     // The value if it has arrived (and takes it), else null.
@@ -88,7 +89,8 @@ struct AsyncChannel {
     ?T   try_recv();
     // No more sends: pending and future sends get 0, receivers drain what
     // is buffered and then get null.
-    void close();
+    void drop();
+    void close() consume;   // = drop()
     int  is_closed() const;
     unsigned long len() const;
     unsigned long capacity() const;
@@ -136,7 +138,10 @@ int Oneshot::send(T v) {
 }
 
 generic<T>
-void Oneshot::close() {
+void Oneshot::close() { self.drop(); }
+
+generic<T>
+void Oneshot::drop() {
     self.lk.lock();
     if (self.state == ONESHOT_EMPTY) {
         self.state = ONESHOT_CLOSED;
@@ -270,7 +275,10 @@ generic<T>
 }
 
 generic<T>
-void AsyncChannel::close() {
+void AsyncChannel::close() { self.drop(); }
+
+generic<T>
+void AsyncChannel::drop() {
     self.lk.lock();
     self.closed = 1;
     self.senders.wake_all();

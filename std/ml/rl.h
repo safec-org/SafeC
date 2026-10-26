@@ -48,7 +48,8 @@ struct Bandit {
 
     float pull(unsigned long arm);    // N(means[arm], 1)
     unsigned long best_arm() const;
-    void free();
+    void drop();
+    void free() consume;   // = drop()
 
     static struct Bandit new(unsigned long k, unsigned long seed);
 };
@@ -86,7 +87,8 @@ struct GridWorld {
     struct EnvStep step(unsigned long action, &unsigned long next);
     // One-hot observation of a state (for neural agents), obs has states() values.
     void one_hot(unsigned long state, &FloatTensor obs) const;
-    void free();
+    void drop();
+    void free() consume;   // = drop()
 
     // An empty w x h grid, start top-left, goal bottom-right.
     static struct GridWorld new(unsigned long width, unsigned long height, unsigned long seed);
@@ -133,7 +135,8 @@ struct BanditAgent {
 
     unsigned long select();
     void update(unsigned long arm, float reward);
-    void free();
+    void drop();
+    void free() consume;   // = drop()
 
     static struct BanditAgent new(int kind, unsigned long k, float param, unsigned long seed);
 };
@@ -157,7 +160,8 @@ struct TabularAgent {
     float sarsa_update(unsigned long s, unsigned long act, float r, unsigned long s2, unsigned long a2, int terminal);
     // Expected SARSA: target r + gamma E_pi[Q(s', .)] under the epsilon-greedy policy.
     float expected_sarsa_update(unsigned long s, unsigned long act, float r, unsigned long s2, int terminal);
-    void free();
+    void drop();
+    void free() consume;   // = drop()
 
     static struct TabularAgent new(unsigned long states, unsigned long actions, float alpha, float gamma,
                                    float epsilon, unsigned long seed);
@@ -176,7 +180,8 @@ struct ReplayBuffer {
     unsigned long obsDim;
 
     void push(const &FloatTensor obs, unsigned long action, float reward, const &FloatTensor next, int terminal);
-    void free();
+    void drop();
+    void free() consume;   // = drop()
 
     static struct ReplayBuffer new(unsigned long slots, unsigned long obsDim);
 };
@@ -231,7 +236,8 @@ struct Dqn {
     // the target network.
     void collect_params(&Vec<&FloatTensor> out) const;
     void collect_state(&Vec<&FloatTensor> out) const;
-    void free();
+    void drop();
+    void free() consume;   // = drop()
 
     static struct Dqn new(unsigned long obsDim, unsigned long actions, const &DqnConfig cfg);
 };
@@ -295,7 +301,8 @@ struct PolicyAgent {
     // Parameterized (module.h): the policy and value networks.
     void collect_params(&Vec<&FloatTensor> out) const;
     void collect_state(&Vec<&FloatTensor> out) const;
-    void free();
+    void drop();
+    void free() consume;   // = drop()
 
     static struct PolicyAgent new(unsigned long obsDim, unsigned long actions, const &PgConfig cfg);
 };

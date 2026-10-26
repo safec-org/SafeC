@@ -23,7 +23,9 @@
 
 namespace std {
 
-void WsMessage::free() {
+void WsMessage::free() { self.drop(); }
+
+void WsMessage::drop() {
     if (self.data != (unsigned char*)0) {
         unsafe { dealloc_raw_((void*)self.data); }
     }
@@ -565,7 +567,9 @@ struct WsConn WsConn::connect_url(const &char url, int timeout_ms, ?&int ok) {
     return c;
 }
 
-void WsConn::close() {
+void WsConn::close() { self.drop(); }
+
+void WsConn::drop() {
     self.send_close();
     if (self.fd >= 0) {
         struct TcpStream s = TcpStream::from_fd(self.fd);

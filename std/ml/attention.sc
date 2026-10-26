@@ -509,7 +509,9 @@ void MultiHeadAttention::collect_params(&Vec<&FloatTensor> out) const {
 
 void MultiHeadAttention::collect_state(&Vec<&FloatTensor> out) const { self.collect_params(out); }
 
-void MultiHeadAttention::free() {
+void MultiHeadAttention::free() { self.drop(); }
+
+void MultiHeadAttention::drop() {
     attn_drop_(self.Wq); attn_drop_(self.Wk); attn_drop_(self.Wv); attn_drop_(self.Wo);
 }
 

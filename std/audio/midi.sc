@@ -813,7 +813,9 @@ unsigned long MidiIn::dropped() const {
     return 0UL;
 }
 
-void MidiIn::close() {
+void MidiIn::close() { self.drop(); }
+
+void MidiIn::drop() {
     midi_close_(self.impl);
     self.impl = null;
     self.api_id = MIDI_API_UNSPECIFIED;
@@ -864,7 +866,9 @@ struct AudioError MidiOut::send(struct MidiMsg msg) {
     return self.send_message(&msg.data[0], (unsigned long)msg.len);
 }
 
-void MidiOut::close() {
+void MidiOut::close() { self.drop(); }
+
+void MidiOut::drop() {
     midi_close_(self.impl);
     self.impl = null;
     self.api_id = MIDI_API_UNSPECIFIED;

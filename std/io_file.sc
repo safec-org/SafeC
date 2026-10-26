@@ -26,6 +26,8 @@ inline ?&File File::open(const &char path, const &char mode) {
     unsafe { return (?&File)fopen(path, mode); }
 }
 
+inline void File::drop() { self.close(); }
+
 inline int File::close() {
     unsafe { return fclose((void*)self); }
 }
@@ -93,7 +95,8 @@ inline long long File::size() {
 // Forwarding wrappers kept for std/ml (see io_file.h).
 // kept for std/ml until its refactor moves to the static method
 inline ?&File        file_open(const &char path, const &char mode) { return File::open(path, mode); }
-inline int           file_close(&File f) { return f.close(); }
+// Closes *f in place (File::open hands out references, not owned values).
+inline int           file_close(&File f) { unsafe { return f.close(); } }
 inline unsigned long file_read(&File f, &unsigned char buf, unsigned long n) {
     long long r = f.read(buf, n); return r < 0LL ? 0UL : (unsigned long)r;
 }

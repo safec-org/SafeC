@@ -85,7 +85,9 @@ unsigned long Bandit::best_arm() const {
     return best;
 }
 
-void Bandit::free() { rl_drop_(self.means); }
+void Bandit::free() { self.drop(); }
+
+void Bandit::drop() { rl_drop_(self.means); }
 
 // ══ GridWorld ════════════════════════════════════════════════════════════════
 
@@ -176,7 +178,9 @@ void GridWorld::one_hot(unsigned long state, &FloatTensor obs) const {
     }
 }
 
-void GridWorld::free() { rl_drop_(self.cells); }
+void GridWorld::free() { self.drop(); }
+
+void GridWorld::drop() { rl_drop_(self.cells); }
 
 // ══ CartPole ═════════════════════════════════════════════════════════════════
 
@@ -330,7 +334,9 @@ void BanditAgent::update(unsigned long arm, float reward) {
     self.baseline = self.baseline + (reward - self.baseline) / (float)self.t;
 }
 
-void BanditAgent::free() {
+void BanditAgent::free() { self.drop(); }
+
+void BanditAgent::drop() {
     rl_drop_(self.counts);
     rl_drop_(self.values);
 }
@@ -405,7 +411,9 @@ float TabularAgent::expected_sarsa_update(unsigned long s, unsigned long act, fl
     return tab_apply_(self, s, act, target);
 }
 
-void TabularAgent::free() { rl_drop_(self.q); }
+void TabularAgent::free() { self.drop(); }
+
+void TabularAgent::drop() { rl_drop_(self.q); }
 
 // ══ DQN ══════════════════════════════════════════════════════════════════════
 
@@ -444,7 +452,9 @@ void ReplayBuffer::push(const &FloatTensor obs, unsigned long action, float rewa
     if (self.size < self.slots) self.size = self.size + 1UL;
 }
 
-void ReplayBuffer::free() {
+void ReplayBuffer::free() { self.drop(); }
+
+void ReplayBuffer::drop() {
     rl_drop_(self.obs); rl_drop_(self.next); rl_drop_(self.action); rl_drop_(self.reward); rl_drop_(self.terminal);
 }
 
@@ -586,7 +596,9 @@ float Dqn::observe(const &FloatTensor obs, unsigned long action, float reward, c
     return l;
 }
 
-void Dqn::free() {
+void Dqn::free() { self.drop(); }
+
+void Dqn::drop() {
     self.opt.free();
     self.q.free();
     self.target.free();
@@ -860,7 +872,9 @@ float PolicyAgent::update() {
     return last;
 }
 
-void PolicyAgent::free() {
+void PolicyAgent::free() { self.drop(); }
+
+void PolicyAgent::drop() {
     self.opt.free();
     self.policy.free();
     self.value.free();

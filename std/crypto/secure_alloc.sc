@@ -28,7 +28,9 @@ inline unsigned long SecureAllocator::available() const {
     return self.slab.available();
 }
 
-inline void SecureAllocator::destroy() {
+inline void SecureAllocator::destroy() { self.drop(); }
+
+inline void SecureAllocator::drop() {
     // Zero all backing memory before freeing.
     unsafe {
         if ((void*)self.slab.base != (void*)0) {

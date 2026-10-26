@@ -450,7 +450,9 @@ static void ds_standardize_(&Dataset fit, ?&Dataset other) {
 void Dataset::standardize() { ds_standardize_(self, null); }
 void Dataset::standardize_pair(&Dataset test) { ds_standardize_(self, (?&Dataset)test); }
 
-void Dataset::free() {
+void Dataset::free() { self.drop(); }
+
+void Dataset::drop() {
     self.x->free(); self.y->free();
     unsafe { free((void*)self.x); free((void*)self.y); }
     self.n = 0UL;
@@ -543,7 +545,9 @@ unsigned long DataLoader::batches() const {
     return (self.n + self.batchSize - 1UL) / self.batchSize;
 }
 
-void DataLoader::free() {
+void DataLoader::free() { self.drop(); }
+
+void DataLoader::drop() {
     unsafe { free((void*)self.order); }
 }
 

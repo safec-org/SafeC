@@ -6,7 +6,9 @@
 //   match (e.get_err()) { case some(code): ...; case null: ... }
 //
 // No heap allocation: both slots live in the struct and only the one named
-// by 'is_ok' is meaningful.
+// by 'is_ok' is meaningful. When T or E owns something (a Drop type), so
+// does the Result: drop() drops whichever slot is live, and unwrap_or()
+// consumes it.
 #pragma once
 
 namespace std {
@@ -24,7 +26,8 @@ struct Result {
     int err() const;
     ?&T get_ok();             // null for an error result
     ?&E get_err();            // null for an ok result
-    T   unwrap_or(T fallback) const;
+    T   unwrap_or(T fallback) consume;   // the value, or 'fallback' (the other one is dropped)
+    void drop() if (needs_drop(T) || needs_drop(E));
 };
 
 generic<T, E>
@@ -62,6 +65,16 @@ generic<T, E>
 }
 
 generic<T, E>
-T Result::unwrap_or(T fallback) const { return self.is_ok ? self.value : fallback; }
+T Result::unwrap_or(T fallback) consume {
+    if (self.is_ok) { drop(fallback); return self.value; }
+    drop(self.error);
+    return fallback;
+}
+
+generic<T, E>
+void Result::drop() {
+    if (self.is_ok) drop(self.value);
+    else drop(self.error);
+}
 
 } // namespace std

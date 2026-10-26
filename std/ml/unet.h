@@ -27,7 +27,8 @@ struct UNet {
     // 'net' isn't semantically mutated, but is taken by mutable reference
     // since its Conv2D sub-layers are threaded through by address internally.
     struct FeatureMap forward(const &FeatureMap input);
-    void free();
+    void drop();
+    void free() consume;   // = drop()
 
     static struct UNet new(unsigned long inChannels, unsigned long c1, unsigned long c2, unsigned long outChannels);
 };

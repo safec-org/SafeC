@@ -286,7 +286,9 @@ inline void AesCtx::set_iv(const &unsigned char iv) {
     unsafe { memcpy((void*)self.iv, (const void*)iv, (unsigned long)AES_BLOCK_SIZE); }
 }
 
-inline void AesCtx::destroy() {
+inline void AesCtx::destroy() { self.drop(); }
+
+inline void AesCtx::drop() {
     unsafe {
         mem_zero_secure_raw_((void*)self.ks, (unsigned long)AES_KS_WORDS * (unsigned long)sizeof(unsigned int));
         mem_zero_secure_raw_((void*)self.iv, (unsigned long)AES_BLOCK_SIZE);

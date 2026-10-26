@@ -199,6 +199,7 @@ bool hasMarker(const StructType &st, const char *m) {
 
 bool Sema::hasDropMethod(const StructType &st0) const {
     const StructType &st = *canonicalStruct(typeRegistry_, &st0);
+    if (disabledDrops_.count(st.name)) return false;
     auto it = methodRegistry_.find(st.name + "::drop");
     if (it == methodRegistry_.end() || !it->second) return false;
     const FunctionDecl &f = *it->second;
@@ -1212,6 +1213,12 @@ void Sema::collectStruct(StructDecl &sd) {
     // existing '.h'/'.sc' pairing logic in Scope::define/genFunctionProto
     // already merges the two FunctionDecl nodes' attributes correctly).
     for (auto &md : sd.methodDecls) {
+        if (md.name == "drop" && md.dropCond) {
+            checkExpr(*md.dropCond);
+            auto v = tryConstInt(*md.dropCond);
+            if (!v) diag_.error(md.loc, "the condition of 'drop() if (...)' must be a compile-time constant");
+            else if (*v == 0) disabledDrops_.insert(sd.name);
+        }
         auto synth = std::make_unique<FunctionDecl>(md.name, md.loc);
         synth->returnType    = md.returnType;
         synth->params        = md.params;

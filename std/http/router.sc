@@ -282,7 +282,9 @@ int Router::listen(const &HttpServerConfig cfg) {
     return self.serve(&srv);
 }
 
-void Router::free() {
+void Router::free() { self.drop(); }
+
+void Router::drop() {
     unsigned long i = 0UL;
     while (i < self.routes.length()) {
         &HttpRoute_ rt = self.routes.at(i);

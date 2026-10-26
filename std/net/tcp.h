@@ -88,7 +88,8 @@ struct TcpConn {
                 unsigned int isn);
 
     // Close connection (send FIN).
-    void close();
+    void drop();
+    void close() consume;   // = drop()
 };
 
 // Parse TCP header from pkt at byte offset `offset`. Returns 0 on success,

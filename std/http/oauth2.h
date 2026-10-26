@@ -38,7 +38,8 @@ struct OAuth2Token {
                                       const &char clientSecret, const &char refreshToken, ?&int ok);
 
     // Releases the three owned strings.
-    void free();
+    void drop();
+    void free() consume;   // = drop()
 };
 
 } // namespace std

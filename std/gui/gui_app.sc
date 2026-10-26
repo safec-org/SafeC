@@ -347,7 +347,9 @@ int GuiApp::run() {
     return self.exitCode;
 }
 
-void GuiApp::free() {
+void GuiApp::free() { self.drop(); }
+
+void GuiApp::drop() {
     while (self.windows.len > 0UL) {
         &GuiAppWindow r = *self.windows.at(self.windows.len - 1UL);
         self.close_window(r.win);

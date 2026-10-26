@@ -15,7 +15,9 @@
 
 namespace std {
 
-void RpcResult::free() {
+void RpcResult::free() { self.drop(); }
+
+void RpcResult::drop() {
     if (self.data != (unsigned char*)0) {
         unsafe { dealloc_raw_((void*)self.data); }
     }

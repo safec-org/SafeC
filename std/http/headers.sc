@@ -325,7 +325,9 @@ struct HttpHeaders HttpHeaders::clone() const {
     return h;
 }
 
-void HttpHeaders::free() {
+void HttpHeaders::free() { self.drop(); }
+
+void HttpHeaders::drop() {
     self.clear();
     self.fields.free();
 }

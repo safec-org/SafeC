@@ -236,7 +236,9 @@ void ThreadPool::wait_idle() {
     mutex_unlock(&self.mu);
 }
 
-void ThreadPool::shutdown() {
+void ThreadPool::shutdown() { self.drop(); }
+
+void ThreadPool::drop() {
     if (self.nthreads == 0) return;
     mutex_lock(&self.mu);
     self.stopping = 1;

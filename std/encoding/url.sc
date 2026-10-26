@@ -322,7 +322,9 @@ struct QueryParams QueryParams::clone() const {
     return q;
 }
 
-void QueryParams::free() {
+void QueryParams::free() { self.drop(); }
+
+void QueryParams::drop() {
     unsigned long i = 0UL;
     while (i < self.pairs.length()) {
         &UrlQueryPair p = self.pairs.at(i);
@@ -712,7 +714,9 @@ struct Url Url::clone() const {
     return u;
 }
 
-void Url::free() {
+void Url::free() { self.drop(); }
+
+void Url::drop() {
     self.scheme.free();
     self.username.free();
     self.password.free();

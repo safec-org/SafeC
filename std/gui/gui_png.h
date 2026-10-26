@@ -55,8 +55,9 @@ struct GuiImage {
     // copy through GuiWindow::set_pixel(), no blending) — works with any
     // GuiImage, PNG-decoded or otherwise constructed.
     void draw(&GuiWindow win, int x, int y) const;
+    void drop();
 
-    void free();
+    void free() consume;   // = drop()
 };
 
 } // namespace std

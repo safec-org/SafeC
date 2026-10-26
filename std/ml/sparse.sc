@@ -166,7 +166,9 @@ void SparseTensor::backward() { self.values.backward(); }
 
 void SparseTensor::zero_grad() { self.values.zero_grad(); }
 
-void SparseTensor::free() {
+void SparseTensor::free() { self.drop(); }
+
+void SparseTensor::drop() {
     sp_drop_(self.values);
     if (!self.ownsPattern) return;
     sp_drop_(self.colIdx);

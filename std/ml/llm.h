@@ -58,7 +58,8 @@ struct Chain {
 
     void add_step(ChainStepFn step);
     struct Value run(const &Value input);
-    void free();
+    void drop();
+    void free() consume;   // = drop()
 
     static struct Chain new();
 };
@@ -88,7 +89,8 @@ struct Graph {
     void add_node(const &char name, GraphNodeFn nodeFn, const &char nextNode);
     void add_conditional_node(const &char name, GraphNodeFn nodeFn, GraphRouterFn router);
     struct Value run(struct Value initialState, int maxSteps);
-    void free();
+    void drop();
+    void free() consume;   // = drop()
 
     static struct Graph new(const &char entryNode);
 };
@@ -108,7 +110,8 @@ struct Tracer {
     // Dumps every recorded event as a JSON array: '[{"name":...,"input":...,
     // "output":...,"durationMs":...}, ...]'.
     struct String to_json() const;
-    void free();
+    void drop();
+    void free() consume;   // = drop()
 
     static struct Tracer new();
 };

@@ -105,7 +105,8 @@ struct Gan {
     // averaged generator (and a Dcgan's buffers).
     void collect_params(&Vec<&FloatTensor> out) const;
     void collect_state(&Vec<&FloatTensor> out) const;
-    void free();
+    void drop();
+    void free() consume;   // = drop()
 
     static struct Gan new(unsigned long dataDim, const &GanConfig cfg);
 };
@@ -175,7 +176,8 @@ struct Dcgan {
     // averaged generator (and a Dcgan's buffers).
     void collect_params(&Vec<&FloatTensor> out) const;
     void collect_state(&Vec<&FloatTensor> out) const;
-    void free();
+    void drop();
+    void free() consume;   // = drop()
 
     static struct Dcgan new(struct ConvNet gen, struct ConvNet disc, const &GanConfig cfg);
 };

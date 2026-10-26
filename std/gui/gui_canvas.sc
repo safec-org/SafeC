@@ -200,7 +200,9 @@ void GuiCanvas::reset() {
     __gui_canvas_default_state(self);
 }
 
-void GuiCanvas::free() {
+void GuiCanvas::free() { self.drop(); }
+
+void GuiCanvas::drop() {
     __gui_canvas_drop_masks(self);
     self.saved.free();
     self.path.free();

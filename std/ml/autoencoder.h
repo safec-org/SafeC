@@ -63,7 +63,8 @@ struct Autoencoder {
     // Parameterized (module.h).
     void collect_params(&Vec<&FloatTensor> out) const;
     void collect_state(&Vec<&FloatTensor> out) const;
-    void free();
+    void drop();
+    void free() consume;   // = drop()
 
     &FloatTensor loss(const &FloatTensor x, const &FloatTensor y);
 
@@ -114,7 +115,8 @@ struct Vae {
     // Parameterized (module.h).
     void collect_params(&Vec<&FloatTensor> out) const;
     void collect_state(&Vec<&FloatTensor> out) const;
-    void free();
+    void drop();
+    void free() consume;   // = drop()
 
     &FloatTensor loss(const &FloatTensor x, const &FloatTensor y);
 
@@ -164,7 +166,8 @@ struct VqVae {
     // Parameterized (module.h).
     void collect_params(&Vec<&FloatTensor> out) const;
     void collect_state(&Vec<&FloatTensor> out) const;
-    void free();
+    void drop();
+    void free() consume;   // = drop()
 
     &FloatTensor loss(const &FloatTensor x, const &FloatTensor y);
 
@@ -207,7 +210,8 @@ struct ConvAutoencoder {
     // Parameterized (module.h).
     void collect_params(&Vec<&FloatTensor> out) const;
     void collect_state(&Vec<&FloatTensor> out) const;
-    void free();
+    void drop();
+    void free() consume;   // = drop()
 
     &FloatTensor loss(const &FloatTensor x, const &FloatTensor y);
 
@@ -242,7 +246,8 @@ struct ConvVae {
     // Parameterized (module.h).
     void collect_params(&Vec<&FloatTensor> out) const;
     void collect_state(&Vec<&FloatTensor> out) const;
-    void free();
+    void drop();
+    void free() consume;   // = drop()
 
     &FloatTensor loss(const &FloatTensor x, const &FloatTensor y);
 

@@ -110,7 +110,8 @@ struct Mlp {
     // Parameterized (module.h): the trained tensors, and what a copy or a file carries.
     void collect_params(&Vec<&FloatTensor> out) const;
     void collect_state(&Vec<&FloatTensor> out) const;
-    void free();
+    void drop();
+    void free() consume;   // = drop()
 
     static struct Mlp new(unsigned long inDim, unsigned long hidden, unsigned long hiddenLayers, unsigned long outDim,
                           int act, int outAct, &Rng rng);
@@ -158,7 +159,8 @@ struct Optimizer {
     // returns the norm before scaling.
     float clip_grad_norm(float maxNorm);
     void step();
-    void free();                           // frees the state, not the parameters
+    void drop();                           // frees the state, not the parameters
+    void free() consume;   // = drop()
 
     static struct Optimizer new(int kind, float lr);
     // An empty optimizer with o's kind and hyperparameters (not its parameters

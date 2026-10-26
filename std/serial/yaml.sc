@@ -296,18 +296,6 @@ static struct Vec<struct YamlLine_> yaml_split_lines_(const char* text) {
     return lines;
 }
 
-static void yaml_free_lines_(&Vec<struct YamlLine_> lines) {
-    unsigned long n;
-    unsafe { n = lines->length(); }
-    unsigned long i = 0UL;
-    while (i < n) {
-        struct YamlLine_* yl;
-        unsafe { yl = lines->at(i); }
-        unsafe { yl->content.free(); }
-        i = i + 1UL;
-    }
-    unsafe { lines->free(); }
-}
 
 static struct Value yaml_parse_flow_value_(const char* t);
 
@@ -807,7 +795,7 @@ struct Value yaml_parse(const &char text, ?&int ok) {
         // dedent that doesn't match any enclosing indent level).
         good = 0;
     }
-    yaml_free_lines_(&lines);
+    lines.drop();   // and each line's content
     if (ok != (int*)0) { unsafe { *ok = good; } }
     if (good == 0) {
         result.free();

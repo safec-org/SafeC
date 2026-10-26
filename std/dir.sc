@@ -17,7 +17,9 @@ struct DirEntry DirEntry::new() {
     return e;
 }
 
-void DirEntry::free() {
+void DirEntry::free() { self.drop(); }
+
+void DirEntry::drop() {
     self.name.free();
 }
 

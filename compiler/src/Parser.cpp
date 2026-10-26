@@ -1351,6 +1351,11 @@ std::unique_ptr<FunctionDecl> Parser::parseFunctionDecl(
         consume();
         fn->isConstMethod = true;
     }
+    // 'consume' may be repeated on an out-of-line method definition.
+    if (cur().isIdent("consume") && (peek().is(TK::LBrace) || peek().is(TK::Semicolon))) {
+        consume();
+        fn->isConsume = true;
+    }
     {
         GnuAttrs suffixAttrs;
         if (parseGnuAttributes(suffixAttrs)) {
@@ -1528,6 +1533,14 @@ std::unique_ptr<StructDecl> Parser::parseStructDecl(bool isUnion, bool consumeTr
             if (cur().is(TK::KW_const)) { consume(); md.isConst = true; }
             // 'consume': the method destroys *self (see MethodDecl::isConsume).
             if (cur().isIdent("consume")) { consume(); md.isConsume = true; }
+            if (cur().is(TK::KW_if)) {
+                consume();
+                expect(TK::LParen, "expected '(' after 'if' in a method declaration");
+                md.dropCond = std::shared_ptr<Expr>(parseExpr().release());
+                expect(TK::RParen, "expected ')' closing the method's 'if' condition");
+                if (md.name != "drop")
+                    diag_.error(md.loc, "only drop() can have an 'if (...)' condition (when the type is a Drop type)");
+            }
             md.isStatic = staticMember;
             md.genericParams = std::move(memberGenerics);
             if (md.isStatic && md.isConst)

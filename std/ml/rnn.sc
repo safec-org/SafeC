@@ -78,7 +78,9 @@ struct RNNCell RNNCell::new(unsigned long inputSize, unsigned long hiddenSize) {
     }
 }
 
-void RNNCell::free() {
+void RNNCell::free() { self.drop(); }
+
+void RNNCell::drop() {
     unsafe {
         self->W_ih->free(); self->W_hh->free(); self->b_ih->free(); self->b_hh->free();
         free((void*)self->W_ih); free((void*)self->W_hh);
@@ -134,7 +136,9 @@ struct GRUCell GRUCell::new(unsigned long inputSize, unsigned long hiddenSize) {
     }
 }
 
-void GRUCell::free() {
+void GRUCell::free() { self.drop(); }
+
+void GRUCell::drop() {
     unsafe {
         &FloatTensor all[12];
         all[0]=self->W_ir; all[1]=self->W_hr; all[2]=self->b_ir; all[3]=self->b_hr;
@@ -195,7 +199,9 @@ struct LSTMCell LSTMCell::new(unsigned long inputSize, unsigned long hiddenSize)
     }
 }
 
-void LSTMCell::free() {
+void LSTMCell::free() { self.drop(); }
+
+void LSTMCell::drop() {
     unsafe {
         &FloatTensor all[16];
         all[0]=self->W_ii; all[1]=self->W_hi; all[2]=self->b_ii; all[3]=self->b_hi;
@@ -302,7 +308,9 @@ struct XLSTMState XLSTMCell::forward(const &FloatTensor x_t, const &XLSTMState p
     }
 }
 
-void XLSTMCell::free() {
+void XLSTMCell::free() { self.drop(); }
+
+void XLSTMCell::drop() {
     unsafe {
         &FloatTensor all[12];
         all[0]=self->Wz; all[1]=self->Rz; all[2]=self->bz;
@@ -314,7 +322,9 @@ void XLSTMCell::free() {
     }
 }
 
-void XLSTMState::free() {
+void XLSTMState::free() { self.drop(); }
+
+void XLSTMState::drop() {
     unsafe {
         self->h->free(); self->c->free(); self->n->free(); self->m->free();
         free((void*)self->h); free((void*)self->c); free((void*)self->n); free((void*)self->m);

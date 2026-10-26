@@ -44,7 +44,9 @@ struct FeatureMap FeatureMap::new(unsigned long channels, unsigned long height, 
     return fm;
 }
 
-void FeatureMap::free() {
+void FeatureMap::free() { self.drop(); }
+
+void FeatureMap::drop() {
     unsafe { if (!self->fromArena) free((void*)self->data); }
 }
 
@@ -78,7 +80,9 @@ struct Conv2D Conv2D::new(unsigned long inChannels, unsigned long outChannels, u
     return layer;
 }
 
-void Conv2D::free() {
+void Conv2D::free() { self.drop(); }
+
+void Conv2D::drop() {
     unsafe { free((void*)self->weight); free((void*)self->bias); }
 }
 
@@ -901,7 +905,9 @@ struct FeatureMap ResidualBlock::forward(const &FeatureMap input) const {
     return out;
 }
 
-void ResidualBlock::free() {
+void ResidualBlock::free() { self.drop(); }
+
+void ResidualBlock::drop() {
     self->conv1.free();
     self->conv2.free();
     self->projection.free();

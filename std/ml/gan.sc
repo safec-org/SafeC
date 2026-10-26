@@ -320,7 +320,9 @@ struct GanLosses Gan::train(const &Dataset data, unsigned long epochs, unsigned 
     return self.disc.forward(gan_cond_(self, x, labels));
 }
 
-void Gan::free() {
+void Gan::free() { self.drop(); }
+
+void Gan::drop() {
     self.optG.free();
     self.optD.free();
     self.gen.free();
@@ -475,7 +477,9 @@ struct GanLosses Dcgan::train(const &Dataset data, unsigned long epochs, unsigne
     return gan_gp_core_(g, dcgan_disc_, xh, labels, g.cfg.gpWeight, value);
 }
 
-void Dcgan::free() {
+void Dcgan::free() { self.drop(); }
+
+void Dcgan::drop() {
     self.optG.free();
     self.optD.free();
     self.gen.free();

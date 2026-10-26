@@ -309,7 +309,9 @@ static void __gui_detach_presenter(&GuiWindowState st) {
     }
 }
 
-void GuiWindow::destroy() {
+void GuiWindow::destroy() { self.drop(); }
+
+void GuiWindow::drop() {
     ?&GuiWindowState ost = gui_window_state(self);
     match (ost) {
         case some(st): {

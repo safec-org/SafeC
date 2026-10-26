@@ -23,7 +23,8 @@ struct File {
     // ── Close ─────────────────────────────────────────────────────────────────
 
     // Close a file handle opened by File::open.  Returns 0 on success.
-    int  close();
+    int  close() consume;
+    void drop();   // close(), ignoring the result
 
     // ── Read ──────────────────────────────────────────────────────────────────
 

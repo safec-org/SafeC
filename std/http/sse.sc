@@ -85,14 +85,18 @@ int SseStream::retry(int ms) {
     return r;
 }
 
-void SseStream::close() {
+void SseStream::close() { self.drop(); }
+
+void SseStream::drop() {
     self.s.close();
     self.ok = 0;
 }
 
 // ── Parser ────────────────────────────────────────────────────────────────
 
-void SseEvent::free() {
+void SseEvent::free() { self.drop(); }
+
+void SseEvent::drop() {
     self.event.free();
     self.data.free();
     self.id.free();
@@ -180,7 +184,9 @@ int SseParser::next(&SseEvent out) {
     return 0;
 }
 
-void SseParser::free() {
+void SseParser::free() { self.drop(); }
+
+void SseParser::drop() {
     self.buf.free();
     self.data.free();
     self.event.free();
@@ -330,7 +336,9 @@ int SseClient::next(&SseEvent out) {
     return 0;
 }
 
-void SseClient::close() {
+void SseClient::close() { self.drop(); }
+
+void SseClient::drop() {
     if (self.fd >= 0) {
         struct TcpStream s = TcpStream::from_fd(self.fd);
         s.close();

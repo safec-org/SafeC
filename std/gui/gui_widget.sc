@@ -2073,7 +2073,9 @@ int GuiUi::dispatch(&GuiEvent ev) {
     return 0;
 }
 
-void GuiUi::free() {
+void GuiUi::free() { self.drop(); }
+
+void GuiUi::drop() {
     self.close_popups();
     unsigned long i = 0UL;
     while (i < self.overlays.len) { &Widget o = *self.overlays.at(i); o.open = 0; i = i + 1UL; }
@@ -2190,7 +2192,9 @@ int Widget::dispatch_event(&GuiEvent ev) {
     return r;
 }
 
-void Widget::free() {
+void Widget::free() { self.drop(); }
+
+void Widget::drop() {
     __w_ui_forget(self);
     unsigned long i = 0UL;
     while (i < self.children.len) {

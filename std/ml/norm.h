@@ -35,7 +35,8 @@ struct LayerNorm {
     // Parameterized (module.h): the trained tensors, and what a copy or a file carries.
     void collect_params(&Vec<&FloatTensor> out) const;
     void collect_state(&Vec<&FloatTensor> out) const;
-    void free();
+    void drop();
+    void free() consume;   // = drop()
 
     static struct LayerNorm new(unsigned long dim);
 };
@@ -53,7 +54,8 @@ struct AdaLN {
     // Parameterized (module.h): the trained tensors, and what a copy or a file carries.
     void collect_params(&Vec<&FloatTensor> out) const;
     void collect_state(&Vec<&FloatTensor> out) const;
-    void free();
+    void drop();
+    void free() consume;   // = drop()
 
     static struct AdaLN new(unsigned long dim, unsigned long condDim, int gated);
 };

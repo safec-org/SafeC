@@ -153,7 +153,9 @@ inline unsigned long PoolAllocator::available() const {
     return total;
 }
 
-inline void PoolAllocator::destroy() {
+inline void PoolAllocator::destroy() { self.drop(); }
+
+inline void PoolAllocator::drop() {
     if (self.owned) { unsafe { free((void*)self.base); } }
     self.head = (void*)0;
     self.cap  = (unsigned long)0;

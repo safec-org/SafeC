@@ -31,7 +31,8 @@ struct Queue {
     int           is_empty() const;
     void          clear();
     int           reserve(unsigned long n);
-    void          free();
+    void          drop();
+    void          free() consume;   // = drop()
 };
 
 generic<T>
@@ -114,7 +115,10 @@ generic<T>
 void Queue::clear() { self.head = 0UL; self.len = 0UL; }
 
 generic<T>
-void Queue::free() {
+void Queue::free() { self.drop(); }
+
+generic<T>
+void Queue::drop() {
     unsafe { dealloc_raw_((void*)self.data); }
     self.data = null;
     self.head = 0UL;

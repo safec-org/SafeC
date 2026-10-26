@@ -58,7 +58,8 @@ struct AdamState {
     unsigned long t; // step count, starts at 0, incremented by AdamState::step
 
     void step(&FloatTensor param);
-    void free();
+    void drop();
+    void free() consume;   // = drop()
 
     static struct AdamState new(unsigned long size, float lr, float beta1, float beta2, float eps);
     // Convenience default (lr=0.001, beta1=0.9, beta2=0.999, eps=1e-8 — the

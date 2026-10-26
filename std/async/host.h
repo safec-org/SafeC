@@ -27,7 +27,8 @@ struct HostPark {
 
     // Creates the mutex and condition variable; destroy() frees them.
     static struct HostPark new();
-    void destroy();
+    void drop();
+    void destroy() consume;   // = drop()
     long long now_ms();
     void park(long long timeout_ms);
     void unpark();

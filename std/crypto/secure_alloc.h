@@ -34,7 +34,8 @@ struct SecureAllocator {
     unsigned long available() const;
 
     // Zero all memory and destroy the backing buffer.
-    void       destroy();
+    void       drop();
+    void       destroy() consume;   // = drop()
 };
 
 } // namespace std

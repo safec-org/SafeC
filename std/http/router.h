@@ -140,8 +140,9 @@ struct Router {
     int start(&HttpServer srv);
     // HttpServer::bind + serve; -1 if the bind fails.
     int listen(const &HttpServerConfig cfg);
+    void drop();
 
-    void free();
+    void free() consume;   // = drop()
 };
 
 // Stores/reads the router's one application pointer (shared by every

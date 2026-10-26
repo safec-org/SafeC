@@ -69,7 +69,8 @@ struct HttpHeaders {
     // separated, no trailing CRLF.
     struct String to_raw() const;
     struct HttpHeaders clone() const;
-    void          free();
+    void          drop();
+    void          free() consume;   // = drop()
 };
 
 // A parameter of a structured header value — the "boundary" of

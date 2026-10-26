@@ -171,7 +171,9 @@ struct Value Chain::run(const &Value input) {
     return current;
 }
 
-void Chain::free() {
+void Chain::free() { self.drop(); }
+
+void Chain::drop() {
     unsafe { self.steps.free(); }
 }
 
@@ -251,7 +253,9 @@ struct Value Graph::run(struct Value initialState, int maxSteps) {
     return state;
 }
 
-void Graph::free() {
+void Graph::free() { self.drop(); }
+
+void Graph::drop() {
     unsigned long n;
     unsafe { n = self.nodes.length(); }
     unsigned long i = 0UL;
@@ -308,7 +312,9 @@ struct String Tracer::to_json() const {
     return out;
 }
 
-void Tracer::free() {
+void Tracer::free() { self.drop(); }
+
+void Tracer::drop() {
     unsigned long n;
     unsafe { n = self.events.length(); }
     unsigned long i = 0UL;

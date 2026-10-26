@@ -42,6 +42,7 @@
 #pragma once
 #include <std/sync/spinlock.h>
 #include <std/ownership.h>
+#include <std/panic.h>
 #include <std/dsp/timer_wheel.h>
 
 typedef int Unit;     // the output of a future that produces nothing: Rust's ()
@@ -78,8 +79,12 @@ struct Poll {
     static struct Poll<T> pending();
     int is_ready() const;
     int is_pending() const;
-    // The value if Ready, null if Pending.
-    ?T  take() const;
+    // The value if Ready, null if Pending. Consumes the Poll.
+    ?T  take() consume;
+    // The value; panics if Pending. Consumes the Poll.
+    T   unwrap() consume;
+    // A Poll owns its value when T owns something.
+    void drop() if (needs_drop(T));
 };
 
 // ── Waker ──────────────────────────────────────────────────────────────────
@@ -293,7 +298,12 @@ generic<T> struct Poll<T> Poll::ready(T v) { struct Poll<T> p; p.ready_ = 1; p.v
 generic<T> struct Poll<T> Poll::pending() { struct Poll<T> p; p.ready_ = 0; return p; }
 generic<T> int Poll::is_ready() const { return self.ready_; }
 generic<T> int Poll::is_pending() const { return self.ready_ == 0 ? 1 : 0; }
-generic<T> ?T Poll::take() const { if (self.ready_ == 0) return null; return self.value; }
+generic<T> ?T Poll::take() { if (self.ready_ == 0) return null; return self.value; }
+generic<T> T Poll::unwrap() {
+    if (self.ready_ == 0) panic_at("Poll::unwrap: the future is still pending", "future.h", 0);
+    return self.value;
+}
+generic<T> void Poll::drop() { if (self.ready_ != 0) drop(self.value); }
 
 generic<T> struct Ready<T> Ready::new(T v) { struct Ready<T> r; r.value = v; r.done = 0; return r; }
 generic<T> struct Poll<T> Ready::poll(&Context cx) { self.done = 1; return Poll::ready(self.value); }

@@ -59,7 +59,8 @@ struct Mamba {
     // Parameterized (module.h): every weight tensor.
     void collect_params(&Vec<&FloatTensor> out) const;
     void collect_state(&Vec<&FloatTensor> out) const;
-    void free();
+    void drop();
+    void free() consume;   // = drop()
     // x: [1, dModel] (or [dModel]) -> [1, dModel]; advances 'state'.
     &FloatTensor step(&MambaState state, const &FloatTensor x) const;
 
@@ -78,7 +79,8 @@ struct MambaState {
     &FloatTensor h;     // [dInner, dState], the SSM state
 
     void reset();
-    void free();
+    void drop();
+    void free() consume;   // = drop()
 
     static struct MambaState new(const &Mamba layer);   // zero state
 };

@@ -39,7 +39,8 @@ struct Mla {
     // Parameterized (module.h): Wq, Wdkv, Wuk, Wuv.
     void collect_params(&Vec<&FloatTensor> out) const;
     void collect_state(&Vec<&FloatTensor> out) const;
-    void free();
+    void drop();
+    void free() consume;   // = drop()
 
     // Weights U(-1/sqrt(in), 1/sqrt(in)) from rng; numHeads divides dModel.
     static struct Mla new(unsigned long dModel, unsigned long dLatent, unsigned long numHeads, &Rng rng);
@@ -64,7 +65,8 @@ struct EgMla {
     // Parameterized (module.h): Wq, Wdkv, then each group's Wuk, Wuv.
     void collect_params(&Vec<&FloatTensor> out) const;
     void collect_state(&Vec<&FloatTensor> out) const;
-    void free();
+    void drop();
+    void free() consume;   // = drop()
 
     // numGroups groups of headsPerGroup heads; numGroups divides dModel.
     static struct EgMla new(unsigned long dModel, unsigned long dLatent, unsigned long numGroups,
@@ -115,7 +117,8 @@ struct GatedDeltaNet {
     // Parameterized (module.h): every weight tensor.
     void collect_params(&Vec<&FloatTensor> out) const;
     void collect_state(&Vec<&FloatTensor> out) const;
-    void free();
+    void drop();
+    void free() consume;   // = drop()
 
     static struct GatedDeltaNet new(unsigned long dModel, unsigned long keyDim, unsigned long valueDim);
 };

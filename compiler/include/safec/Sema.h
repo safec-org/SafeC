@@ -167,6 +167,8 @@ private:
     void checkMemoryFlow();
     std::vector<FunctionDecl *> checkedFns_;
     mutable std::unordered_map<const StructType *, int> mustDropCache_;   // 0 no, 1 yes, 2 in progress
+    // Structs whose 'void drop() if (cond);' condition is false: not Drop.
+    std::unordered_set<std::string> disabledDrops_;
 
     // ── Region safety ─────────────────────────────────────────────────────────
     // Returns the scope depth a reference type originated from

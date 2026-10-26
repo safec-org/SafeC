@@ -650,6 +650,7 @@ std::unique_ptr<StructDecl> cloneStructDecl(const StructDecl &sd,
         cmd.isConst    = md.isConst;
         cmd.isStatic   = md.isStatic;
         cmd.isConsume  = md.isConsume;
+        if (md.dropCond) cmd.dropCond = std::shared_ptr<Expr>(cloneExprImpl(md.dropCond.get(), subs).release());
         cmd.genericParams = md.genericParams;
         cmd.loc        = md.loc;
         for (auto &p : md.params) {

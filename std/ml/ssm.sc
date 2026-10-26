@@ -225,7 +225,9 @@ struct Mamba Mamba::new(unsigned long dModel, unsigned long dState, unsigned lon
     return m;
 }
 
-void Mamba::free() {
+void Mamba::free() { self.drop(); }
+
+void Mamba::drop() {
     ssm_release_(self->inProj); ssm_release_(self->convW); ssm_release_(self->convB);
     ssm_release_(self->xProj); ssm_release_(self->dtProj); ssm_release_(self->dtBias);
     ssm_release_(self->Alog); ssm_release_(self->Dskip); ssm_release_(self->outProj);
@@ -315,7 +317,9 @@ void MambaState::reset() {
     }
 }
 
-void MambaState::free() {
+void MambaState::free() { self.drop(); }
+
+void MambaState::drop() {
     ssm_release_(self->conv);
     ssm_release_(self->h);
 }

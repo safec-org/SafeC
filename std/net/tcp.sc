@@ -131,7 +131,9 @@ void TcpConn::listen(unsigned int local_ip, unsigned short local_port,
     self.tx_len      = (unsigned long)0;
 }
 
-inline void TcpConn::close() {
+inline void TcpConn::close() { self.drop(); }
+
+inline void TcpConn::drop() {
     if (self.state == TCP_ESTABLISHED) {
         self.state = TCP_FIN_WAIT1;
     } else if (self.state == TCP_CLOSE_WAIT) {

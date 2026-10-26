@@ -507,7 +507,9 @@ void GuiImage::draw(&GuiWindow win, int x, int y) const {
     }
 }
 
-void GuiImage::free() {
+void GuiImage::free() { self.drop(); }
+
+void GuiImage::drop() {
     unsafe {
         if ((void*)self.pixels != (void*)0) { dealloc_raw_((void*)self.pixels); }
         self.pixels = (&heap unsigned char)0;

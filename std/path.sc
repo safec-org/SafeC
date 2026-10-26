@@ -146,11 +146,6 @@ static int path_components_(const &char p, &Vec<struct String> parts, &String pr
     return abs;
 }
 
-static void path_free_parts_(&Vec<struct String> parts) {
-    for (unsigned long i = 0UL; i < parts.len; i = i + 1UL) { parts.at(i).free(); }
-    parts.free();
-}
-
 struct String path_normalize(const &char p) {
     struct Vec<struct String> parts = Vec::new();
     struct String out = String::new();
@@ -161,7 +156,7 @@ struct String path_normalize(const &char p) {
         out.push_str(parts.at(i));
     }
     if (out.len == 0UL) { out.push_char('.'); }
-    path_free_parts_(&parts);
+    parts.drop();
     return out;
 }
 
@@ -174,7 +169,7 @@ struct String path_relative(const &char from, const &char to) {
     int abs_b = path_components_(to, &b, &pb);
     struct String out = String::new();
     if (abs_a != abs_b || !pa.eq(&pb)) {
-        path_free_parts_(&a); path_free_parts_(&b); pa.free(); pb.free();
+        a.drop(); b.drop(); pa.free(); pb.free();
         out.free();
         return path_normalize(to);
     }
@@ -189,7 +184,7 @@ struct String path_relative(const &char from, const &char to) {
         out.push_str(b.at(i));
     }
     if (out.len == 0UL) { out.push_char('.'); }
-    path_free_parts_(&a); path_free_parts_(&b); pa.free(); pb.free();
+    a.drop(); b.drop(); pa.free(); pb.free();
     return out;
 }
 

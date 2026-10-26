@@ -261,7 +261,8 @@ struct GuiWindow {
     void clear(struct GuiColor color);
 
     // Releases the window and its pixel buffer.
-    void destroy();
+    void drop();
+    void destroy() consume;   // = drop()
 
     // ── window management (no-ops for an offscreen window) ───────────────
     void set_title(const &char title);

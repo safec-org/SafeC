@@ -29,7 +29,8 @@ struct Slice {
     struct Slice<T> sub(unsigned long start, unsigned long end) const; // [start, end); empty if invalid
     unsigned long   length() const;
     int             is_empty() const;
-    void            free();                            // only for Slice::alloc() slices
+    void            drop();                            // only for Slice::alloc() slices
+    void            free() consume;   // = drop()
 };
 
 generic<T>
@@ -98,7 +99,10 @@ generic<T>
 int Slice::is_empty() const { return self.len == 0UL; }
 
 generic<T>
-void Slice::free() {
+void Slice::free() { self.drop(); }
+
+generic<T>
+void Slice::drop() {
     unsafe { dealloc_raw_((void*)self.ptr); }
     self.ptr = null;
     self.len = 0UL;

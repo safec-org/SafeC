@@ -725,7 +725,9 @@ void Mlp::collect_params(&Vec<&FloatTensor> out) const {
 
 void Mlp::collect_state(&Vec<&FloatTensor> out) const { self.collect_params(out); }
 
-void Mlp::free() {
+void Mlp::free() { self.drop(); }
+
+void Mlp::drop() {
     unsigned long i = 0UL;
     while (i < self.params.length()) {
         &FloatTensor p = *self.params.at(i);
@@ -1137,7 +1139,9 @@ void Optimizer::step() {
     }
 }
 
-void Optimizer::free() {
+void Optimizer::free() { self.drop(); }
+
+void Optimizer::drop() {
     unsigned long i = 0UL;
     while (i < self.m.length()) {
         &FloatTensor a = *self.m.at(i);

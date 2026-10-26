@@ -216,8 +216,9 @@ struct MidiIn {
     long get_message(&unsigned char buf, unsigned long cap, &double timestamp);
     // Messages lost to a full queue or an oversized sysex.
     unsigned long dropped() const;
+    void drop();
 
-    void close();
+    void close() consume;   // = drop()
 };
 
 struct MidiOut {
@@ -239,8 +240,9 @@ struct MidiOut {
     // Sends one complete message (a short message or a whole sysex).
     struct AudioError send_message(const &unsigned char msg, unsigned long len);
     struct AudioError send(struct MidiMsg msg);
+    void drop();
 
-    void close();
+    void close() consume;   // = drop()
 };
 
 generic<T>

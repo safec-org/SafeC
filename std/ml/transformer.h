@@ -45,7 +45,8 @@ struct DiTBlock {
     // Parameterized (module.h): every weight tensor.
     void collect_params(&Vec<&FloatTensor> out) const;
     void collect_state(&Vec<&FloatTensor> out) const;
-    void free();
+    void drop();
+    void free() consume;   // = drop()
 
     static struct DiTBlock new(unsigned long dModel, unsigned long dHidden, unsigned long dModelCond,
                                unsigned long numHeads);
@@ -69,7 +70,8 @@ struct JiTBlock {
     // Parameterized (module.h): every weight tensor.
     void collect_params(&Vec<&FloatTensor> out) const;
     void collect_state(&Vec<&FloatTensor> out) const;
-    void free();
+    void drop();
+    void free() consume;   // = drop()
 
     static struct JiTBlock new(unsigned long dModel, unsigned long dHidden, unsigned long numHeads);
 };
@@ -85,7 +87,8 @@ struct JiT {
     // Parameterized (module.h): the embedding, then each block's weights.
     void collect_params(&Vec<&FloatTensor> out) const;
     void collect_state(&Vec<&FloatTensor> out) const;
-    void free();
+    void drop();
+    void free() consume;   // = drop()
 
     static struct JiT new(unsigned long patchDim, unsigned long dModel, unsigned long dHidden, unsigned long numHeads,
                           unsigned long depth);

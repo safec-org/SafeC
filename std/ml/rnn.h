@@ -26,7 +26,8 @@ struct RNNCell {
     // Parameterized (module.h): every weight tensor.
     void collect_params(&Vec<&FloatTensor> out) const;
     void collect_state(&Vec<&FloatTensor> out) const;
-    void free();
+    void drop();
+    void free() consume;   // = drop()
 
     static struct RNNCell new(unsigned long inputSize, unsigned long hiddenSize);
 };
@@ -45,7 +46,8 @@ struct GRUCell {
     // Parameterized (module.h): every weight tensor.
     void collect_params(&Vec<&FloatTensor> out) const;
     void collect_state(&Vec<&FloatTensor> out) const;
-    void free();
+    void drop();
+    void free() consume;   // = drop()
 
     static struct GRUCell new(unsigned long inputSize, unsigned long hiddenSize);
 };
@@ -69,7 +71,8 @@ struct LSTMCell {
     // Parameterized (module.h): every weight tensor.
     void collect_params(&Vec<&FloatTensor> out) const;
     void collect_state(&Vec<&FloatTensor> out) const;
-    void free();
+    void drop();
+    void free() consume;   // = drop()
 
     static struct LSTMCell new(unsigned long inputSize, unsigned long hiddenSize);
 };
@@ -101,7 +104,8 @@ struct XLSTMCell {
     // Parameterized (module.h): every weight tensor.
     void collect_params(&Vec<&FloatTensor> out) const;
     void collect_state(&Vec<&FloatTensor> out) const;
-    void free();
+    void drop();
+    void free() consume;   // = drop()
 
     static struct XLSTMCell new(unsigned long inputSize, unsigned long hiddenSize);
 };
@@ -111,8 +115,9 @@ struct XLSTMState {
     &FloatTensor c;
     &FloatTensor n;
     &FloatTensor m; // [1,1] scalar stabilizer (broadcast across hidden dim)
+    void drop();
 
-    void free();
+    void free() consume;   // = drop()
 };
 
 } // namespace std

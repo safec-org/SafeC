@@ -413,7 +413,9 @@ unsigned int Audio::default_input_device() const {
     return AUDIO_DEFAULT_DEVICE;
 }
 
-void Audio::close() {
+void Audio::close() { self.drop(); }
+
+void Audio::drop() {
     ?&AudioHost_ hp = audio_host_of_(self);
     match (hp) {
         case some(h): {
@@ -870,7 +872,9 @@ static struct AudioError audio_stream_halt_(const &AudioStream s, int how) {
 struct AudioError AudioStream::stop() { return audio_stream_halt_(self, AUDIO_CB_STOP); }
 struct AudioError AudioStream::abort() { return audio_stream_halt_(self, AUDIO_CB_ABORT); }
 
-void AudioStream::close() {
+void AudioStream::close() { self.drop(); }
+
+void AudioStream::drop() {
     match (audio_state_of_(self)) {
         case some(st): {
             if (audio_state_load_(st) != AUDIO_STREAM_CLOSED) {

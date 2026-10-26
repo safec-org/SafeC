@@ -42,7 +42,8 @@ struct MultipartForm {
     ?&MultipartPart part_at(unsigned long i);
     // A plain field's text (its data), or null.
     const ?&char    value(const &char name) const;
-    void            free();
+    void            drop();
+    void            free() consume;   // = drop()
 };
 
 // Builds a multipart/form-data body.
@@ -59,7 +60,8 @@ struct MultipartBuilder {
     struct String content_type() const;
     // Appends the closing delimiter; 'body' is then complete.
     void finish();
-    void free();
+    void drop();
+    void free() consume;   // = drop()
 };
 
 } // namespace std

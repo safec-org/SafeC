@@ -134,7 +134,8 @@ struct MultiHeadAttention {
     // Parameterized (module.h): Wq, Wk, Wv, Wo.
     void collect_params(&Vec<&FloatTensor> out) const;
     void collect_state(&Vec<&FloatTensor> out) const;
-    void free();
+    void drop();
+    void free() consume;   // = drop()
 
     // Weights U(-1/sqrt(dModel), 1/sqrt(dModel)) from rng; numHeads divides dModel.
     static struct MultiHeadAttention new(unsigned long dModel, unsigned long numHeads, &Rng rng);

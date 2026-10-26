@@ -575,7 +575,8 @@ struct Widget {
     // Recursively frees this widget and its whole subtree (children,
     // text, style, context menu), including the widget's own allocation.
     // Detach it from its parent first (remove_child) when it has one.
-    void free();
+    void drop();
+    void free() consume;   // = drop()
 };
 
 // onClick/onChange/onActivate(widget, userData).
@@ -660,7 +661,8 @@ struct GuiUi {
     // The topmost open dialog, or null.
     ?&Widget modal() const;
     // Frees the UI and its whole widget tree.
-    void free();
+    void drop();
+    void free() consume;   // = drop()
 };
 
 // A standard message box: 'text' and a row of buttons (GUI_MB_* bits),

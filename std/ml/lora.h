@@ -81,7 +81,8 @@ struct Nf4Tensor {
     int doubleQuant;
 
     unsigned long bytes() const;   // storage, all parts
-    void free();
+    void drop();
+    void free() consume;   // = drop()
 
     static struct Nf4Tensor quantize(const &FloatTensor w, unsigned long blockSize, int doubleQuant);
     &FloatTensor dequantize() const;   // [rows, cols], no grad
@@ -107,7 +108,8 @@ struct QLoraMlp {
     void collect_params(&Vec<&FloatTensor> out) const;
     void collect_state(&Vec<&FloatTensor> out) const;
     unsigned long base_bytes() const;        // the frozen base at rest
-    void free();
+    void drop();
+    void free() consume;   // = drop()
 
     static struct QLoraMlp attach(const &Mlp base, const &LoraConfig cfg, unsigned long blockSize, int doubleQuant);
 };

@@ -152,7 +152,9 @@ const ?&char MultipartForm::value(const &char name) const {
     return null;
 }
 
-void MultipartForm::free() {
+void MultipartForm::free() { self.drop(); }
+
+void MultipartForm::drop() {
     unsigned long i = 0UL;
     while (i < self.parts.length()) {
         mp_part_free_(self.parts.at(i));
@@ -234,7 +236,9 @@ void MultipartBuilder::finish() {
     self.body.push("--\r\n");
 }
 
-void MultipartBuilder::free() {
+void MultipartBuilder::free() { self.drop(); }
+
+void MultipartBuilder::drop() {
     self.boundary.free();
     self.body.free();
 }

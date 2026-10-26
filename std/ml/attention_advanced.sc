@@ -42,7 +42,9 @@ void Mla::collect_params(&Vec<&FloatTensor> out) const {
 
 void Mla::collect_state(&Vec<&FloatTensor> out) const { self.collect_params(out); }
 
-void Mla::free() { aa_drop_(self.Wq); aa_drop_(self.Wdkv); aa_drop_(self.Wuk); aa_drop_(self.Wuv); }
+void Mla::free() { self.drop(); }
+
+void Mla::drop() { aa_drop_(self.Wq); aa_drop_(self.Wdkv); aa_drop_(self.Wuk); aa_drop_(self.Wuv); }
 
 struct EgMla EgMla::new(unsigned long dModel, unsigned long dLatent, unsigned long numGroups,
                         unsigned long headsPerGroup, &Rng rng) {
@@ -106,7 +108,9 @@ void EgMla::collect_params(&Vec<&FloatTensor> out) const {
 
 void EgMla::collect_state(&Vec<&FloatTensor> out) const { self.collect_params(out); }
 
-void EgMla::free() {
+void EgMla::free() { self.drop(); }
+
+void EgMla::drop() {
     aa_drop_(self.Wq);
     aa_drop_(self.Wdkv);
     unsigned long g = 0UL;
@@ -239,7 +243,9 @@ struct GatedDeltaNet GatedDeltaNet::new(unsigned long dModel, unsigned long keyD
     return layer;
 }
 
-void GatedDeltaNet::free() {
+void GatedDeltaNet::free() { self.drop(); }
+
+void GatedDeltaNet::drop() {
     unsafe {
         self->Walpha->free(); self->Wbeta->free();
         free((void*)self->Walpha); free((void*)self->Wbeta);

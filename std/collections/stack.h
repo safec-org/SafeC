@@ -28,7 +28,8 @@ struct Stack {
     int           is_empty() const;
     void          clear();
     int           reserve(unsigned long n);
-    void          free();
+    void          drop();
+    void          free() consume;   // = drop()
 };
 
 generic<T>
@@ -91,7 +92,10 @@ generic<T>
 void Stack::clear() { self.top = 0UL; }
 
 generic<T>
-void Stack::free() {
+void Stack::free() { self.drop(); }
+
+generic<T>
+void Stack::drop() {
     unsafe { dealloc_raw_((void*)self.data); }
     self.data = null;
     self.top = 0UL;

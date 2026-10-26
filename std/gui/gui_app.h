@@ -126,7 +126,8 @@ struct GuiApp {
     void set_frame_interval(double ms);
     double frame_interval() const;
     // Closes every window and frees the app's state.
-    void free();
+    void drop();
+    void free() consume;   // = drop()
 };
 
 generic<T>

@@ -121,7 +121,9 @@ struct GuiFont GuiFont::default() {
     return f;
 }
 
-void GuiFont::free() {
+void GuiFont::free() { self.drop(); }
+
+void GuiFont::drop() {
     unsafe {
         if ((void*)self.bitmap != (void*)0) { dealloc_raw_((void*)self.bitmap); }
         self.bitmap = (&heap unsigned char)0;

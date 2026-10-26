@@ -318,7 +318,9 @@ unsigned long Nf4Tensor::bytes() const {
     return b + 4UL * self.blocks;
 }
 
-void Nf4Tensor::free() {
+void Nf4Tensor::free() { self.drop(); }
+
+void Nf4Tensor::drop() {
     unsafe {
         free((void*)self.codes);
         if (self.absmax != (float*)0) free((void*)self.absmax);
@@ -384,7 +386,9 @@ unsigned long QLoraMlp::base_bytes() const {
     return n;
 }
 
-void QLoraMlp::free() {
+void QLoraMlp::free() { self.drop(); }
+
+void QLoraMlp::drop() {
     unsigned long k = 0UL;
     while (k < self.nLayers) {
         self.W.at(k).free();

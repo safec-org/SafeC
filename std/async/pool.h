@@ -58,7 +58,8 @@ struct ThreadPool {
     void wait_idle();
     // Stop the workers (after their current poll) and join them. Tasks
     // still queued or waiting are abandoned, not dropped.
-    void shutdown();
+    void drop();
+    void shutdown() consume;   // = drop()
     int  live_count();
 };
 
