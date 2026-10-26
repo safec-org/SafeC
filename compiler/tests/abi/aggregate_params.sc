@@ -17,10 +17,10 @@ long mixed_sum(struct Mixed m, long k) {
 // value alone.
 long bump(struct Mixed m) { m.c = m.c + 100L; return m.c; }
 
-// The rewritten functions follow main in the module.
+// The rewritten function keeps its place in the module, before main.
+// CHECK-LABEL: define {{.*}}@mixed_sum(ptr
 // CHECK-LABEL: define {{.*}}@main(
 // CHECK: ret i32 0
-// CHECK-LABEL: define {{.*}}@mixed_sum(ptr
 int main() {
     struct Mixed m;
     int i = 0;

@@ -1,4 +1,6 @@
-// SAFEC-ARGS: -I %root/std -I %root --compat-preprocessor
+// SAFEC-ARGS: -I %root/std -I %root --compat-preprocessor --target x86_64-unknown-linux-gnu
+// (Pinned to a Linux target: the CHECKs name pthread_create; std/thread uses
+// Win32 threads on Windows.)
 // Shared counters: a static Mutex, and atomics lent to scoped threads.
 #include <std/thread.h>
 #include <std/atomic.h>
