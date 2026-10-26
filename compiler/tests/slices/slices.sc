@@ -22,3 +22,10 @@ int main() {
     []const int ro = middle(b.data);
     return sum(ro) + sum(b.data) - 15;
 }
+
+// Member access, indexing and re-slicing on a slice-valued call.
+[]int whole([]int s) { return s; }
+int rvalues() {
+    int a[3] = {7, 8, 9};
+    return (int)whole(a[0..3]).len + whole(a[0..3])[2] + whole(a[0..3])[1..3][0];
+}

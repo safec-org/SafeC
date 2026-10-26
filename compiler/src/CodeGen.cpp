@@ -3879,10 +3879,17 @@ llvm::Value *CodeGen::genSubscript(SubscriptExpr &e, FnEnv &env, bool wantAddr) 
     // expression (e.g. a cast like '(unsigned char*)pkt.data', or a call
     // returning a pointer) that has no addressable storage of its own.
     // Only compute an lvalue address when the base actually needs/has one.
-    auto *baseAddr = (baseTy->isArrayTy() ||
-                      (e.base->type && e.base->type->kind == TypeKind::Slice) ||
-                      e.base->isLValue)
-                         ? genLValue(*e.base, env) : nullptr;
+    llvm::Value *baseAddr = nullptr;
+    if (e.base->type && e.base->type->kind == TypeKind::Slice && !e.base->isLValue) {
+        // A slice-valued call or other rvalue ('f()[i]'): spill it.
+        auto *v = genExpr(*e.base, env);
+        baseAddr = builder_.CreateAlloca(baseTy, nullptr, "slice.rv");
+        builder_.CreateStore(v, baseAddr);
+    } else if (baseTy->isArrayTy() ||
+               (e.base->type && e.base->type->kind == TypeKind::Slice) ||
+               e.base->isLValue) {
+        baseAddr = genLValue(*e.base, env);
+    }
 
     llvm::Value *gep = nullptr;
     if (baseTy->isArrayTy()) {
@@ -3997,8 +4004,15 @@ llvm::Value *CodeGen::genSlice(SliceExpr &e, FnEnv &env) {
         arrLen = llvm::ConstantInt::get(i64Ty, at.size);
     } else if (e.base->type->kind == TypeKind::Slice) {
         // Re-slicing a slice
-        auto *sliceVal = genLValue(*e.base, env);
         auto *slBaseTy = lowerType(e.base->type);
+        llvm::Value *sliceVal;
+        if (e.base->isLValue) {
+            sliceVal = genLValue(*e.base, env);
+        } else {
+            auto *v = genExpr(*e.base, env);
+            sliceVal = builder_.CreateAlloca(slBaseTy, nullptr, "slice.rv");
+            builder_.CreateStore(v, sliceVal);
+        }
         basePtr = builder_.CreateLoad(ptrTy,
             builder_.CreateStructGEP(slBaseTy, sliceVal, 0), "reslice.ptr");
         arrLen = builder_.CreateLoad(i64Ty,
@@ -4237,6 +4251,12 @@ llvm::Value *CodeGen::genMember(MemberExpr &e, FnEnv &env, bool wantAddr) {
         auto &rt = static_cast<ReferenceType &>(*e.base->type);
         baseAddr = genExpr(*e.base, env);  // loads the ptr from the alloca
         structTy = lowerType(rt.base);
+    } else if (e.base->type && e.base->type->kind == TypeKind::Slice && !e.base->isLValue) {
+        // A slice-valued call or other rvalue ('f().len'): spill it.
+        structTy = lowerType(e.base->type);
+        auto *v = genExpr(*e.base, env);
+        baseAddr = builder_.CreateAlloca(structTy, nullptr, "slice.rv");
+        builder_.CreateStore(v, baseAddr);
     } else {
         // s.field: base is a struct value; use its address directly
         baseAddr = genLValue(*e.base, env);
@@ -4255,7 +4275,7 @@ llvm::Value *CodeGen::genMember(MemberExpr &e, FnEnv &env, bool wantAddr) {
             if (e.isArrow || (e.base->type->kind == TypeKind::Reference)) {
                 sliceAddr = baseAddr;
             } else {
-                sliceAddr = genLValue(*e.base, env);
+                sliceAddr = baseAddr;   // the slice's own storage (spilled above for an rvalue)
             }
             unsigned idx = (e.field == "ptr") ? 0 : 1; // ptr=0, len=1
             auto *gep = builder_.CreateStructGEP(sliceTy, sliceAddr, idx, "slice." + e.field);

@@ -4136,6 +4136,7 @@ TypePtr Sema::checkSlice(SliceExpr &e) {
         if (!inUnsafeScope())
             diag_.error(e.loc, "slicing a pointer requires 'unsafe' block");
         elemTy = static_cast<PointerType &>(*baseTy).base;
+        constElem = static_cast<PointerType &>(*baseTy).isConst;
     } else if (baseTy->kind == TypeKind::Slice) {
         elemTy = static_cast<SliceType &>(*baseTy).element;
         constElem = static_cast<SliceType &>(*baseTy).constElem;
