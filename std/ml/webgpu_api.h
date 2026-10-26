@@ -6,8 +6,8 @@
 // returns: wgpu-native v24 on, Dawn from 2024 on); tests/stdlib/webgpu
 // checks them against the real header with a C compiler (layout_check.c).
 //
-// Handles (WGPUInstance, WGPUDevice, WGPUBuffer, ...) are opaque pointers
-// here: void*. Enums are 32-bit, flags (WGPUBufferUsage, WGPUMapMode,
+// Handles (WGPUInstance, WGPUDevice, WGPUBuffer, ...) are pointers to
+// opaque marker structs here, one per kind. Enums are 32-bit, flags (WGPUBufferUsage, WGPUMapMode,
 // WGPUShaderStage) 64-bit, WGPUBool 32-bit. Callbacks receive WGPUStringView
 // by value; SafeC passes and receives structs by value with the platform's C
 // ABI, so the callback types below take it as one.
@@ -25,8 +25,34 @@ struct WGPUStringView {
 };
 #define WGPU_STRLEN_ 0xffffffffffffffffUL
 
+// ── Handles ──────────────────────────────────────────────────────────────────
+// Never constructed or read; only the implementation looks behind them.
+struct WGPUInstance_ { char opaque_; };
+struct WGPUAdapter_ { char opaque_; };
+struct WGPUDevice_ { char opaque_; };
+struct WGPUQueue_ { char opaque_; };
+struct WGPUBuffer_ { char opaque_; };
+struct WGPUShaderModule_ { char opaque_; };
+struct WGPUBindGroupLayout_ { char opaque_; };
+struct WGPUPipelineLayout_ { char opaque_; };
+struct WGPUComputePipeline_ { char opaque_; };
+struct WGPUBindGroup_ { char opaque_; };
+struct WGPUCommandEncoder_ { char opaque_; };
+struct WGPUComputePassEncoder_ { char opaque_; };
+struct WGPUCommandBuffer_ { char opaque_; };
+struct WGPUSurface_ { char opaque_; };
+struct WGPUSampler_ { char opaque_; };
+struct WGPUTextureView_ { char opaque_; };
+// Descriptors std never passes (always null).
+struct WGPUCommandEncoderDescriptor_ { char opaque_; };
+struct WGPUComputePassDescriptor_ { char opaque_; };
+struct WGPUCommandBufferDescriptor_ { char opaque_; };
+// A callback's userdata: whatever the callback info carried, handed back
+// untouched (std passes a serial number in one, never dereferenced).
+struct WGPUUserdata_ { char opaque_; };
+
 struct WGPUChainedStruct {
-    void* next;
+    struct WGPUChainedStruct* next;
     int sType;
 };
 
@@ -57,76 +83,76 @@ struct WGPUFuture {
 #define WGPU_WHOLE_SIZE_ 0xffffffffffffffffUL
 
 // ── Callbacks ────────────────────────────────────────────────────────────────
-typedef fn void(int, void*, struct WGPUStringView, void*, void*) WGPURequestAdapterCallback;   // status, adapter
-typedef fn void(int, void*, struct WGPUStringView, void*, void*) WGPURequestDeviceCallback;    // status, device
-typedef fn void(int, struct WGPUStringView, void*, void*) WGPUBufferMapCallback;               // status
-typedef fn void(int, struct WGPUStringView, void*, void*) WGPUQueueWorkDoneCallback;           // status
-typedef fn void(const void*, int, struct WGPUStringView, void*, void*) WGPUUncapturedErrorCallback;   // &device, type
-typedef fn void(const void*, int, struct WGPUStringView, void*, void*) WGPUDeviceLostCallback;        // &device, reason
+typedef fn void(int, WGPUAdapter_*, struct WGPUStringView, WGPUUserdata_*, WGPUUserdata_*) WGPURequestAdapterCallback;   // status, adapter
+typedef fn void(int, WGPUDevice_*, struct WGPUStringView, WGPUUserdata_*, WGPUUserdata_*) WGPURequestDeviceCallback;    // status, device
+typedef fn void(int, struct WGPUStringView, WGPUUserdata_*, WGPUUserdata_*) WGPUBufferMapCallback;               // status
+typedef fn void(int, struct WGPUStringView, WGPUUserdata_*, WGPUUserdata_*) WGPUQueueWorkDoneCallback;           // status
+typedef fn void(struct WGPUDevice_**, int, struct WGPUStringView, WGPUUserdata_*, WGPUUserdata_*) WGPUUncapturedErrorCallback;   // &device, type
+typedef fn void(struct WGPUDevice_**, int, struct WGPUStringView, WGPUUserdata_*, WGPUUserdata_*) WGPUDeviceLostCallback;        // &device, reason
 
 struct WGPURequestAdapterCallbackInfo {
-    void* nextInChain;
+    struct WGPUChainedStruct* nextInChain;
     int mode;
     WGPURequestAdapterCallback callback;
-    void* userdata1;
-    void* userdata2;
+    WGPUUserdata_* userdata1;
+    WGPUUserdata_* userdata2;
 };
 struct WGPURequestDeviceCallbackInfo {
-    void* nextInChain;
+    struct WGPUChainedStruct* nextInChain;
     int mode;
     WGPURequestDeviceCallback callback;
-    void* userdata1;
-    void* userdata2;
+    WGPUUserdata_* userdata1;
+    WGPUUserdata_* userdata2;
 };
 struct WGPUBufferMapCallbackInfo {
-    void* nextInChain;
+    struct WGPUChainedStruct* nextInChain;
     int mode;
     WGPUBufferMapCallback callback;
-    void* userdata1;
-    void* userdata2;
+    WGPUUserdata_* userdata1;
+    WGPUUserdata_* userdata2;
 };
 struct WGPUQueueWorkDoneCallbackInfo {
-    void* nextInChain;
+    struct WGPUChainedStruct* nextInChain;
     int mode;
     WGPUQueueWorkDoneCallback callback;
-    void* userdata1;
-    void* userdata2;
+    WGPUUserdata_* userdata1;
+    WGPUUserdata_* userdata2;
 };
 struct WGPUDeviceLostCallbackInfo {
-    void* nextInChain;
+    struct WGPUChainedStruct* nextInChain;
     int mode;
     WGPUDeviceLostCallback callback;
-    void* userdata1;
-    void* userdata2;
+    WGPUUserdata_* userdata1;
+    WGPUUserdata_* userdata2;
 };
 struct WGPUUncapturedErrorCallbackInfo {
-    void* nextInChain;
+    struct WGPUChainedStruct* nextInChain;
     WGPUUncapturedErrorCallback callback;
-    void* userdata1;
-    void* userdata2;
+    WGPUUserdata_* userdata1;
+    WGPUUserdata_* userdata2;
 };
 
 // ── Descriptors ──────────────────────────────────────────────────────────────
 struct WGPUInstanceLimits {
-    void* nextInChain;
+    struct WGPUChainedStruct* nextInChain;
     unsigned long timedWaitAnyMaxCount;
 };
 struct WGPUInstanceDescriptor {
-    void* nextInChain;
+    struct WGPUChainedStruct* nextInChain;
     unsigned long requiredFeatureCount;
     const int* requiredFeatures;
     const struct WGPUInstanceLimits* requiredLimits;
 };
 struct WGPURequestAdapterOptions {
-    void* nextInChain;
+    struct WGPUChainedStruct* nextInChain;
     int featureLevel;
     int powerPreference;
     unsigned int forceFallbackAdapter;
     int backendType;
-    void* compatibleSurface;
+    WGPUSurface_* compatibleSurface;
 };
 struct WGPULimits {
-    void* nextInChain;
+    struct WGPUChainedStruct* nextInChain;
     unsigned int maxTextureDimension1D;
     unsigned int maxTextureDimension2D;
     unsigned int maxTextureDimension3D;
@@ -161,11 +187,11 @@ struct WGPULimits {
     unsigned int maxImmediateSize;
 };
 struct WGPUQueueDescriptor {
-    void* nextInChain;
+    struct WGPUChainedStruct* nextInChain;
     struct WGPUStringView label;
 };
 struct WGPUDeviceDescriptor {
-    void* nextInChain;
+    struct WGPUChainedStruct* nextInChain;
     struct WGPUStringView label;
     unsigned long requiredFeatureCount;
     const int* requiredFeatures;
@@ -175,7 +201,7 @@ struct WGPUDeviceDescriptor {
     struct WGPUUncapturedErrorCallbackInfo uncapturedErrorCallbackInfo;
 };
 struct WGPUAdapterInfo {
-    void* nextInChain;
+    struct WGPUChainedStruct* nextInChain;
     struct WGPUStringView vendor;
     struct WGPUStringView architecture;
     struct WGPUStringView device;
@@ -188,7 +214,7 @@ struct WGPUAdapterInfo {
     unsigned int subgroupMaxSize;
 };
 struct WGPUBufferDescriptor {
-    void* nextInChain;
+    struct WGPUChainedStruct* nextInChain;
     struct WGPUStringView label;
     unsigned long usage;
     unsigned long size;
@@ -199,11 +225,11 @@ struct WGPUShaderSourceWGSL {
     struct WGPUStringView code;
 };
 struct WGPUShaderModuleDescriptor {
-    void* nextInChain;
+    struct WGPUChainedStruct* nextInChain;
     struct WGPUStringView label;
 };
 struct WGPUBufferBindingLayout {
-    void* nextInChain;
+    struct WGPUChainedStruct* nextInChain;
     int type;
     unsigned int hasDynamicOffset;
     unsigned long minBindingSize;
@@ -211,7 +237,7 @@ struct WGPUBufferBindingLayout {
 // A layout entry for a buffer binding; the sampler / texture / storage
 // texture members (64 bytes) stay zero (BindingNotUsed).
 struct WGPUBindGroupLayoutEntry {
-    void* nextInChain;
+    struct WGPUChainedStruct* nextInChain;
     unsigned int binding;
     unsigned long visibility;
     unsigned int bindingArraySize;
@@ -219,96 +245,96 @@ struct WGPUBindGroupLayoutEntry {
     unsigned long unusedBindings[8];
 };
 struct WGPUBindGroupLayoutDescriptor {
-    void* nextInChain;
+    struct WGPUChainedStruct* nextInChain;
     struct WGPUStringView label;
     unsigned long entryCount;
     const struct WGPUBindGroupLayoutEntry* entries;
 };
 struct WGPUPipelineLayoutDescriptor {
-    void* nextInChain;
+    struct WGPUChainedStruct* nextInChain;
     struct WGPUStringView label;
     unsigned long bindGroupLayoutCount;
-    const void* const* bindGroupLayouts;
+    struct WGPUBindGroupLayout_** bindGroupLayouts;
     unsigned int immediateSize;
 };
 struct WGPUBindGroupEntry {
-    void* nextInChain;
+    struct WGPUChainedStruct* nextInChain;
     unsigned int binding;
-    void* buffer;
+    WGPUBuffer_* buffer;
     unsigned long offset;
     unsigned long size;
-    void* sampler;
-    void* textureView;
+    WGPUSampler_* sampler;
+    WGPUTextureView_* textureView;
 };
 struct WGPUBindGroupDescriptor {
-    void* nextInChain;
+    struct WGPUChainedStruct* nextInChain;
     struct WGPUStringView label;
-    void* layout;
+    WGPUBindGroupLayout_* layout;
     unsigned long entryCount;
     const struct WGPUBindGroupEntry* entries;
 };
 struct WGPUConstantEntry {
-    void* nextInChain;
+    struct WGPUChainedStruct* nextInChain;
     struct WGPUStringView key;
     double value;
 };
 struct WGPUComputeState {
-    void* nextInChain;
-    void* module;
+    struct WGPUChainedStruct* nextInChain;
+    WGPUShaderModule_* module;
     struct WGPUStringView entryPoint;
     unsigned long constantCount;
     const struct WGPUConstantEntry* constants;
 };
 struct WGPUComputePipelineDescriptor {
-    void* nextInChain;
+    struct WGPUChainedStruct* nextInChain;
     struct WGPUStringView label;
-    void* layout;
+    WGPUPipelineLayout_* layout;
     struct WGPUComputeState compute;
 };
 
 // ── Functions ────────────────────────────────────────────────────────────────
-extern void* wgpuCreateInstance(const struct WGPUInstanceDescriptor* descriptor);
-extern struct WGPUFuture wgpuInstanceRequestAdapter(void* instance, const struct WGPURequestAdapterOptions* options,
+extern WGPUInstance_* wgpuCreateInstance(const struct WGPUInstanceDescriptor* descriptor);
+extern struct WGPUFuture wgpuInstanceRequestAdapter(WGPUInstance_* instance, const struct WGPURequestAdapterOptions* options,
                                                     struct WGPURequestAdapterCallbackInfo callbackInfo);
-extern void wgpuInstanceProcessEvents(void* instance);
-extern struct WGPUFuture wgpuAdapterRequestDevice(void* adapter, const struct WGPUDeviceDescriptor* descriptor,
+extern void wgpuInstanceProcessEvents(WGPUInstance_* instance);
+extern struct WGPUFuture wgpuAdapterRequestDevice(WGPUAdapter_* adapter, const struct WGPUDeviceDescriptor* descriptor,
                                                   struct WGPURequestDeviceCallbackInfo callbackInfo);
-extern int wgpuAdapterGetLimits(void* adapter, struct WGPULimits* limits);
-extern int wgpuAdapterGetInfo(void* adapter, struct WGPUAdapterInfo* info);
+extern int wgpuAdapterGetLimits(WGPUAdapter_* adapter, struct WGPULimits* limits);
+extern int wgpuAdapterGetInfo(WGPUAdapter_* adapter, struct WGPUAdapterInfo* info);
 extern void wgpuAdapterInfoFreeMembers(struct WGPUAdapterInfo adapterInfo);
-extern unsigned int wgpuAdapterHasFeature(void* adapter, int feature);
-extern void* wgpuDeviceGetQueue(void* device);
-extern void* wgpuDeviceCreateBuffer(void* device, const struct WGPUBufferDescriptor* descriptor);
-extern void wgpuBufferRelease(void* buffer);
-extern void wgpuBufferDestroy(void* buffer);
-extern void* wgpuDeviceCreateShaderModule(void* device, const struct WGPUShaderModuleDescriptor* descriptor);
-extern void* wgpuDeviceCreateBindGroupLayout(void* device, const struct WGPUBindGroupLayoutDescriptor* descriptor);
-extern void* wgpuDeviceCreatePipelineLayout(void* device, const struct WGPUPipelineLayoutDescriptor* descriptor);
-extern void* wgpuDeviceCreateComputePipeline(void* device, const struct WGPUComputePipelineDescriptor* descriptor);
-extern void wgpuComputePipelineRelease(void* pipeline);
-extern void* wgpuDeviceCreateBindGroup(void* device, const struct WGPUBindGroupDescriptor* descriptor);
-extern void wgpuBindGroupRelease(void* bindGroup);
-extern void* wgpuDeviceCreateCommandEncoder(void* device, const void* descriptor);
-extern void* wgpuCommandEncoderBeginComputePass(void* encoder, const void* descriptor);
-extern void wgpuComputePassEncoderSetPipeline(void* pass, void* pipeline);
-extern void wgpuComputePassEncoderSetBindGroup(void* pass, unsigned int groupIndex, void* group,
+extern unsigned int wgpuAdapterHasFeature(WGPUAdapter_* adapter, int feature);
+extern WGPUQueue_* wgpuDeviceGetQueue(WGPUDevice_* device);
+extern WGPUBuffer_* wgpuDeviceCreateBuffer(WGPUDevice_* device, const struct WGPUBufferDescriptor* descriptor);
+extern void wgpuBufferRelease(WGPUBuffer_* buffer);
+extern void wgpuBufferDestroy(WGPUBuffer_* buffer);
+extern WGPUShaderModule_* wgpuDeviceCreateShaderModule(WGPUDevice_* device, const struct WGPUShaderModuleDescriptor* descriptor);
+extern WGPUBindGroupLayout_* wgpuDeviceCreateBindGroupLayout(WGPUDevice_* device, const struct WGPUBindGroupLayoutDescriptor* descriptor);
+extern WGPUPipelineLayout_* wgpuDeviceCreatePipelineLayout(WGPUDevice_* device, const struct WGPUPipelineLayoutDescriptor* descriptor);
+extern WGPUComputePipeline_* wgpuDeviceCreateComputePipeline(WGPUDevice_* device, const struct WGPUComputePipelineDescriptor* descriptor);
+extern void wgpuComputePipelineRelease(WGPUComputePipeline_* pipeline);
+extern WGPUBindGroup_* wgpuDeviceCreateBindGroup(WGPUDevice_* device, const struct WGPUBindGroupDescriptor* descriptor);
+extern void wgpuBindGroupRelease(WGPUBindGroup_* bindGroup);
+extern WGPUCommandEncoder_* wgpuDeviceCreateCommandEncoder(WGPUDevice_* device, const WGPUCommandEncoderDescriptor_* descriptor);
+extern WGPUComputePassEncoder_* wgpuCommandEncoderBeginComputePass(WGPUCommandEncoder_* encoder, const WGPUComputePassDescriptor_* descriptor);
+extern void wgpuComputePassEncoderSetPipeline(WGPUComputePassEncoder_* pass, WGPUComputePipeline_* pipeline);
+extern void wgpuComputePassEncoderSetBindGroup(WGPUComputePassEncoder_* pass, unsigned int groupIndex, WGPUBindGroup_* group,
                                                unsigned long dynamicOffsetCount, const unsigned int* dynamicOffsets);
-extern void wgpuComputePassEncoderDispatchWorkgroups(void* pass, unsigned int x, unsigned int y, unsigned int z);
-extern void wgpuComputePassEncoderEnd(void* pass);
-extern void wgpuComputePassEncoderRelease(void* pass);
-extern void wgpuCommandEncoderCopyBufferToBuffer(void* encoder, void* source, unsigned long sourceOffset,
-                                                 void* destination, unsigned long destinationOffset, unsigned long size);
-extern void* wgpuCommandEncoderFinish(void* encoder, const void* descriptor);
-extern void wgpuCommandEncoderRelease(void* encoder);
-extern void wgpuCommandBufferRelease(void* commandBuffer);
-extern void wgpuQueueSubmit(void* queue, unsigned long commandCount, void* const* commands);
-extern struct WGPUFuture wgpuQueueOnSubmittedWorkDone(void* queue, struct WGPUQueueWorkDoneCallbackInfo callbackInfo);
-extern void wgpuQueueWriteBuffer(void* queue, void* buffer, unsigned long bufferOffset, const void* data,
+extern void wgpuComputePassEncoderDispatchWorkgroups(WGPUComputePassEncoder_* pass, unsigned int x, unsigned int y, unsigned int z);
+extern void wgpuComputePassEncoderEnd(WGPUComputePassEncoder_* pass);
+extern void wgpuComputePassEncoderRelease(WGPUComputePassEncoder_* pass);
+extern void wgpuCommandEncoderCopyBufferToBuffer(WGPUCommandEncoder_* encoder, WGPUBuffer_* source, unsigned long sourceOffset,
+                                                 WGPUBuffer_* destination, unsigned long destinationOffset, unsigned long size);
+extern WGPUCommandBuffer_* wgpuCommandEncoderFinish(WGPUCommandEncoder_* encoder, const WGPUCommandBufferDescriptor_* descriptor);
+extern void wgpuCommandEncoderRelease(WGPUCommandEncoder_* encoder);
+extern void wgpuCommandBufferRelease(WGPUCommandBuffer_* commandBuffer);
+extern void wgpuQueueSubmit(WGPUQueue_* queue, unsigned long commandCount, struct WGPUCommandBuffer_** commands);
+extern struct WGPUFuture wgpuQueueOnSubmittedWorkDone(WGPUQueue_* queue, struct WGPUQueueWorkDoneCallbackInfo callbackInfo);
+extern void wgpuQueueWriteBuffer(WGPUQueue_* queue, WGPUBuffer_* buffer, unsigned long bufferOffset, const unsigned char* data,
                                  unsigned long size);
-extern struct WGPUFuture wgpuBufferMapAsync(void* buffer, unsigned long mode, unsigned long offset, unsigned long size,
+extern struct WGPUFuture wgpuBufferMapAsync(WGPUBuffer_* buffer, unsigned long mode, unsigned long offset, unsigned long size,
                                             struct WGPUBufferMapCallbackInfo callbackInfo);
-extern const void* wgpuBufferGetConstMappedRange(void* buffer, unsigned long offset, unsigned long size);
-extern void wgpuBufferUnmap(void* buffer);
+extern const unsigned char* wgpuBufferGetConstMappedRange(WGPUBuffer_* buffer, unsigned long offset, unsigned long size);
+extern void wgpuBufferUnmap(WGPUBuffer_* buffer);
 
 // ── wgpu-native extensions (wgpu.h) ──────────────────────────────────────────
 // A shader module without the runtime checks wgpu adds to every shader
@@ -316,11 +342,11 @@ extern void wgpuBufferUnmap(void* buffer);
 // a WGPUShaderRuntimeChecks mask, 0 for none.
 #define WGPU_RUNTIME_CHECKS_BOUNDS 1UL
 #define WGPU_RUNTIME_CHECKS_LOOP_BOUNDING 2UL
-extern void* wgpuDeviceCreateShaderModuleTrusted(void* device, const struct WGPUShaderModuleDescriptor* descriptor,
+extern WGPUShaderModule_* wgpuDeviceCreateShaderModuleTrusted(WGPUDevice_* device, const struct WGPUShaderModuleDescriptor* descriptor,
                                                  unsigned long checks);
 // Runs the device's maintenance (finished work, mapped buffers) so the
 // instance's callbacks can fire; with wait, first blocks until submission
 // *index (every submission when null) is done. 1 when the queue is empty.
-extern unsigned int wgpuDevicePoll(void* device, unsigned int wait, const unsigned long* submissionIndex);
+extern unsigned int wgpuDevicePoll(WGPUDevice_* device, unsigned int wait, const unsigned long* submissionIndex);
 
 } // namespace std
