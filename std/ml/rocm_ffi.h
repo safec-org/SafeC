@@ -31,6 +31,13 @@ struct MiopenTensorDesc_ { char opaque_; }; // miopenTensorDescriptor_t
 struct MiopenConvDesc_ { char opaque_; };   // miopenConvolutionDescriptor_t
 struct MiopenPoolDesc_ { char opaque_; };   // miopenPoolingDescriptor_t
 struct HipfftPlan_ { char opaque_; };       // hipfftHandle
+// miopenConvAlgoPerf_t: the algorithm (fwd / bwdData / bwdWeights, a union),
+// its time and its workspace bytes.
+struct MiopenConvPerf_ {
+    int           algo;
+    float         time;
+    unsigned long memory;
+};
 
 // ── HIP runtime / hiprtc / rocBLAS C ABI (hip_runtime_api.h, hiprtc.h, rocblas.h) ──
 extern int hipInit(unsigned int flags);

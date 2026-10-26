@@ -19,30 +19,30 @@
 namespace std {
 
 // ── MIOpen C ABI (miopen/miopen.h; every handle/descriptor is a pointer) ─────
-extern int miopenCreate(void** handle);
-extern int miopenSetStream(void* handle, void* stream);
-extern int miopenCreateTensorDescriptor(void** desc);
-extern int miopenSet4dTensorDescriptor(void* desc, int dataType, int n, int c, int h, int w);
-extern int miopenDestroyTensorDescriptor(void* desc);
-extern int miopenCreateConvolutionDescriptor(void** desc);
-extern int miopenInitConvolutionDescriptor(void* desc, int mode, int padH, int padW, int strideH, int strideW,
+extern int miopenCreate(MiopenHandle_** handle);
+extern int miopenSetStream(MiopenHandle_* handle, RocmNativeStream* stream);
+extern int miopenCreateTensorDescriptor(MiopenTensorDesc_** desc);
+extern int miopenSet4dTensorDescriptor(MiopenTensorDesc_* desc, int dataType, int n, int c, int h, int w);
+extern int miopenDestroyTensorDescriptor(MiopenTensorDesc_* desc);
+extern int miopenCreateConvolutionDescriptor(MiopenConvDesc_** desc);
+extern int miopenInitConvolutionDescriptor(MiopenConvDesc_* desc, int mode, int padH, int padW, int strideH, int strideW,
                                            int dilationH, int dilationW);
-extern int miopenDestroyConvolutionDescriptor(void* desc);
-extern int miopenConvolutionForwardGetWorkSpaceSize(void* handle, void* wDesc, void* xDesc, void* convDesc,
-                                                    void* yDesc, size_t* bytes);
-extern int miopenFindConvolutionForwardAlgorithm(void* handle, void* xDesc, const void* x, void* wDesc,
-                                                 const void* w, void* convDesc, void* yDesc, void* y,
-                                                 int requested, int* returned, void* perfResults,
-                                                 void* workspace, size_t wsBytes, bool exhaustive);
-extern int miopenConvolutionForward(void* handle, const void* alpha, void* xDesc, const void* x,
-                                    void* wDesc, const void* w, void* convDesc, int algo,
-                                    const void* beta, void* yDesc, void* y, void* workspace, size_t wsBytes);
-extern int miopenCreatePoolingDescriptor(void** desc);
-extern int miopenSet2dPoolingDescriptor(void* desc, int mode, int windowH, int windowW,
+extern int miopenDestroyConvolutionDescriptor(MiopenConvDesc_* desc);
+extern int miopenConvolutionForwardGetWorkSpaceSize(MiopenHandle_* handle, MiopenTensorDesc_* wDesc, MiopenTensorDesc_* xDesc, MiopenConvDesc_* convDesc,
+                                                    MiopenTensorDesc_* yDesc, size_t* bytes);
+extern int miopenFindConvolutionForwardAlgorithm(MiopenHandle_* handle, MiopenTensorDesc_* xDesc, const HipDevPtr_* x, MiopenTensorDesc_* wDesc,
+                                                 const HipDevPtr_* w, MiopenConvDesc_* convDesc, MiopenTensorDesc_* yDesc, HipDevPtr_* y,
+                                                 int requested, int* returned, MiopenConvPerf_* perfResults,
+                                                 HipDevPtr_* workspace, size_t wsBytes, bool exhaustive);
+extern int miopenConvolutionForward(MiopenHandle_* handle, const float* alpha, MiopenTensorDesc_* xDesc, const HipDevPtr_* x,
+                                    MiopenTensorDesc_* wDesc, const HipDevPtr_* w, MiopenConvDesc_* convDesc, int algo,
+                                    const float* beta, MiopenTensorDesc_* yDesc, HipDevPtr_* y, HipDevPtr_* workspace, size_t wsBytes);
+extern int miopenCreatePoolingDescriptor(MiopenPoolDesc_** desc);
+extern int miopenSet2dPoolingDescriptor(MiopenPoolDesc_* desc, int mode, int windowH, int windowW,
                                         int padH, int padW, int strideH, int strideW);
-extern int miopenPoolingForward(void* handle, void* poolDesc, const void* alpha, void* xDesc, const void* x,
-                                const void* beta, void* yDesc, void* y, bool doBackward,
-                                void* workspace, size_t wsBytes);
+extern int miopenPoolingForward(MiopenHandle_* handle, MiopenPoolDesc_* poolDesc, const float* alpha, MiopenTensorDesc_* xDesc, const HipDevPtr_* x,
+                                const float* beta, MiopenTensorDesc_* yDesc, HipDevPtr_* y, bool doBackward,
+                                HipDevPtr_* workspace, size_t wsBytes);
 
 extern int hipMalloc(void** ptr, unsigned long size);
 extern int hipFree(void* ptr);
