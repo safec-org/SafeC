@@ -1183,7 +1183,7 @@ static int t13_client_finish_(&TlsStream s, &T13_ t) {
         t13_queue_hs_(t, &m);
         m.clear();
         if (send) {
-            if (t13_make_cv_(s, t, &t.key, &m) != 0) { m.free(); return -1; }
+            if (t13_make_cv_(s, t, &t.key, &m) != 0) { m.free(); none.free(); return -1; }
             t13_queue_hs_(t, &m);
         }
         m.free();

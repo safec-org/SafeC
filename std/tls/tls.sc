@@ -275,15 +275,8 @@ int tls_pem_private_key_(const &char text, &Vec<unsigned char> der, &int kind) {
 }
 
 void tls_der_list_free_(&Vec<struct Vec<unsigned char>> list) {
-    unsigned long i = 0UL;
-    while (i < list.len) {
-        match (list.get(i)) {
-            case some(v): { v.free(); }
-            case null: { }
-        }
-        i = i + 1UL;
-    }
-    list.free();
+    struct Vec<struct Vec<unsigned char>> none = Vec::new();
+    std::replace(list, none).drop();
 }
 
 const &char tls_suite_name_(int id) {
@@ -352,7 +345,13 @@ void TlsConfig::set_client_cert(const &char cert_pem, const &char key_pem) {
 void TlsConfig::insecure_skip_verify() { self.verify_peer = 0; self.verify_hostname = 0; }
 
 struct TlsConfig TlsConfig::clone() const {
-    struct TlsConfig c = *self;
+    struct TlsConfig c;
+    c.verify_peer = self.verify_peer;
+    c.verify_hostname = self.verify_hostname;
+    c.use_system_roots = self.use_system_roots;
+    c.min_version = self.min_version;
+    c.max_version = self.max_version;
+    c.backend = self.backend;
     c.ca_pem = self.ca_pem.clone();
     c.ca_file = self.ca_file.clone();
     c.server_name = self.server_name.clone();
@@ -362,7 +361,9 @@ struct TlsConfig TlsConfig::clone() const {
     return c;
 }
 
-void TlsConfig::free() {
+void TlsConfig::free() { self.drop(); }
+
+void TlsConfig::drop() {
     self.ca_pem.free();
     self.ca_file.free();
     self.server_name.free();
@@ -395,7 +396,9 @@ int TlsServerConfig::load_files(const &char cert_path, const &char key_path) {
 
 void TlsServerConfig::set_alpn(const &char protocols) { self.alpn.clear(); self.alpn.push(protocols); }
 
-void TlsServerConfig::free() {
+void TlsServerConfig::free() { self.drop(); }
+
+void TlsServerConfig::drop() {
     self.cert_pem.free();
     mem_zero_secure(self.key_pem.as_ptr(), self.key_pem.length());
     self.key_pem.free();
@@ -534,9 +537,9 @@ struct Result<TlsStream, TlsError> TlsStream::client(int fd, const &char host, c
     }
     defaults.free();
     if (rc != TLS_OK) {
-        r = Result::new_err(s.err);
-        s.peer_der_.free();
-        return r;
+        struct TlsError e = s.err;
+        s.release();   // whatever the failed start set up
+        return Result::new_err(e);
     }
     r = Result::new_ok(s);
     return r;
@@ -560,7 +563,7 @@ static int tls_finish_blocking_(&TlsStream s) {
 struct Result<TlsStream, TlsError> TlsStream::connect(int fd, const &char host, const ?&TlsConfig cfg) {
     struct Result<TlsStream, TlsError> r = TlsStream::client(fd, host, cfg);
     if (!r.ok()) { return r; }
-    struct TlsStream s = r.value;
+    struct TlsStream s = r.unwrap();
     if (tls_finish_blocking_(&s) != 0) {
         struct TlsError e = s.err;
         s.release();
@@ -653,7 +656,7 @@ int TlsStream::shutdown() {
     return r;
 }
 
-void TlsStream::release() {
+void TlsStream::free_state_() {
     if (!self.impl_.is_null()) {
 #if defined(_WIN32)
         if (self.impl == TLS_IMPL_SCHANNEL) { tls_schannel_free_(self); }
@@ -666,16 +669,23 @@ void TlsStream::release() {
         if (self.impl == TLS_IMPL_SAFEC) { tls_safec_free_(self); }
     }
     self.impl_ = null;
-    self.peer_der_.free();
     if (self.state != 3) { self.state = 2; }
 }
 
+void TlsStream::release() {
+    self.free_state_();
+    self.peer_der_.drop();
+}
+
+void TlsStream::drop() { self.close(); }
+
 int TlsStream::close() {
     if (self.state == 1) { self.shutdown(); }
-    self.release();
+    self.free_state_();
     int r = 0;
     if (self.fd >= 0) { r = tls_sock_close_(self.fd); }
     self.fd = -1;
+    self.peer_der_.drop();
     return r;
 }
 
@@ -726,6 +736,7 @@ struct Result<TlsAcceptor, TlsError> TlsAcceptor::new(const &TlsServerConfig cfg
     struct TlsError e = TlsError::none();
     if (cfg.cert_pem.is_empty() || cfg.key_pem.is_empty()) {
         tls_fail_(&e, TLS_ERR_CONFIG, "TlsServerConfig needs cert_pem and key_pem");
+        a.drop();
         return Result::new_err(e);
     }
     int fallback = 0;
@@ -735,7 +746,7 @@ struct Result<TlsAcceptor, TlsError> TlsAcceptor::new(const &TlsServerConfig cfg
         e = TlsError::none();
         rc = tls_acceptor_start_(&a, TLS_IMPL_SAFEC, cfg, &e);
     }
-    if (rc != TLS_OK) { return Result::new_err(e); }
+    if (rc != TLS_OK) { a.drop(); return Result::new_err(e); }   // whatever the failed start set up
     return Result::new_ok(a);
 }
 
@@ -763,7 +774,7 @@ struct Result<TlsStream, TlsError> TlsAcceptor::start(int fd) {
 struct Result<TlsStream, TlsError> TlsAcceptor::accept(int fd) {
     struct Result<TlsStream, TlsError> r = self.start(fd);
     if (!r.ok()) { return r; }
-    struct TlsStream s = r.value;
+    struct TlsStream s = r.unwrap();
     if (tls_finish_blocking_(&s) != 0) {
         struct TlsError e = s.err;
         s.release();
@@ -772,7 +783,9 @@ struct Result<TlsStream, TlsError> TlsAcceptor::accept(int fd) {
     return Result::new_ok(s);
 }
 
-void TlsAcceptor::free() {
+void TlsAcceptor::free() { self.drop(); }
+
+void TlsAcceptor::drop() {
     if (self.impl_.is_null()) { return; }
 #if defined(_WIN32)
     if (self.impl == TLS_IMPL_SCHANNEL) { tls_schannel_acceptor_free_(self); }

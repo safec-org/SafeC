@@ -756,18 +756,19 @@ struct TcpStream http_open_stream(const &char host, unsigned short port, int tls
         }
         defaults.free();
         if (!r.ok()) {
-            e = r.error;
+            e = r.unwrap_err();
             unsafe { sock_close_(fd); }
         } else {
+            struct TlsStream ts = r.unwrap();
             ?&heap TlsStream h = std::alloc(sizeof(struct TlsStream));
             match (h) {
                 case some(hp): {
-                    *hp = r.value;
+                    *hp = ts;
                     if (io_timeout_ms <= 0) { sock_set_io_timeout(fd, 0); }
                     out = TcpStream::over_tls(hp);
                 }
                 case null: {
-                    r.value.close();
+                    ts.close();
                     e = TlsError::make(TLS_ERR_NO_MEMORY, "out of memory");
                 }
             }
@@ -1759,18 +1760,20 @@ static void http_serve_conn_(struct HttpServerShared_* sh, int fd) {
         struct Result<TlsStream, TlsError> tr;
         unsafe { tr = sh->acceptor.accept(fd); }
         if (!tr.ok()) {
+            tr.drop();
             unsafe { sock_close_(fd); }
             return;
         }
+        struct TlsStream ts = tr.unwrap();
         ?&heap TlsStream h = std::alloc(sizeof(struct TlsStream));
         match (h) {
             case some(hp): {
-                *hp = tr.value;
+                *hp = ts;
                 s = TcpStream::over_tls(hp);
                 conn.tls = hp;
             }
             case null: {
-                tr.value.close();
+                ts.close();
                 return;
             }
         }
@@ -1914,9 +1917,10 @@ struct HttpServer HttpServer::bind(const &HttpServerConfig cfg, ?&int ok) {
                     case some(tc): {
                         struct Result<TlsAcceptor, TlsError> ar = TlsAcceptor::new(tc);
                         if (ar.ok()) {
-                            sh->acceptor = ar.value;
+                            sh->acceptor = ar.unwrap();
                             sh->has_tls = 1;
                         } else {
+                            ar.drop();
                             good = 0;
                             dealloc_raw_((void*)sh->activeFds);
                             dealloc_raw_((void*)sh->tids);

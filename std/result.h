@@ -8,8 +8,9 @@
 // No heap allocation: both slots live in the struct and only the one named
 // by 'is_ok' is meaningful. When T or E owns something (a Drop type), so
 // does the Result: drop() drops whichever slot is live, and unwrap_or()
-// consumes it.
+// consumes it, as do unwrap() / unwrap_err() (which panic on the other kind).
 #pragma once
+#include <std/panic.h>
 
 namespace std {
 
@@ -27,6 +28,8 @@ struct Result {
     ?&T get_ok();             // null for an error result
     ?&E get_err();            // null for an ok result
     T   unwrap_or(T fallback) consume;   // the value, or 'fallback' (the other one is dropped)
+    T   unwrap() consume;                // the value; panics for an error result
+    E   unwrap_err() consume;            // the error; panics for an ok result
     void drop() if (needs_drop(T) || needs_drop(E));
 };
 
@@ -69,6 +72,18 @@ T Result::unwrap_or(T fallback) consume {
     if (self.is_ok) { drop(fallback); return self.value; }
     drop(self.error);
     return fallback;
+}
+
+generic<T, E>
+T Result::unwrap() consume {
+    if (!self.is_ok) { drop(self.error); panic_at("Result::unwrap on an error result", "result.h", 0); }
+    return self.value;
+}
+
+generic<T, E>
+E Result::unwrap_err() consume {
+    if (self.is_ok) { drop(self.value); panic_at("Result::unwrap_err on an ok result", "result.h", 0); }
+    return self.error;
 }
 
 generic<T, E>

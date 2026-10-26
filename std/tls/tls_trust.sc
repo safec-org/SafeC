@@ -28,16 +28,12 @@ struct TlsTrust_ tls_trust_new_() {
     return t;
 }
 
+void TlsCert_::drop() { self.der.drop(); }
+void TlsTrust_::drop() { self.certs.drop(); }
+
 void tls_trust_free_(&TlsTrust_ t) {
-    unsigned long i = 0UL;
-    while (i < t.certs.len) {
-        match (t.certs.get(i)) {
-            case some(c): { c.der.free(); }
-            case null: { }
-        }
-        i = i + 1UL;
-    }
-    t.certs.free();
+    struct Vec<struct TlsCert_> none = Vec::new();
+    std::replace(&t.certs, none).drop();
 }
 
 int tls_trust_add_der_(&TlsTrust_ t, const &unsigned char der, unsigned long len) {
@@ -45,9 +41,9 @@ int tls_trust_add_der_(&TlsTrust_ t, const &unsigned char der, unsigned long len
     c.der = Vec::from_arr(der, len);
     match (c.der.data) {
         case some(d): {
-            if (x509_parse(d, len, &c.p) != 0) { c.der.free(); return 0; }
+            if (x509_parse(d, len, &c.p) != 0) { c.drop(); return 0; }
         }
-        case null: { return 0; }
+        case null: { c.drop(); return 0; }
     }
     t.certs.push(c);
     return 1;
@@ -70,7 +66,7 @@ unsigned long tls_trust_add_pem_(&TlsTrust_ t, const &char pem) {
         }
         i = i + 1UL;
     }
-    tls_der_list_free_(&ders);
+    ders.drop();
     return n;
 }
 
@@ -204,16 +200,6 @@ static int tv_build_(&TvCtx_ x, unsigned long cur, unsigned int used, int depth,
     return 0;
 }
 
-static void tv_free_pres_(&Vec<struct TlsCert_> pres) {
-    unsigned long i = 0UL;
-    while (i < pres.len) {
-        &TlsCert_ c = pres.at(i);
-        c.der.free();
-        i = i + 1UL;
-    }
-    pres.free();
-}
-
 int tls_verify_chain_(const &Vec<struct Vec<unsigned char>> chain, const ?&TlsTrust_ a, const ?&TlsTrust_ b,
                       const ?&char host, int server, unsigned long long now, &TlsError e) {
     if (chain.len == 0UL) {
@@ -232,8 +218,8 @@ int tls_verify_chain_(const &Vec<struct Vec<unsigned char>> chain, const ?&TlsTr
             case null: { }
         }
         if (bad) {
-            c.der.free();
-            tv_free_pres_(&pres);
+            c.drop();
+            pres.drop();
             if (i == 0UL) { tls_fail_(e, TLS_ERR_CERT_INVALID, "the peer's certificate doesn't parse"); }
             else { tls_fail_(e, TLS_ERR_CERT_INVALID, "a certificate in the peer's chain doesn't parse"); }
             return TLS_ERR_CERT_INVALID;
@@ -282,7 +268,7 @@ int tls_verify_chain_(const &Vec<struct Vec<unsigned char>> chain, const ?&TlsTr
             case null: { }
         }
     }
-    tv_free_pres_(&pres);
+    pres.drop();
     if (code != TLS_OK) {
         if (code == TLS_ERR_CERT_HOSTNAME) {
             match (host) {

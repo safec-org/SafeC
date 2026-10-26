@@ -136,7 +136,8 @@ struct TlsConfig {
     // Verification off (tests against self-signed servers only).
     void insecure_skip_verify();
     struct TlsConfig clone() const;
-    void free();
+    void drop();
+    void free() consume;   // = drop()
 };
 
 // Server settings: the certificate chain and key are required.
@@ -154,7 +155,8 @@ struct TlsServerConfig {
     // Reads cert_pem / key_pem from files. 0 if either can't be read.
     int  load_files(const &char cert_path, const &char key_path);
     void set_alpn(const &char protocols);
-    void free();
+    void drop();
+    void free() consume;   // = drop()
 };
 
 // A TLS connection over a socket fd it owns once created.
@@ -191,10 +193,12 @@ struct TlsStream {
     // Sends close_notify (once). 0 on success.
     int shutdown();
     // shutdown() if open, frees the TLS state and closes the socket.
-    int close();
+    int close() consume;
+    void drop();   // close(), ignoring the result
     // Frees the TLS state but leaves the fd open (after a failed handshake,
     // or to hand the socket on).
-    void release();
+    void release() consume;
+    void free_state_();             // internal: frees the backend state (not peer_der_)
 
     int is_open() const;
     int version() const;            // TLS_VERSION_*, 0 before the handshake
@@ -219,7 +223,8 @@ struct TlsAcceptor {
     struct Result<TlsStream, TlsError> accept(int fd);
     // Non-blocking: set up only; drive with handshake().
     struct Result<TlsStream, TlsError> start(int fd);
-    void free();
+    void drop();
+    void free() consume;   // = drop()
 };
 
 // Is the backend usable here (its library loads, the target has it)?
