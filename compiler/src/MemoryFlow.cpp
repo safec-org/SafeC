@@ -482,6 +482,8 @@ private:
     std::vector<std::set<const VarDecl *>> deferVars_;  // parallel to defers_: variables each defer names
     std::unordered_map<std::string, std::set<const Stmt *>> labelScopes_; // label -> enclosing blocks
     bool isDtor_ = false;          // fn_ is drop() or a 'consume' method
+    bool refDropReported_ = false;
+    void refDropCheck(const Expr *place, SourceLocation loc);
     int selfObj_ = -1;             // the object *self is, in a destructor
     std::set<std::string> dtorFields_;   // fields of *self a destructor drops or moves
     SourceLocation endLoc_;
@@ -1791,6 +1793,80 @@ static bool elidesToSelf(const FunctionDecl &fd, const Summary &s) {
     return any;
 }
 
+
+// How a drop reaches the place 'e': 0 owned here (a local, a by-value
+// parameter, a global, a field/element of one, or what a reference
+// variable itself names: a handle like File::open's result, or a
+// reference parameter, which the ownership walk checks), 1 through an
+// owning '&heap' reference or a raw pointer (the heap analysis tracks
+// those), 2 borrowed: a field or element reached through any other
+// reference or a slice, or a reference a call returned (a container's
+// element), which the owner drops again. selfRoot: the place is under
+// 'self'.
+static int dropReach(const Expr *e, bool &selfRoot) {
+    auto viaType = [](const TypePtr &t0) -> int {
+        TypePtr t = stripNewtype(t0);
+        while (t && t->kind == TypeKind::Optional) t = stripNewtype(static_cast<OptionalType &>(*t).inner);
+        if (!t) return 0;
+        if (t->kind == TypeKind::Pointer) return 1;
+        if (t->kind == TypeKind::Reference) return static_cast<ReferenceType &>(*t).region == Region::Heap ? 1 : 2;
+        if (t->kind == TypeKind::Slice) return 2;
+        return -1;   // a value: keep walking
+    };
+    for (int guard = 0; e && guard < 64; ++guard) {
+        switch (e->kind) {
+        case ExprKind::Cast: e = static_cast<const CastExpr *>(e)->operand.get(); continue;
+        case ExprKind::Ident: {
+            auto &id = static_cast<const IdentExpr &>(*e);
+            if (id.name == "self") selfRoot = true;
+            return 0;
+        }
+        case ExprKind::Member: case ExprKind::Arrow: {
+            const Expr *b = static_cast<const MemberExpr *>(e)->base.get();
+            int r = b ? viaType(b->type) : 0;
+            if (r >= 0) {
+                if (b && b->kind == ExprKind::Ident && static_cast<const IdentExpr *>(b)->name == "self") selfRoot = true;
+                return r;
+            }
+            e = b;
+            continue;
+        }
+        case ExprKind::Subscript: {
+            const Expr *b = static_cast<const SubscriptExpr *>(e)->base.get();
+            int r = b ? viaType(b->type) : 0;
+            if (r >= 0) return r;
+            e = b;
+            continue;
+        }
+        case ExprKind::Deref: {
+            const Expr *b = static_cast<const UnaryExpr *>(e)->operand.get();
+            if (b && b->kind == ExprKind::Call) return viaType(b->type) == 2 ? 2 : 0;
+            return 0;
+        }
+        case ExprKind::Unary: return 0;
+        case ExprKind::Call: return viaType(e->type) == 2 ? 2 : 0;   // a value it returned is a temporary
+        default: return 0;
+        }
+    }
+    return 0;
+}
+
+// A drop (x.drop(), a 'consume' method, drop(x)) of a place this function
+// only borrows: the value's owner (a container, the caller) drops it
+// again. Inside a destructor, 'self' and its fields are owned.
+void Walker::refDropCheck(const Expr *place, SourceLocation loc) {
+    refDropReported_ = false;
+    if (quiet_ || unsafe_ || !cur_.live || !place) return;
+    bool selfRoot = false;
+    int r = dropReach(place, selfRoot);
+    if (r != 2 || (selfRoot && isDtor_)) return;
+    reportN(loc, "cannot drop a value this function only borrows (it is reached through a reference, a slice or a "
+                 "call's result, and whoever owns it will drop it again); take it out with std::replace() and drop "
+                 "that, or let its owner drop it (a container's clear()/remove())",
+            {});
+    refDropReported_ = true;
+}
+
 EV Walker::evalCall(CallExpr &e) {
     callOwners_.clear();
     EV r = evalCallInner(e);
@@ -1898,8 +1974,13 @@ EV Walker::evalCallInner(CallExpr &e) {
             std::vector<CellRef> pointees;
             for (auto &x : args.back().v) pointees.push_back(cellOf(x, ""));
             if (pointees.size() > 1) for (auto &c : pointees) c.weak = true;
-            if (drv_.sema.isConsumeMethod(fd)) ownConsumeCells(pointees, kODrop, e.loc, nullptr);
-            else ownUse(pointees, e.loc, false);
+            if (drv_.sema.isConsumeMethod(fd)) {
+                refDropCheck(e.methodBase.get(), e.loc);
+                ownConsumeCells(pointees, kODrop, e.loc, nullptr);
+                refDropReported_ = false;
+            } else {
+                ownUse(pointees, e.loc, false);
+            }
         } else {
             EV self;
             auto cells = lval(*e.methodBase);
@@ -1909,8 +1990,10 @@ EV Walker::evalCallInner(CallExpr &e) {
                 EV bv;
                 bv.agg = true;
                 bv.cells = cells;
+                refDropCheck(e.methodBase.get(), e.loc);
                 if (mustDrop(e.methodBase->type)) ownMove(*e.methodBase, bv, kODrop);
                 else ownConsumeCells(cells, kODrop, e.loc, nullptr);
+                refDropReported_ = false;
             } else {
                 ownUse(cells, e.loc, false);
                 if (isPlaceExpr(e.methodBase.get()) && cells.size() == 1 && tracked(cells[0].obj))
@@ -2527,11 +2610,11 @@ void Walker::ownConsumeCells(const std::vector<CellRef> &cells, uint8_t kind, So
         bool wholeParam = oi.kind == OK::Ext && c.path.empty() && oi.ep.size() > 1 && oi.ep[0] == 'p' &&
                           oi.ep.find_first_not_of("0123456789", 1) == std::string::npos;
         if (kind == kODrop) {
-            if (wholeParam)
+            if (wholeParam && !refDropReported_)
                 reportN(loc, "cannot drop a value this function only borrows (it is behind a reference "
                              "parameter); take the parameter by value, or declare the method 'consume'",
                         {});
-            continue;   // dropping in place through a reference: the owner's business
+            continue;   // through any other reference: checked by refDropCheck (syntactic)
         }
         std::string desc = what && what->type ? typeName(what->type) : "?";
         reportN(loc, "cannot move a value of Drop type '" + desc + "' out of memory this function doesn't own "

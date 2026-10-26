@@ -1,6 +1,8 @@
+// SAFEC-ARGS: -I @STD@/std -I @STD@ --compat-preprocessor
 // Use after drop or move, double drop, overwriting a live value, and moving
 // a value out of memory this function only borrows.
 extern int printf(const char* fmt, ...);
+#include <std/ownership.h>
 struct Buf { int n; void drop(); int len() const; };
 void Buf::drop() { }
 int Buf::len() const { return self.n; }
@@ -69,6 +71,22 @@ void split_bad() {
     struct Two t; t.a = mk(1); t.x = 0;
     t.a.drop();
     t.drop();                             // EXPECT-ERROR: 't' is dropped while its field 't.a' is dropped
+}
+
+// A drop through a reference into memory someone else owns: the owner
+// drops the value again. Swap it out instead.
+struct Pair2 { struct Buf a; };
+struct List2 { struct Pair2 *items; &Pair2 at(int i); void drop(); };
+&Pair2 List2::at(int i) { unsafe { return (&Pair2)&self.items[i]; } }
+void List2::drop() { }
+void drop_element(&List2 l) {
+    l.at(0).a.drop();                     // EXPECT-ERROR: cannot drop a value this function only borrows (it is reached through a reference
+}
+void drop_field_of_borrowed(&Pair2 p) {
+    p.a.drop();                           // EXPECT-ERROR: cannot drop a value this function only borrows (it is reached through a reference
+}
+void swap_out_ok(&Pair2 p) {
+    std::replace(&p.a, mk(9)).drop();
 }
 
 int main() { return 0; }
