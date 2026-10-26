@@ -169,6 +169,12 @@ private:
     mutable std::unordered_map<const StructType *, int> mustDropCache_;   // 0 no, 1 yes, 2 in progress
     // Structs whose 'void drop() if (cond);' condition is false: not Drop.
     std::unordered_set<std::string> disabledDrops_;
+    // Until every declaration is collected a struct's drop() may not be
+    // registered yet: must-drop answers aren't cached and drop() conditions
+    // wait (see collectStruct).
+    bool declsCollected_ = false;
+    std::vector<std::pair<std::string, std::shared_ptr<Expr>>> pendingDropConds_;
+    void evalDropCond(const std::string &structName, Expr &cond, SourceLocation loc);
 
     // ── Region safety ─────────────────────────────────────────────────────────
     // Returns the scope depth a reference type originated from

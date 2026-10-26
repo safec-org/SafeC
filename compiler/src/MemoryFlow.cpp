@@ -1752,8 +1752,30 @@ EV Walker::evalCall(CallExpr &e) {
     if (!cur_.live) return r;
     FunctionDecl *fd = nullptr;
     if (e.callee && e.callee->kind == ExprKind::Ident) fd = static_cast<IdentExpr &>(*e.callee).resolvedFn;
-    // A method on an owned receiver returning a reference borrows from it.
+    // A method on an owned receiver returning a reference into it borrows
+    // from it: the callee's summary says its result points into memory
+    // reached from its 'self' (p0). A callee without a body here gives no
+    // such link (its result might be fresh memory).
+    bool intoSelf = false;
     if (!callOwners_.empty() && holdsRefs(drv_.sema, e.type)) {
+        FunctionDecl *callee = drv_.bodyOf(fd);
+        const Summary *s = callee ? drv_.summaryOf(callee) : nullptr;
+        if (s) {
+            auto rooted = [](const std::vector<Term> &ts) {
+                for (auto &t : ts)
+                    if (t.kind == 'E' && t.key.size() >= 2 && t.key.compare(0, 2, "p0") == 0 &&
+                        (t.key.size() == 2 || std::strchr("*.[~", t.key[2])))
+                        return true;
+                return false;
+            };
+            for (auto &kv : s->ret.vals) if (rooted(kv.second)) intoSelf = true;
+            if (rooted(s->ret.any)) intoSelf = true;
+            for (auto &kv : s->ret.lazy)
+                for (auto &ep : kv.second)
+                    if (ep.compare(0, 2, "p0") == 0) intoSelf = true;
+        }
+    }
+    if (intoSelf) {
         int t = ownToken(e, callOwners_);
         if (r.agg) {
             for (auto &c : r.cells)

@@ -217,7 +217,7 @@ void tensors_free(&Vec<&DenseTensor<E>> ts) {
         if (onHeap) { unsafe { std::free((void*)t); } }
         i = i + 1UL;
     }
-    ts.free();
+    unsafe { ts.free(); }   // the Vec too, in place: the caller doesn't use it again
 }
 
 generic<E>

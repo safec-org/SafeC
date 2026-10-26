@@ -13,7 +13,7 @@ extern void* malloc(unsigned long size);
 extern void free(void* ptr);
 
 static void drop_(&FloatTensor t) {
-    t->free();
+    unsafe { t->free(); }   // a heap tensor, freed below
     unsafe { free((void*)t); }
 }
 
@@ -308,7 +308,7 @@ void t_lora() {
 
     struct LoraConfig cfg = LoraConfig::default(4UL);
     cfg.alpha = (float)8.0;
-    struct LoraMlp ft = LoraMlp::attach(&base, &cfg);
+    struct LoraMlp ft = LoraMlp::attach(&base, &cfg); defer drop(ft);
     // B starts at zero: the adapted network equals the base
     Autograd::get().set_enabled(0);
     &FloatTensor y0 = base.forward(b.x);

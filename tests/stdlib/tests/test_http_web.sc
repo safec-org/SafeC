@@ -484,17 +484,19 @@ void t_sse_parser() {
     ASSERT_STR_EQ(e.id.as_ptr(), "7");
     ASSERT_EQ(e.retry, 1500);
     e.free();
-    ASSERT_TRUE(p.next(&e));
-    ASSERT_STR_EQ(e.event.as_ptr(), "message");
-    ASSERT_STR_EQ(e.data.as_ptr(), "plain");
-    ASSERT_STR_EQ(e.id.as_ptr(), "7");    // sticky
-    ASSERT_EQ(e.retry, -1);
-    e.free();
-    ASSERT_FALSE(p.next(&e));             // "data:x" not terminated yet
+    struct SseEvent e2;
+    ASSERT_TRUE(p.next(&e2));
+    ASSERT_STR_EQ(e2.event.as_ptr(), "message");
+    ASSERT_STR_EQ(e2.data.as_ptr(), "plain");
+    ASSERT_STR_EQ(e2.id.as_ptr(), "7");    // sticky
+    ASSERT_EQ(e2.retry, -1);
+    e2.free();
+    struct SseEvent e3;
+    ASSERT_FALSE(p.next(&e3));             // "data:x" not terminated yet
     unsafe { p.feed((const &unsigned char)"\n\n", 2UL); }
-    ASSERT_TRUE(p.next(&e));
-    ASSERT_STR_EQ(e.data.as_ptr(), "x");
-    e.free();
+    ASSERT_TRUE(p.next(&e3));
+    ASSERT_STR_EQ(e3.data.as_ptr(), "x");
+    e3.free();
     p.free();
 }
 
@@ -623,7 +625,7 @@ static struct HttpResponse a_events(&HttpRequest req, &HttpCtx ctx) {
 static struct HttpResponse a_ws(&HttpRequest req, &HttpCtx ctx) {
     if (!ws_is_upgrade(req)) { return HttpResponse::text(426, "upgrade required"); }
     int ok = 0;
-    struct WsConn c = WsConn::accept_upgrade(req, ctx.conn, &ok);
+    struct WsConn c = WsConn::accept_upgrade(req, ctx.conn, &ok); defer drop(c);
     if (!ok) { return HttpResponse::error(400); }
     // A fragmented server->client message with a ping in between.
     unsafe {
@@ -634,8 +636,9 @@ static struct HttpResponse a_ws(&HttpRequest req, &HttpCtx ctx) {
                                      (unsigned char)0, (unsigned char)0 };
         write_all(&s, &frames[0], 11UL);
     }
-    struct WsMessage m;
-    while (c.recv_message(&m, 1048576UL)) {
+    while (1) {
+        struct WsMessage m;
+        if (!c.recv_message(&m, 1048576UL)) { unsafe { forget(m); } break; }   // nothing was stored in m
         if (m.opcode == WS_OPCODE_CLOSE) { m.free(); break; }
         struct String echo = String::from("echo:");
         unsafe { echo.push_n((const char*)m.data, m.len); }
@@ -643,7 +646,6 @@ static struct HttpResponse a_ws(&HttpRequest req, &HttpCtx ctx) {
         echo.free();
         m.free();
     }
-    c.close();
     return HttpResponse::new(200);
 }
 static struct HttpResponse a_close(&HttpRequest req, &HttpCtx ctx) {
@@ -737,8 +739,8 @@ void t_server_keep_alive() {
     ASSERT_TRUE(raw_send(fd, "GET /echo HTTP/1.1\r\nHost: t\r\n\r\nPOST /echo HTTP/1.1\r\nHost: t\r\nContent-Length: 3\r\n\r\nabc"));
     struct TcpStream s = TcpStream::from_fd(fd);
     struct BufReader<TcpStream> in = BufReader::over(&s);
-    struct String head = String::new();
-    struct String body = String::new();
+    struct String head = String::new(); defer drop(head);
+    struct String body = String::new(); defer drop(body);
     ASSERT_TRUE(raw_response(&in, &head, &body));
     ASSERT_TRUE(head.starts_with("HTTP/1.1 200 OK"));
     ASSERT_TRUE(head.contains("Connection: keep-alive"));
@@ -783,8 +785,6 @@ void t_server_keep_alive() {
     ASSERT_TRUE(raw_response(&in2, &head, &body));
     ASSERT_TRUE(head.contains("Connection: close"));
     s2.close();
-    head.free();
-    body.free();
 }
 
 static int status_of(const &char request) {
@@ -1028,7 +1028,7 @@ void t_sse_stream() {
     start_app();
     int ok = 0;
     struct String u = url("/events");
-    struct SseClient c = SseClient::connect(u.as_ptr(), "41", 2000, &ok);
+    struct SseClient c = SseClient::connect(u.as_ptr(), "41", 2000, &ok); defer drop(c);
     ASSERT_TRUE(ok);
     u.free();
     if (!ok) return;
@@ -1039,16 +1039,19 @@ void t_sse_stream() {
     ASSERT_STR_EQ(e.id.as_ptr(), "1");
     ASSERT_EQ(e.retry, 2000);
     e.free();
-    ASSERT_TRUE(c.next(&e));
-    ASSERT_STR_EQ(e.event.as_ptr(), "message");
-    ASSERT_STR_EQ(e.data.as_ptr(), "plain");
-    e.free();
-    ASSERT_TRUE(c.next(&e));
-    ASSERT_STR_EQ(e.event.as_ptr(), "resume");
-    ASSERT_STR_EQ(e.data.as_ptr(), "41");
-    e.free();
-    ASSERT_FALSE(c.next(&e));   // the server closed the stream
-    c.close();
+    struct SseEvent e2;
+    ASSERT_TRUE(c.next(&e2));
+    ASSERT_STR_EQ(e2.event.as_ptr(), "message");
+    ASSERT_STR_EQ(e2.data.as_ptr(), "plain");
+    e2.free();
+    struct SseEvent e3;
+    ASSERT_TRUE(c.next(&e3));
+    ASSERT_STR_EQ(e3.event.as_ptr(), "resume");
+    ASSERT_STR_EQ(e3.data.as_ptr(), "41");
+    e3.free();
+    struct SseEvent e4;
+    ASSERT_FALSE(c.next(&e4));   // the server closed the stream
+    unsafe { forget(e4); }       // nothing was stored in it
 }
 
 void t_websocket_upgrade() {
@@ -1057,7 +1060,7 @@ void t_websocket_upgrade() {
     struct String u = String::from("ws://127.0.0.1:");
     u.push_uint((unsigned long long)g_port);
     u.push("/ws");
-    struct WsConn c = WsConn::connect_url(u.as_ptr(), 2000, &ok);
+    struct WsConn c = WsConn::connect_url(u.as_ptr(), 2000, &ok); defer drop(c);
     u.free();
     ASSERT_TRUE(ok);
     if (!ok) return;
@@ -1068,12 +1071,12 @@ void t_websocket_upgrade() {
     ASSERT_EQ(m.len, 5);
     match (m.data) { case some(d): { unsafe { ASSERT_EQ(d[0], 'h'); ASSERT_EQ(d[4], 'o'); } } case null: { ASSERT_TRUE(0); } }
     m.free();
+    struct WsMessage m2;
     ASSERT_TRUE(c.send_text("ping me"));
-    ASSERT_TRUE(c.recv_message(&m, 0UL));
-    ASSERT_EQ(m.len, 12);
-    m.free();
+    ASSERT_TRUE(c.recv_message(&m2, 0UL));
+    ASSERT_EQ(m2.len, 12);
+    m2.free();
     c.send_close();
-    c.close();
     // Plain GET on the WebSocket route.
     struct String plain = url("/ws");
     struct HttpResponse r = http_get_url(plain.as_ptr(), &ok);

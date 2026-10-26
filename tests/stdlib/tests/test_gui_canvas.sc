@@ -519,9 +519,9 @@ static void draw_scene(&GuiCanvas c) {
 }
 
 static int compare_golden(&GuiImage img, const &char path) {
-    struct GuiImage ref;
+    struct GuiImage ref; defer drop(ref);
     if (!ref.load_png_file(path)) { return -1; }
-    if (ref.width != img.width || ref.height != img.height) { ref.free(); return -2; }
+    if (ref.width != img.width || ref.height != img.height) { return -2; }
     struct GuiImage mine = img.copy();
     mine.unpremultiply();
     int bad = 0;
@@ -539,7 +539,6 @@ static int compare_golden(&GuiImage img, const &char path) {
         y = y + 1;
     }
     mine.free();
-    ref.free();
     return bad;
 }
 

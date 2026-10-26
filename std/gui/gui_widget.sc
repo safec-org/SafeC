@@ -2211,18 +2211,14 @@ void Widget::drop() {
     self.shortcut.free();
     self.colStretch.free();
     self.rowStretch.free();
-    i = 0UL;
-    while (i < self.items.len) { self.items.at(i).free(); i = i + 1UL; }
-    self.items.free();
+    self.items.free();   // and each item
     i = 0UL;
     while (i < self.nodes.len) { self.nodes.at(i).text.free(); i = i + 1UL; }
     self.nodes.free();
     i = 0UL;
     while (i < self.tableCols.len) { self.tableCols.at(i).title.free(); i = i + 1UL; }
     self.tableCols.free();
-    i = 0UL;
-    while (i < self.cells.len) { self.cells.at(i).free(); i = i + 1UL; }
-    self.cells.free();
+    self.cells.free();   // and each cell
     match (self.contextMenu) {
         case some(m): {
             m.owner = null;

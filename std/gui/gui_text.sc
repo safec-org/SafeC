@@ -1029,11 +1029,7 @@ static ?&GuiTypeface __tt_system_lookup(const &char family, int bold) {
         }
         if (ok) { found = face; } else { face.free(); dealloc_raw_((void*)face); }
     }
-    unsigned long k = 0UL;
-    while (k < names.len) { names.at(k).free(); k = k + 1UL; }
-    names.free();
-    k = 0UL;
-    while (k < dirs.len) { dirs.at(k).free(); k = k + 1UL; }
+    names.free();   // and each name
     dirs.free();
     fam.free();
     lower.free();

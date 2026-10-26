@@ -190,9 +190,7 @@ void JiT::free() { self.drop(); }
 
 void JiT::drop() {
     attn_release_(self.WPatchEmbed);
-    unsigned long i = 0UL;
-    while (i < self.blocks.length()) { self.blocks.at(i).free(); i = i + 1UL; }
-    self.blocks.free();
+    self.blocks.free();   // and each block
 }
 
 void DiTBlock::collect_params(&Vec<&FloatTensor> out) const {

@@ -610,7 +610,7 @@ static &FloatTensor seeded_tensor_(unsigned long rows, unsigned long cols, unsig
 }
 
 static void tensor_drop(&FloatTensor t) {
-    t->free();
+    unsafe { t->free(); }   // a heap tensor, freed below
     unsafe { free((void*)t); }
 }
 

@@ -234,7 +234,7 @@ static void w_lora_(&Dataset d) {
     struct Rng rng = Rng::new(7UL);
     struct Mlp base = Mlp::new(2UL, 16UL, 2UL, 2UL, ACT_RELU, ACT_NONE, &rng);
     struct LoraConfig cfg = LoraConfig::default(2UL);
-    struct LoraMlp ft = LoraMlp::attach(&base, &cfg);
+    struct LoraMlp ft = LoraMlp::attach(&base, &cfg); defer drop(ft);
     struct Optimizer opt = Optimizer::new(OPT_ADAMW, (float)0.01);
     model_add_params(&ft, &opt);
     model_to(&base, g_dev);

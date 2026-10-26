@@ -40,8 +40,10 @@ struct Chan {
 
     int  send(T val);     // 1 on success, 0 if closed (or never created)
     ?T   recv();          // null once closed and drained
-    void drop();         // wakes every blocked sender/receiver
-    void close() consume;   // = drop()
+    // No more sends; wakes every blocked sender/receiver (receivers drain
+    // what is buffered first). The runtime channel itself is never freed
+    // (there is no destroy), so a Chan is not a Drop type.
+    void close();
 
     // send/recv under the Fifo names (std/collections/traits.h), so generic
     // producer/consumer code takes a Chan like any queue. Both block.
@@ -60,13 +62,15 @@ struct Chan<T> Chan::new(int cap) {
 
 generic<T>
 int Chan::send(T val) {
-    if (self.raw.is_null()) return 0;
+    if (self.raw.is_null()) { drop(val); return 0; }
     unsigned long long slot = 0ULL;
     bool ok;
     unsafe {
         memcpy((void*)&slot, (const void*)&val, (size_t)sizeof(T));
         ok = __safec_chan_send((void*)self.raw, (void*)&slot);
     }
+    if (ok) { unsafe { forget(val); } }   // its bytes moved into the channel
+    else drop(val);                       // closed: nobody will receive it
     return ok ? 1 : 0;
 }
 
@@ -89,10 +93,7 @@ generic<T>
 ?T Chan::dequeue() { return self.recv(); }
 
 generic<T>
-void Chan::close() { self.drop(); }
-
-generic<T>
-void Chan::drop() {
+void Chan::close() {
     if (self.raw.is_null()) return;
     unsafe { __safec_chan_close((void*)self.raw); }
 }

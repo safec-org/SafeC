@@ -16,7 +16,7 @@ static struct GuiWindow make_win(int w, int h) {
     return GuiWindow::offscreen(w, h);
 }
 
-static void free_win(&GuiWindow win) {
+static void free_win(struct GuiWindow win) {
     win.destroy();
 }
 
@@ -230,7 +230,7 @@ static const unsigned char kPngStored[75] = {
 };
 
 void t_draw() {
-    struct GuiWindow win = make_win(32, 24);
+    struct GuiWindow win = make_win(32, 24); defer drop(win);
     struct GuiColor red = GuiColor::rgb((unsigned char)255, (unsigned char)0, (unsigned char)0);
     ASSERT_EQ(red.a, 255);
     win.fill_rect(2, 3, 4, 5, red);
@@ -253,7 +253,6 @@ void t_draw() {
     int y = 14;
     while (y < 22) { int x = 0; while (x < 8) { if (px(&win, x, y, 0) == 255) lit = lit + 1; x = x + 1; } y = y + 1; }
     ASSERT_TRUE(lit > 4);
-    free_win(&win);
 }
 
 void t_png() {
@@ -271,7 +270,7 @@ void t_png() {
         img.draw(&win, 1, 1);
         ASSERT_EQ(px(&win, 3, 4, 1), 156);
         img.free();
-        free_win(&win);
+        free_win(win);
 
         ASSERT_TRUE(img.load_png(&kPngRgb[0], 81UL));
         ASSERT_EQ(img.pixels[(1UL * 3UL + 1UL) * 4UL + 1UL], 50);   // (1, 1) = 40,50,60
@@ -295,7 +294,7 @@ void t_png() {
 }
 
 void t_svg() {
-    struct GuiWindow win = make_win(20, 20);
+    struct GuiWindow win = make_win(20, 20); defer drop(win);
     ASSERT_TRUE(win.draw_svg(2, 2, "<svg width=\"10\" height=\"10\"><rect x=\"1\" y=\"1\" width=\"3\" height=\"2\" fill=\"#ff0000\"/></svg>"));
     ASSERT_EQ(count_red(&win), 6);
     ASSERT_EQ(px(&win, 3, 3, 0), 255);
@@ -303,7 +302,6 @@ void t_svg() {
     ASSERT_EQ(px(&win, 14, 14, 2), 255);
     ASSERT_TRUE(count_red(&win) > 6);
     ASSERT_FALSE(win.draw_svg(0, 0, "<html>no svg here</html>"));
-    free_win(&win);
 }
 
 void t_font() {
@@ -324,7 +322,7 @@ void t_font() {
     ASSERT_EQ(g.first, 65);
     ASSERT_EQ(g.get_bit(67, 4, 6), 1);
     ASSERT_EQ(g.get_bit(67, 3, 6), 0);
-    struct GuiWindow win = make_win(16, 8);
+    struct GuiWindow win = make_win(16, 8); defer drop(win);
     g.draw_text(&win, 0, 0, "A", GuiColor::rgb((unsigned char)255, (unsigned char)0, (unsigned char)0), 1);
     ASSERT_EQ(count_red(&win), 1);
     ASSERT_EQ(px(&win, 2, 3, 0), 255);
@@ -334,7 +332,6 @@ void t_font() {
     f.free();
     g.free();
     d.free();
-    free_win(&win);
 }
 
 static int gClicks = 0;
@@ -402,14 +399,13 @@ void t_widgets() {
     ASSERT_EQ(btn.focused, 1);
     ASSERT_EQ(box.focused, 0);
 
-    struct GuiWindow win = make_win(100, 100);
+    struct GuiWindow win = make_win(100, 100); defer drop(win);
     root.set_bg((unsigned char)255, (unsigned char)0, (unsigned char)0, (unsigned char)255);
     root.render(&win);
     ASSERT_EQ(px(&win, 1, 99, 0), 255);                 // container background drawn
     lbl.set_text("bye");
     ASSERT_TRUE(lbl.text.eq_cstr("bye"));
     root.free();
-    free_win(&win);
 }
 
 int main() {

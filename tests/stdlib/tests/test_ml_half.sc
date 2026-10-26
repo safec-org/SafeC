@@ -163,7 +163,7 @@ void t_half_to_half_bulk() {
 
 generic<E>
 static void tensor_drop_(&DenseTensor<E> t) {
-    t->free();
+    unsafe { t->free(); }   // a heap tensor: destroyed in place, then freed
     unsafe { free((void*)t); }
 }
 
@@ -182,7 +182,7 @@ void t_mixed_precision_batch() {
             t = t + 1UL;
         }
     }
-    struct Vec<&BF16Tensor> w16 = Vec::new();
+    struct Vec<&BF16Tensor> w16 = Vec::new(); defer drop(w16);
     tensors_convert(&ps, &w16);
     ASSERT_EQ(w16.length(), 2UL);
     &BF16Tensor h0 = *w16.at(0UL);
@@ -212,7 +212,7 @@ void t_mixed_precision_batch() {
     ASSERT_TRUE(!tensor_convert_into(h1, small));
 
     // gradients: fp16 values scaled by 1024, divided back out
-    struct Vec<&HalfTensor> g16 = Vec::new();
+    struct Vec<&HalfTensor> g16 = Vec::new(); defer drop(g16);
     g16.push(HalfTensor::new_2d(3UL, 5UL, 0));
     g16.push(HalfTensor::new_1d(7UL, 0));
     (*g16.at(0UL)).fill((float)1024.0 * (float)0.25);

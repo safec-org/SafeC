@@ -393,7 +393,6 @@ void QLoraMlp::free() { self.drop(); }
 void QLoraMlp::drop() {
     unsigned long k = 0UL;
     while (k < self.nLayers) {
-        self.W.at(k).free();
         lora_drop_(*self.bias.at(k));
         lora_drop_(*self.A.at(k));
         lora_drop_(*self.B.at(k));

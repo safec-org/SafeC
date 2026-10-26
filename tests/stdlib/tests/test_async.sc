@@ -397,7 +397,7 @@ void t_executor_join_abort() {
     h0b.abort();
     h0b.drop();
     ASSERT_FALSE(g_vt[0].is_aborted());
-    ASSERT_EQ(g_vt[0].take().default(0), 40);
+    ASSERT_TRUE(g_vt[0].take().is_none());      // its output (40) already moved to the Parent through h0
     // An aborted task's handle reports null.
     struct Context cx = Context::noop(); defer drop(cx);
     struct Poll<?int> hp = h1.poll(&cx);
