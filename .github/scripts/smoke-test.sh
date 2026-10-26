@@ -29,6 +29,18 @@ else
     cat /tmp/safec_help.txt
 fi
 
+# safeguard --help lists every --target alias safec knows.
+"$SAFEGUARD_BIN" --help >/tmp/sg_help.txt 2>&1
+MISSING_ALIASES=""
+for alias in $("$SAFEC_BIN" --list-targets 2>/dev/null | awk '{print $1}'); do
+    grep -q -- "[ ,(]$alias[,) ]" /tmp/sg_help.txt || MISSING_ALIASES="$MISSING_ALIASES $alias"
+done
+if [[ -z "$MISSING_ALIASES" ]]; then
+    pass "safeguard --help lists every target alias of safec --list-targets"
+else
+    fail "safeguard --help omits target aliases:$MISSING_ALIASES"
+fi
+
 # ── 2. Compile a trivial hello-world ──────────────────────────────────────────
 section "Compile hello.sc"
 cat > /tmp/hello_smoke.sc <<'EOF'

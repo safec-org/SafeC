@@ -35,6 +35,9 @@ release tags.
   value for `accept()` and std's own placeholders; `accept()` leaves the
   connection closed when it fails; `drop()` / `close()` and the send
   functions do nothing on a closed connection (fd < 0).
+- `safeguard --help` lists the `arm-81m` target alias (Armv8.1-M,
+  Cortex-M55/M85) with the others; the smoke test now checks the help
+  against `safec --list-targets`.
 
 ### Changed — no `void*` anywhere in std
 
