@@ -68,7 +68,7 @@ static int tdev_up_(int device, unsigned long h, const float* src, unsigned long
     }
 }
 
-void tensor_host_(void* p) {
+void tensor_host_raw_(void* p) {
     unsafe {
         FloatTensor* t = (FloatTensor*)p;
         if (t->dev == DEVICE_CPU || (t->coh & TS_HOST) != 0 || t->dbuf == 0UL) return;
@@ -77,15 +77,15 @@ void tensor_host_(void* p) {
     }
 }
 
-void tensor_host_write_(void* p) {
-    tensor_host_(p);
+void tensor_host_write_raw_(void* p) {
+    tensor_host_raw_(p);
     unsafe {
         FloatTensor* t = (FloatTensor*)p;
         if (t->dev != DEVICE_CPU) t->coh = (t->coh | TS_HOST) & ~TS_DEV;
     }
 }
 
-void tensor_grad_host_(void* p) {
+void tensor_grad_host_raw_(void* p) {
     unsafe {
         FloatTensor* t = (FloatTensor*)p;
         if (t->dev == DEVICE_CPU || (t->coh & TS_GHOST) != 0) return;
@@ -99,23 +99,23 @@ void tensor_grad_host_(void* p) {
     }
 }
 
-void tensor_grad_host_write_(void* p) {
+void tensor_grad_host_write_raw_(void* p) {
     unsafe {
         FloatTensor* t = (FloatTensor*)p;
-        tensor_grad_host_(p);
+        tensor_grad_host_raw_(p);
         tdev_host_grad_(t);   // the caller writes it: it must exist
         if (t->dev != DEVICE_CPU) t->coh = (t->coh | TS_GHOST) & ~(TS_GDEV | TS_GZERO);
     }
 }
 
-int tensor_dev_(void* p, int device) {
+int tensor_dev_raw_(void* p, int device) {
     unsafe {
         FloatTensor* t = (FloatTensor*)p;
-        if (device == DEVICE_CPU) { tensor_host_(p); return 1; }
+        if (device == DEVICE_CPU) { tensor_host_raw_(p); return 1; }
         if (t->dev != DEVICE_CPU && t->dev != device) {
             // another GPU: bring the values home first, then move
-            tensor_host_(p);
-            tensor_release_device_(p);
+            tensor_host_raw_(p);
+            tensor_release_device_raw_(p);
         }
         if (t->dbuf == 0UL) {
             t->dbuf = device_mem_alloc_(device, sizeof(float) * t->size);
@@ -172,7 +172,7 @@ int tensor_amp_unscale_table_(int device, unsigned long amp, const &unsigned lon
     }
 }
 
-unsigned long tensor_grad_atomic_begin_(void* p, int device) {
+unsigned long tensor_grad_atomic_begin_raw_(void* p, int device) {
     unsafe {
         FloatTensor* t = (FloatTensor*)p;
         if (dev_tag_(t->dgrad) == 0UL) return t->dgrad;
@@ -183,7 +183,7 @@ unsigned long tensor_grad_atomic_begin_(void* p, int device) {
     }
 }
 
-void tensor_grad_atomic_end_(void* p, int device, unsigned long target) {
+void tensor_grad_atomic_end_raw_(void* p, int device, unsigned long target) {
     unsafe {
         FloatTensor* t = (FloatTensor*)p;
         if (target == 0UL || target == t->dgrad) return;
@@ -197,7 +197,7 @@ void tensor_grad_atomic_end_(void* p, int device, unsigned long target) {
 // The device gradient current, leaving a zero one unwritten (TS_GZERO).
 static int tdev_grad_current_(FloatTensor* t, int device) {
     unsafe {
-        if (t->dev != device && !tensor_dev_((void*)t, device)) return 0;
+        if (t->dev != device && !tensor_dev_raw_((void*)t, device)) return 0;
         if (t->dgrad == 0UL) {
             // a 16-bit activation's gradient is 16-bit too
             unsigned long tag = dev_tag_(t->dbuf);
@@ -219,7 +219,7 @@ static int tdev_grad_current_(FloatTensor* t, int device) {
     }
 }
 
-int tensor_grad_dev_(void* p, int device) {
+int tensor_grad_dev_raw_(void* p, int device) {
     if (device == DEVICE_CPU) return 1;
     unsafe {
         FloatTensor* t = (FloatTensor*)p;
@@ -232,7 +232,7 @@ int tensor_grad_dev_(void* p, int device) {
     }
 }
 
-int tensor_grad_dev_acc_(void* p, int device) {
+int tensor_grad_dev_acc_raw_(void* p, int device) {
     if (device == DEVICE_CPU) return 1;
     unsafe {
         FloatTensor* t = (FloatTensor*)p;
@@ -242,7 +242,7 @@ int tensor_grad_dev_acc_(void* p, int device) {
     }
 }
 
-void tensor_dev_wrote_(void* p) {
+void tensor_dev_wrote_raw_(void* p) {
     unsafe {
         FloatTensor* t = (FloatTensor*)p;
         if (t->dbuf != 0UL) device_shadow_drop_(t->dev, t->dbuf);
@@ -250,7 +250,7 @@ void tensor_dev_wrote_(void* p) {
     }
 }
 
-void tensor_grad_dev_wrote_(void* p) {
+void tensor_grad_dev_wrote_raw_(void* p) {
     unsafe {
         FloatTensor* t = (FloatTensor*)p;
         t->coh = (t->coh | TS_GDEV) & ~(TS_GHOST | TS_GZERO);
@@ -263,8 +263,8 @@ void tensor_grad_dev_wrote_(void* p) {
 static void tdev_release_(FloatTensor* t, int keep) {
     unsafe {
         if (t->dev == DEVICE_CPU) return;
-        if (keep && (t->coh & TS_HOST) == 0 && t->dbuf != 0UL) tensor_host_((void*)t);
-        if (keep && (t->coh & TS_GHOST) == 0 && t->dgrad != 0UL) tensor_grad_host_((void*)t);
+        if (keep && (t->coh & TS_HOST) == 0 && t->dbuf != 0UL) tensor_host_raw_((void*)t);
+        if (keep && (t->coh & TS_GHOST) == 0 && t->dgrad != 0UL) tensor_grad_host_raw_((void*)t);
         device_mem_free_(t->dev, t->dbuf, dev_bytes_(dev_tag_(t->dbuf), t->size));
         device_mem_free_(t->dev, t->dgrad, dev_bytes_(dev_tag_(t->dgrad), t->size));
         t->dbuf = 0UL;
@@ -274,23 +274,23 @@ static void tdev_release_(FloatTensor* t, int keep) {
     }
 }
 
-void tensor_release_device_(void* p) { unsafe { tdev_release_((FloatTensor*)p, 1); } }
+void tensor_release_device_raw_(void* p) { unsafe { tdev_release_((FloatTensor*)p, 1); } }
 
-void tensor_free_device_(void* p) { unsafe { tdev_release_((FloatTensor*)p, 0); } }
+void tensor_free_device_raw_(void* p) { unsafe { tdev_release_((FloatTensor*)p, 0); } }
 
-int tensor_place_(void* p, int device) {
+int tensor_place_raw_(void* p, int device) {
     unsafe {
         FloatTensor* t = (FloatTensor*)p;
         if (device == t->dev) return 1;
-        if (device == DEVICE_CPU) { tensor_release_device_(p); return 1; }
+        if (device == DEVICE_CPU) { tensor_release_device_raw_(p); return 1; }
         if (!device_available(device)) return 0;
-        if (!tensor_dev_(p, device)) return 0;
-        if (t->grad != (float*)0 && !tensor_grad_dev_(p, device)) return 0;
+        if (!tensor_dev_raw_(p, device)) return 0;
+        if (t->grad != (float*)0 && !tensor_grad_dev_raw_(p, device)) return 0;
         return 1;
     }
 }
 
-int tensor_op_device_(void* a, void* b, void* c) {
+int tensor_op_device_raw_(void* a, void* b, void* c) {
     int d = DEVICE_CPU;
     unsafe {
         FloatTensor* xs[3];
@@ -409,7 +409,7 @@ static void tdev_drop_(FloatTensor* t) {
     unsafe {
         match (t->owner) {
             case some(a): { }
-            case null: { tensor_release_device_((void*)t); t->free(); free((void*)t); }
+            case null: { tensor_release_device_raw_((void*)t); t->free(); free((void*)t); }
         }
     }
 }
@@ -426,21 +426,21 @@ static void tdev_unary_backward_(void* selfPtr) {
         int bop = (int)aux->data[0];
         int ysrc = (int)aux->data[1];
         int zsrc = (int)aux->data[3];
-        if (ysrc == 1 && !tensor_dev_((void*)a, d)) return;
-        int m = tensor_grad_dev_acc_((void*)a, d);
+        if (ysrc == 1 && !tensor_dev_raw_((void*)a, d)) return;
+        int m = tensor_grad_dev_acc_raw_((void*)a, d);
         if (!m) return;
         unsigned long y = ysrc == 1 ? a->dbuf : (ysrc == 2 ? s->dbuf : 0UL);
         unsigned long z = zsrc == 2 ? s->dbuf : 0UL;
         tdev_ew_acc_(d, bop, s->dgrad, y, a->dgrad, z, aux->data[2], m == 2, s->size);
-        tensor_grad_dev_wrote_((void*)a);
+        tensor_grad_dev_wrote_raw_((void*)a);
     }
 }
 
 ?&FloatTensor tdev_unary_(const &FloatTensor a, int fwd, float k, float k2, int bop, int ysrc, float bk, int zsrc) {
     int d;
-    unsafe { d = tensor_op_device_((void*)a, (void*)0, (void*)0); }
+    unsafe { d = tensor_op_device_raw_((void*)a, (void*)0, (void*)0); }
     if (d == DEVICE_CPU) return null;
-    unsafe { if (!tensor_dev_((void*)a, d)) return null; }
+    unsafe { if (!tensor_dev_raw_((void*)a, d)) return null; }
     unsafe {
         match (tdev_like_((FloatTensor*)a, d, tdev_tag1_(d, (FloatTensor*)a))) {
             case some(o): {
@@ -465,34 +465,34 @@ static void tdev_binary_backward_(void* selfPtr) {
         int d = s->dev;
         int kind = (int)s->extraScalar;
         unsigned long n = s->size;
-        if (kind >= 2) { if (!tensor_dev_((void*)a, d) || !tensor_dev_((void*)b, d)) return; }
-        int ma = a->requiresGrad ? tensor_grad_dev_acc_((void*)a, d) : 0;
+        if (kind >= 2) { if (!tensor_dev_raw_((void*)a, d) || !tensor_dev_raw_((void*)b, d)) return; }
+        int ma = a->requiresGrad ? tensor_grad_dev_acc_raw_((void*)a, d) : 0;
         if (ma) {
             int f = ma == 2;
             if (kind == 2) tdev_ew_acc_(d, EW_ACC_MUL, s->dgrad, b->dbuf, a->dgrad, 0UL, (float)0.0, f, n);
             else if (kind == 3) tdev_ew_acc_(d, EW_ACC_MINA, s->dgrad, a->dbuf, a->dgrad, b->dbuf, (float)0.0, f, n);
             else tdev_ew_acc_(d, EW_ACC, s->dgrad, 0UL, a->dgrad, 0UL, (float)0.0, f, n);
-            tensor_grad_dev_wrote_((void*)a);
+            tensor_grad_dev_wrote_raw_((void*)a);
         }
-        int mb = b->requiresGrad ? tensor_grad_dev_acc_((void*)b, d) : 0;
+        int mb = b->requiresGrad ? tensor_grad_dev_acc_raw_((void*)b, d) : 0;
         if (mb) {
             int f = mb == 2;
             if (kind == 2) tdev_ew_acc_(d, EW_ACC_MUL, s->dgrad, a->dbuf, b->dgrad, 0UL, (float)0.0, f, n);
             else if (kind == 3) tdev_ew_acc_(d, EW_ACC_MINB, s->dgrad, b->dbuf, b->dgrad, a->dbuf, (float)0.0, f, n);
             else if (kind == 1) tdev_ew_acc_(d, EW_DEC, s->dgrad, 0UL, b->dgrad, 0UL, (float)0.0, f, n);
             else tdev_ew_acc_(d, EW_ACC, s->dgrad, 0UL, b->dgrad, 0UL, (float)0.0, f, n);
-            tensor_grad_dev_wrote_((void*)b);
+            tensor_grad_dev_wrote_raw_((void*)b);
         }
     }
 }
 
 ?&FloatTensor tdev_binary_(const &FloatTensor a, const &FloatTensor b, int kind) {
     int d;
-    unsafe { d = tensor_op_device_((void*)a, (void*)b, (void*)0); }
+    unsafe { d = tensor_op_device_raw_((void*)a, (void*)b, (void*)0); }
     if (d == DEVICE_CPU) return null;
     unsafe {
         if (a->size != b->size) return null;
-        if (!tensor_dev_((void*)a, d) || !tensor_dev_((void*)b, d)) return null;
+        if (!tensor_dev_raw_((void*)a, d) || !tensor_dev_raw_((void*)b, d)) return null;
         int op = kind == 0 ? EW_ADD : (kind == 1 ? EW_SUB : (kind == 2 ? EW_MUL : EW_MIN));
         match (tdev_like_((FloatTensor*)a, d, tdev_tag2_(d, (FloatTensor*)a, (FloatTensor*)b))) {
             case some(o): {
@@ -514,21 +514,21 @@ static void tdev_sum_backward_(void* selfPtr) {
     unsafe {
         FloatTensor* s = (FloatTensor*)selfPtr;
         FloatTensor* a = __tensor_parent(s, 0UL);
-        int m = a->requiresGrad ? tensor_grad_dev_acc_((void*)a, s->dev) : 0;
+        int m = a->requiresGrad ? tensor_grad_dev_acc_raw_((void*)a, s->dev) : 0;
         if (!m) return;
         // scale (extraScalar, 1 for sum and 1/n for mean) times the seed s.grad[0]
         tdev_ew_acc_(s->dev, EW_ACC_PSCALE, 0UL, s->dgrad, a->dgrad, 0UL, s->extraScalar, m == 2, a->size);
-        tensor_grad_dev_wrote_((void*)a);
+        tensor_grad_dev_wrote_raw_((void*)a);
     }
 }
 
 // sum (scale 1) or mean (scale 1/n) to a 1-element tensor
 ?&FloatTensor tdev_sum_(const &FloatTensor a, float scale) {
     int d;
-    unsafe { d = tensor_op_device_((void*)a, (void*)0, (void*)0); }
+    unsafe { d = tensor_op_device_raw_((void*)a, (void*)0, (void*)0); }
     if (d == DEVICE_CPU) return null;
     unsafe {
-        if (!tensor_dev_((void*)a, d)) return null;
+        if (!tensor_dev_raw_((void*)a, d)) return null;
         match (tdev_1d_(1UL, d)) {
             case some(o): {
                 struct DevArgs g = dev_args_();
@@ -556,15 +556,15 @@ static void tdev_matmul_backward_(void* selfPtr) {
         unsigned long k = a->shape[1];
         unsigned long n = b->shape[1];
         // dA += dC B^T, dB += A^T dC (beta 1: accumulate)
-        int ma = a->requiresGrad && tensor_dev_((void*)b, d) ? tensor_grad_dev_acc_((void*)a, d) : 0;
+        int ma = a->requiresGrad && tensor_dev_raw_((void*)b, d) ? tensor_grad_dev_acc_raw_((void*)a, d) : 0;
         if (ma) {
             device_gemm_(d, 0, 1, m, k, n, (float)1.0, s->dgrad, n, b->dbuf, n, ma == 2 ? (float)0.0 : (float)1.0, a->dgrad, k);
-            tensor_grad_dev_wrote_((void*)a);
+            tensor_grad_dev_wrote_raw_((void*)a);
         }
-        int mb = b->requiresGrad && tensor_dev_((void*)a, d) ? tensor_grad_dev_acc_((void*)b, d) : 0;
+        int mb = b->requiresGrad && tensor_dev_raw_((void*)a, d) ? tensor_grad_dev_acc_raw_((void*)b, d) : 0;
         if (mb) {
             device_gemm_(d, 1, 0, k, n, m, (float)1.0, a->dbuf, k, s->dgrad, n, mb == 2 ? (float)0.0 : (float)1.0, b->dgrad, n);
-            tensor_grad_dev_wrote_((void*)b);
+            tensor_grad_dev_wrote_raw_((void*)b);
         }
     }
 }
@@ -572,13 +572,13 @@ static void tdev_matmul_backward_(void* selfPtr) {
 
 ?&FloatTensor tdev_matmul_(const &FloatTensor a, const &FloatTensor b) {
     int d;
-    unsafe { d = tensor_op_device_((void*)a, (void*)b, (void*)0); }
+    unsafe { d = tensor_op_device_raw_((void*)a, (void*)b, (void*)0); }
     if (d == DEVICE_CPU) return null;
     unsafe {
         unsigned long m = a->shape[0];
         unsigned long k = a->shape[1];
         unsigned long n = b->shape[1];
-        if (!tensor_dev_((void*)a, d) || !tensor_dev_((void*)b, d)) return null;
+        if (!tensor_dev_raw_((void*)a, d) || !tensor_dev_raw_((void*)b, d)) return null;
         // a parameter (a leaf) keeps its 16-bit copy until the optimizer writes it
         if (device_store_tag_(d) != DEVICE_FP32) {
             if (a->gradFn == (void*)0) device_shadow_mark_(d, a->dbuf);
@@ -631,24 +631,24 @@ static void tdev_bias_backward_(void* selfPtr) {
         FloatTensor* b = __tensor_parent(s, 1UL);
         int d = s->dev;
         unsigned long n = b->size;
-        int mx = x->requiresGrad ? tensor_grad_dev_acc_((void*)x, d) : 0;
+        int mx = x->requiresGrad ? tensor_grad_dev_acc_raw_((void*)x, d) : 0;
         if (mx) {
             tdev_ew_acc_(d, EW_ACC, s->dgrad, 0UL, x->dgrad, 0UL, (float)0.0, mx == 2, s->size);
-            tensor_grad_dev_wrote_((void*)x);
+            tensor_grad_dev_wrote_raw_((void*)x);
         }
-        if (b->requiresGrad && tensor_grad_dev_((void*)b, d)) {
+        if (b->requiresGrad && tensor_grad_dev_raw_((void*)b, d)) {
             tdev_colsum_(d, s->dgrad, b->dgrad, 0UL, n, s->size / n);
-            tensor_grad_dev_wrote_((void*)b);
+            tensor_grad_dev_wrote_raw_((void*)b);
         }
     }
 }
 
 ?&FloatTensor tdev_add_bias_(const &FloatTensor x, const &FloatTensor b) {
     int d;
-    unsafe { d = tensor_op_device_((void*)x, (void*)b, (void*)0); }
+    unsafe { d = tensor_op_device_raw_((void*)x, (void*)b, (void*)0); }
     if (d == DEVICE_CPU) return null;
     unsafe {
-        if (!tensor_dev_((void*)x, d) || !tensor_dev_((void*)b, d)) return null;
+        if (!tensor_dev_raw_((void*)x, d) || !tensor_dev_raw_((void*)b, d)) return null;
         match (tdev_like_((FloatTensor*)x, d, tdev_tag2_(d, (FloatTensor*)x, (FloatTensor*)b))) {
             case some(o): {
                 struct DevArgs g = dev_args_();
@@ -672,27 +672,27 @@ static void tdev_mul_row_backward_(void* selfPtr) {
         FloatTensor* g = __tensor_parent(s, 1UL);
         int d = s->dev;
         unsigned long n = g->size;
-        if (!tensor_dev_((void*)x, d) || !tensor_dev_((void*)g, d)) return;
-        int mx = x->requiresGrad ? tensor_grad_dev_acc_((void*)x, d) : 0;
+        if (!tensor_dev_raw_((void*)x, d) || !tensor_dev_raw_((void*)g, d)) return;
+        int mx = x->requiresGrad ? tensor_grad_dev_acc_raw_((void*)x, d) : 0;
         if (mx) {
             struct DevArgs a = dev_args_();
             a.p[0] = s->dgrad; a.p[1] = g->dbuf; a.p[2] = x->dgrad; a.u[0] = (unsigned int)n; a.u[6] = mx == 2 ? 1U : 0U;
             device_launch_(d, DK_MUL_ROW_ACC, s->size, &a);
-            tensor_grad_dev_wrote_((void*)x);
+            tensor_grad_dev_wrote_raw_((void*)x);
         }
-        if (g->requiresGrad && tensor_grad_dev_((void*)g, d)) {
+        if (g->requiresGrad && tensor_grad_dev_raw_((void*)g, d)) {
             tdev_colsum_(d, s->dgrad, g->dgrad, x->dbuf, n, s->size / n);
-            tensor_grad_dev_wrote_((void*)g);
+            tensor_grad_dev_wrote_raw_((void*)g);
         }
     }
 }
 
 ?&FloatTensor tdev_mul_row_(const &FloatTensor x, const &FloatTensor g) {
     int d;
-    unsafe { d = tensor_op_device_((void*)x, (void*)g, (void*)0); }
+    unsafe { d = tensor_op_device_raw_((void*)x, (void*)g, (void*)0); }
     if (d == DEVICE_CPU) return null;
     unsafe {
-        if (!tensor_dev_((void*)x, d) || !tensor_dev_((void*)g, d)) return null;
+        if (!tensor_dev_raw_((void*)x, d) || !tensor_dev_raw_((void*)g, d)) return null;
         match (tdev_like_((FloatTensor*)x, d, tdev_tag2_(d, (FloatTensor*)x, (FloatTensor*)g))) {
             case some(o): {
                 struct DevArgs a = dev_args_();
@@ -712,21 +712,21 @@ static void tdev_rowsum_backward_(void* selfPtr) {
     unsafe {
         FloatTensor* s = (FloatTensor*)selfPtr;
         FloatTensor* a = __tensor_parent(s, 0UL);
-        int m = a->requiresGrad ? tensor_grad_dev_acc_((void*)a, s->dev) : 0;
+        int m = a->requiresGrad ? tensor_grad_dev_acc_raw_((void*)a, s->dev) : 0;
         if (!m) return;
         struct DevArgs g = dev_args_();
         g.p[0] = s->dgrad; g.p[1] = a->dgrad; g.u[0] = (unsigned int)(a->size / s->size); g.u[6] = m == 2 ? 1U : 0U;
         device_launch_(s->dev, DK_ROWBCAST_ACC, a->size, &g);
-        tensor_grad_dev_wrote_((void*)a);
+        tensor_grad_dev_wrote_raw_((void*)a);
     }
 }
 
 ?&FloatTensor tdev_sum_rows_(const &FloatTensor a) {
     int d;
-    unsafe { d = tensor_op_device_((void*)a, (void*)0, (void*)0); }
+    unsafe { d = tensor_op_device_raw_((void*)a, (void*)0, (void*)0); }
     if (d == DEVICE_CPU) return null;
     unsafe {
-        if (!tensor_dev_((void*)a, d)) return null;
+        if (!tensor_dev_raw_((void*)a, d)) return null;
         unsigned long rows = tdev_rows_((FloatTensor*)a);
         unsigned long cols = tdev_cols_((FloatTensor*)a);
         match (tdev_2d_(rows, 1UL, d, tdev_tag1_(d, (FloatTensor*)a))) {
@@ -754,31 +754,31 @@ static void tdev_concat_backward_(void* selfPtr) {
         unsigned long p = a->size / rows;
         unsigned long q = b->size / rows;
         // slice the wide gradient back: dk_slice with accumulate into each side
-        int ma = a->requiresGrad ? tensor_grad_dev_acc_((void*)a, d) : 0;
+        int ma = a->requiresGrad ? tensor_grad_dev_acc_raw_((void*)a, d) : 0;
         if (ma) {
             struct DevArgs g = dev_args_();
             g.p[0] = s->dgrad; g.p[1] = a->dgrad;
             g.u[0] = (unsigned int)(p + q); g.u[1] = 0U; g.u[2] = (unsigned int)p; g.u[3] = 2U; g.u[6] = ma == 2 ? 1U : 0U;
             device_launch_(d, DK_SLICE, rows * p, &g);
-            tensor_grad_dev_wrote_((void*)a);
+            tensor_grad_dev_wrote_raw_((void*)a);
         }
-        int mb = b->requiresGrad ? tensor_grad_dev_acc_((void*)b, d) : 0;
+        int mb = b->requiresGrad ? tensor_grad_dev_acc_raw_((void*)b, d) : 0;
         if (mb) {
             struct DevArgs g = dev_args_();
             g.p[0] = s->dgrad; g.p[1] = b->dgrad;
             g.u[0] = (unsigned int)(p + q); g.u[1] = (unsigned int)p; g.u[2] = (unsigned int)q; g.u[3] = 2U; g.u[6] = mb == 2 ? 1U : 0U;
             device_launch_(d, DK_SLICE, rows * q, &g);
-            tensor_grad_dev_wrote_((void*)b);
+            tensor_grad_dev_wrote_raw_((void*)b);
         }
     }
 }
 
 ?&FloatTensor tdev_concat_cols_(const &FloatTensor a, const &FloatTensor b) {
     int d;
-    unsafe { d = tensor_op_device_((void*)a, (void*)b, (void*)0); }
+    unsafe { d = tensor_op_device_raw_((void*)a, (void*)b, (void*)0); }
     if (d == DEVICE_CPU) return null;
     unsafe {
-        if (!tensor_dev_((void*)a, d) || !tensor_dev_((void*)b, d)) return null;
+        if (!tensor_dev_raw_((void*)a, d) || !tensor_dev_raw_((void*)b, d)) return null;
         unsigned long rows = tdev_rows_((FloatTensor*)a);
         unsigned long p = tdev_cols_((FloatTensor*)a);
         unsigned long q = tdev_cols_((FloatTensor*)b);
@@ -801,22 +801,22 @@ static void tdev_slice_backward_(void* selfPtr) {
     unsafe {
         FloatTensor* s = (FloatTensor*)selfPtr;
         FloatTensor* a = __tensor_parent(s, 0UL);
-        if (!a->requiresGrad || !tensor_grad_dev_((void*)a, s->dev)) return;
+        if (!a->requiresGrad || !tensor_grad_dev_raw_((void*)a, s->dev)) return;
         struct DevArgs g = dev_args_();
         g.p[0] = s->dgrad; g.p[1] = a->dgrad;
         g.u[0] = (unsigned int)a->shape[1]; g.u[1] = (unsigned int)s->extraScalar; g.u[2] = (unsigned int)s->shape[1];
         g.u[3] = 1U;
         device_launch_(s->dev, DK_SLICE, s->size, &g);
-        tensor_grad_dev_wrote_((void*)a);
+        tensor_grad_dev_wrote_raw_((void*)a);
     }
 }
 
 ?&FloatTensor tdev_slice_cols_(const &FloatTensor a, unsigned long start, unsigned long len) {
     int d;
-    unsafe { d = tensor_op_device_((void*)a, (void*)0, (void*)0); }
+    unsafe { d = tensor_op_device_raw_((void*)a, (void*)0, (void*)0); }
     if (d == DEVICE_CPU) return null;
     unsafe {
-        if (!tensor_dev_((void*)a, d)) return null;
+        if (!tensor_dev_raw_((void*)a, d)) return null;
         unsigned long rows = a->shape[0];
         match (tdev_2d_(rows, len, d, tdev_tag1_(d, (FloatTensor*)a))) {
             case some(o): {
@@ -841,23 +841,23 @@ static void tdev_gather_backward_(void* selfPtr) {
         FloatTensor* table = __tensor_parent(s, 0UL);
         FloatTensor* idx = __tensor_parent(s, 1UL);
         int d = s->dev;
-        if (!table->requiresGrad || !tensor_dev_((void*)idx, d) || !tensor_grad_dev_((void*)table, d)) return;
+        if (!table->requiresGrad || !tensor_dev_raw_((void*)idx, d) || !tensor_grad_dev_raw_((void*)table, d)) return;
         struct DevArgs g = dev_args_();
-        unsigned long tgt = tensor_grad_atomic_begin_((void*)table, d);
+        unsigned long tgt = tensor_grad_atomic_begin_raw_((void*)table, d);
         if (tgt == 0UL) return;
         g.p[0] = s->dgrad; g.p[1] = idx->dbuf; g.p[2] = tgt; g.u[0] = (unsigned int)table->shape[1];
         device_launch_(d, DK_SCATTER_ROWS, s->size, &g);
-        tensor_grad_atomic_end_((void*)table, d, tgt);
-        tensor_grad_dev_wrote_((void*)table);
+        tensor_grad_atomic_end_raw_((void*)table, d, tgt);
+        tensor_grad_dev_wrote_raw_((void*)table);
     }
 }
 
 ?&FloatTensor tdev_gather_rows_(const &FloatTensor table, const &FloatTensor idx) {
     int d;
-    unsafe { d = tensor_op_device_((void*)table, (void*)idx, (void*)0); }
+    unsafe { d = tensor_op_device_raw_((void*)table, (void*)idx, (void*)0); }
     if (d == DEVICE_CPU) return null;
     unsafe {
-        if (!tensor_dev_((void*)table, d) || !tensor_dev_((void*)idx, d)) return null;
+        if (!tensor_dev_raw_((void*)table, d) || !tensor_dev_raw_((void*)idx, d)) return null;
         unsigned long dim = table->shape[1];
         unsigned long m = idx->size;
         match (tdev_2d_(m, dim, d, tdev_tag1_(d, (FloatTensor*)table))) {
@@ -879,22 +879,22 @@ static void tdev_softmax_backward_(void* selfPtr) {
     unsafe {
         FloatTensor* s = (FloatTensor*)selfPtr;
         FloatTensor* a = __tensor_parent(s, 0UL);
-        if (!a->requiresGrad || !tensor_grad_dev_((void*)a, s->dev)) return;
+        if (!a->requiresGrad || !tensor_grad_dev_raw_((void*)a, s->dev)) return;
         unsigned long cols = s->shape[s->ndim - 1UL];
         struct DevArgs g = dev_args_();
         g.p[0] = s->dgrad; g.p[1] = s->dbuf; g.p[2] = a->dgrad;
         g.u[0] = (unsigned int)cols; g.u[1] = (unsigned int)s->extraScalar;
         device_launch_(s->dev, DK_SOFTMAX_BWD, s->size / cols, &g);
-        tensor_grad_dev_wrote_((void*)a);
+        tensor_grad_dev_wrote_raw_((void*)a);
     }
 }
 
 ?&FloatTensor tdev_softmax_(const &FloatTensor a, int logMode) {
     int d;
-    unsafe { d = tensor_op_device_((void*)a, (void*)0, (void*)0); }
+    unsafe { d = tensor_op_device_raw_((void*)a, (void*)0, (void*)0); }
     if (d == DEVICE_CPU) return null;
     unsafe {
-        if (!tensor_dev_((void*)a, d)) return null;
+        if (!tensor_dev_raw_((void*)a, d)) return null;
         unsigned long cols = a->shape[a->ndim - 1UL];
         match (tdev_like_((FloatTensor*)a, d, tdev_tag1_(d, (FloatTensor*)a))) {
             case some(o): {
@@ -921,10 +921,10 @@ static unsigned int tdev_mask_flags_(int causal, unsigned long window) {
     unsigned int flags = tdev_mask_flags_(causal, window);
     if (flags == 0U) return tdev_softmax_(a, 0);
     int d;
-    unsafe { d = tensor_op_device_((void*)a, (void*)0, (void*)0); }
+    unsafe { d = tensor_op_device_raw_((void*)a, (void*)0, (void*)0); }
     if (d == DEVICE_CPU) return null;
     unsafe {
-        if (!tensor_dev_((void*)a, d)) return null;
+        if (!tensor_dev_raw_((void*)a, d)) return null;
         unsigned long cols = a->shape[a->ndim - 1UL];
         unsigned long rows = a->size / cols;
         match (tdev_like_((FloatTensor*)a, d, tdev_tag1_(d, (FloatTensor*)a))) {
@@ -948,22 +948,22 @@ static void tdev_transpose_backward_(void* selfPtr) {
     unsafe {
         FloatTensor* s = (FloatTensor*)selfPtr;
         FloatTensor* a = __tensor_parent(s, 0UL);
-        int m = a->requiresGrad ? tensor_grad_dev_acc_((void*)a, s->dev) : 0;
+        int m = a->requiresGrad ? tensor_grad_dev_acc_raw_((void*)a, s->dev) : 0;
         if (!m) return;
         struct DevArgs g = dev_args_();
         g.p[0] = s->dgrad; g.p[1] = a->dgrad;
         g.u[0] = (unsigned int)s->shape[0]; g.u[1] = (unsigned int)s->shape[1]; g.u[2] = 1U; g.u[6] = m == 2 ? 1U : 0U;
         device_launch_(s->dev, DK_TRANSPOSE, s->size, &g);
-        tensor_grad_dev_wrote_((void*)a);
+        tensor_grad_dev_wrote_raw_((void*)a);
     }
 }
 
 ?&FloatTensor tdev_transpose_(const &FloatTensor a) {
     int d;
-    unsafe { d = tensor_op_device_((void*)a, (void*)0, (void*)0); }
+    unsafe { d = tensor_op_device_raw_((void*)a, (void*)0, (void*)0); }
     if (d == DEVICE_CPU) return null;
     unsafe {
-        if (a->ndim != 2UL || !tensor_dev_((void*)a, d)) return null;
+        if (a->ndim != 2UL || !tensor_dev_raw_((void*)a, d)) return null;
         unsigned long rows = a->shape[0];
         unsigned long cols = a->shape[1];
         match (tdev_2d_(cols, rows, d, tdev_tag1_(d, (FloatTensor*)a))) {
@@ -1018,8 +1018,8 @@ static void tdev_attn_backward_(void* selfPtr) {
         // a device since, by an op with an operand there)
         int d = lse->dev;
         if (d == DEVICE_CPU) {
-            tensor_host_((void*)s); tensor_grad_host_((void*)s);
-            tensor_host_((void*)q); tensor_host_((void*)k); tensor_host_((void*)v);
+            tensor_host_raw_((void*)s); tensor_grad_host_raw_((void*)s);
+            tensor_host_raw_((void*)q); tensor_host_raw_((void*)k); tensor_host_raw_((void*)v);
             float* ds = (float*)malloc(sizeof(float) * nq);
             if (ds == (float*)0) return;
             if (q->requiresGrad) __tensor_ensure_grad(q);
@@ -1035,12 +1035,12 @@ static void tdev_attn_backward_(void* selfPtr) {
             free((void*)ds);
             return;
         }
-        if (!tensor_dev_((void*)q, d) || !tensor_dev_((void*)k, d) || !tensor_dev_((void*)v, d)) return;
+        if (!tensor_dev_raw_((void*)q, d) || !tensor_dev_raw_((void*)k, d) || !tensor_dev_raw_((void*)v, d)) return;
         // in the order the kernels write: dq, then dk and dv (a tensor that is
         // two of them is written once, then added to)
-        int mq = q->requiresGrad ? tensor_grad_dev_acc_((void*)q, d) : 0;
-        int mk = k->requiresGrad ? tensor_grad_dev_acc_((void*)k, d) : 0;
-        int mv = v->requiresGrad ? tensor_grad_dev_acc_((void*)v, d) : 0;
+        int mq = q->requiresGrad ? tensor_grad_dev_acc_raw_((void*)q, d) : 0;
+        int mk = k->requiresGrad ? tensor_grad_dev_acc_raw_((void*)k, d) : 0;
+        int mv = v->requiresGrad ? tensor_grad_dev_acc_raw_((void*)v, d) : 0;
         g.u[5] = g.u[5] | (mq == 2 ? 4U : 0U) | (mk == 2 ? 8U : 0U) | (mv == 2 ? 16U : 0U);
         unsigned long ds = device_mem_alloc_(d, sizeof(float) * nq);
         if (ds == 0UL) return;
@@ -1051,9 +1051,9 @@ static void tdev_attn_backward_(void* selfPtr) {
         g.p[6] = mv != 0 ? v->dgrad : 0UL;
         if (mk != 0 || mv != 0) device_launch_(d, DK_ATTN_BWD_KV, tdev_attn_threads_(heads, k->shape[0]), &g);
         device_mem_free_(d, ds, sizeof(float) * nq);
-        if (mq != 0) tensor_grad_dev_wrote_((void*)q);
-        if (mk != 0) tensor_grad_dev_wrote_((void*)k);
-        if (mv != 0) tensor_grad_dev_wrote_((void*)v);
+        if (mq != 0) tensor_grad_dev_wrote_raw_((void*)q);
+        if (mk != 0) tensor_grad_dev_wrote_raw_((void*)k);
+        if (mv != 0) tensor_grad_dev_wrote_raw_((void*)v);
     }
 }
 
@@ -1070,11 +1070,11 @@ static void tdev_attn_backward_(void* selfPtr) {
         if (tdev_attn_threads_(heads, S > L ? S : L) >= 4294967295UL || heads * (S > L ? S : L) * (D > E ? D : E) >= 4294967295UL) return null;
         unsigned int flags = tdev_mask_flags_(causal, window);
         struct DevArgs g = tdev_attn_args_((FloatTensor*)q, (FloatTensor*)k, (FloatTensor*)v, heads, flags, window, scale);
-        int d = tensor_op_device_((void*)q, (void*)k, (void*)v);
+        int d = tensor_op_device_raw_((void*)q, (void*)k, (void*)v);
         FloatTensor* out;
         FloatTensor* lse;
         if (d == DEVICE_CPU) {
-            tensor_host_((void*)q); tensor_host_((void*)k); tensor_host_((void*)v);
+            tensor_host_raw_((void*)q); tensor_host_raw_((void*)k); tensor_host_raw_((void*)v);
             unsigned long shape[2];
             shape[0] = S; shape[1] = heads * E;
             out = __tensor_alloc((const unsigned long*)&shape[0], 2UL, 0);
@@ -1084,7 +1084,7 @@ static void tdev_attn_backward_(void* selfPtr) {
             g.p[3] = (unsigned long)out->data; g.p[4] = (unsigned long)lse->data;
             device_ref_launch_(DK_ATTN_FWD, heads * S, &g);
         } else {
-            if (!tensor_dev_((void*)q, d) || !tensor_dev_((void*)k, d) || !tensor_dev_((void*)v, d)) return null;
+            if (!tensor_dev_raw_((void*)q, d) || !tensor_dev_raw_((void*)k, d) || !tensor_dev_raw_((void*)v, d)) return null;
             int tag = (dev_tag_(q->dbuf) != 0UL || dev_tag_(k->dbuf) != 0UL || dev_tag_(v->dbuf) != 0UL)
                       ? device_store_tag_(d) : DEVICE_FP32;
             match (tdev_2d_(S, heads * E, d, tag)) {
@@ -1124,7 +1124,7 @@ static void tdev_loss_backward_(void* selfPtr) {
         FloatTensor* t = __tensor_parent(s, 1UL);
         FloatTensor* aux = __tensor_parent(s, 2UL);
         int d = s->dev;
-        int m = x->requiresGrad ? tensor_grad_dev_acc_((void*)x, d) : 0;
+        int m = x->requiresGrad ? tensor_grad_dev_acc_raw_((void*)x, d) : 0;
         if (!m) return;
         int kind = (int)aux->data[0];
         struct DevArgs g = dev_args_();
@@ -1139,16 +1139,16 @@ static void tdev_loss_backward_(void* selfPtr) {
             g.u[0] = (unsigned int)(kind - 1); g.f[0] = (float)1.0 / (float)x->size; g.f[1] = aux->data[1];
             device_launch_(d, DK_EWLOSS_BWD, x->size, &g);
         }
-        tensor_grad_dev_wrote_((void*)x);
+        tensor_grad_dev_wrote_raw_((void*)x);
     }
 }
 
 ?&FloatTensor tdev_loss_(const &FloatTensor x, const &FloatTensor t, int kind, float k) {
     int d;
-    unsafe { d = tensor_op_device_((void*)x, (void*)t, (void*)0); }
+    unsafe { d = tensor_op_device_raw_((void*)x, (void*)t, (void*)0); }
     if (d == DEVICE_CPU) return null;
     unsafe {
-        if (!tensor_dev_((void*)x, d) || !tensor_dev_((void*)t, d)) return null;
+        if (!tensor_dev_raw_((void*)x, d) || !tensor_dev_raw_((void*)t, d)) return null;
         match (tdev_1d_(1UL, d)) {
             case some(o): {
                 struct DevArgs g = dev_args_();
@@ -1187,21 +1187,21 @@ static void tdev_layernorm_backward_(void* selfPtr) {
         FloatTensor* x = __tensor_parent(s, 0UL);
         FloatTensor* inv = __tensor_parent(s, 1UL);
         int d = s->dev;
-        if (!x->requiresGrad || !tensor_grad_dev_((void*)x, d)) return;
+        if (!x->requiresGrad || !tensor_grad_dev_raw_((void*)x, d)) return;
         unsigned long cols = s->shape[s->ndim - 1UL];
         struct DevArgs g = dev_args_();
         g.p[0] = s->dgrad; g.p[1] = s->dbuf; g.p[2] = inv->dbuf; g.p[3] = x->dgrad; g.u[0] = (unsigned int)cols;
         device_launch_(d, DK_LAYERNORM_BWD, s->size / cols, &g);
-        tensor_grad_dev_wrote_((void*)x);
+        tensor_grad_dev_wrote_raw_((void*)x);
     }
 }
 
 ?&FloatTensor tdev_layer_norm_(const &FloatTensor x, float eps) {
     int d;
-    unsafe { d = tensor_op_device_((void*)x, (void*)0, (void*)0); }
+    unsafe { d = tensor_op_device_raw_((void*)x, (void*)0, (void*)0); }
     if (d == DEVICE_CPU) return null;
     unsafe {
-        if (!tensor_dev_((void*)x, d)) return null;
+        if (!tensor_dev_raw_((void*)x, d)) return null;
         unsigned long cols = x->shape[x->ndim - 1UL];
         unsigned long rows = x->size / cols;
         match (tdev_like_((FloatTensor*)x, d, device_store_tag_(d))) {
@@ -1229,10 +1229,10 @@ static void tdev_layernorm_backward_(void* selfPtr) {
 // A copy that is not part of the graph, on the same device.
 ?&FloatTensor tdev_detach_(const &FloatTensor a) {
     int d;
-    unsafe { d = tensor_op_device_((void*)a, (void*)0, (void*)0); }
+    unsafe { d = tensor_op_device_raw_((void*)a, (void*)0, (void*)0); }
     if (d == DEVICE_CPU) return null;
     unsafe {
-        if (!tensor_dev_((void*)a, d)) return null;
+        if (!tensor_dev_raw_((void*)a, d)) return null;
         match (tdev_like_((FloatTensor*)a, d, (int)dev_tag_(a->dbuf))) {
             case some(o): {
                 if (!device_copy_(d, o->dbuf, a->dbuf, a->size)) { tdev_drop_((FloatTensor*)o); return null; }
@@ -1381,12 +1381,12 @@ static void tdev_conv_bwd_(void* selfPtr, int skipX, int skipW) {
         unsigned long iP = g.H * g.W;
         unsigned long imgSz = g.C * iP;       // image side, per image
         unsigned long colSz = g.oC * oP;      // column side, per image
-        if (!tensor_dev_((void*)x, d) || !tensor_dev_((void*)w, d)) return;
-        int mx = x->requiresGrad && !skipX ? tensor_grad_dev_acc_((void*)x, d) : 0;
-        int mw = w->requiresGrad && !skipW ? tensor_grad_dev_acc_((void*)w, d) : 0;
+        if (!tensor_dev_raw_((void*)x, d) || !tensor_dev_raw_((void*)w, d)) return;
+        int mx = x->requiresGrad && !skipX ? tensor_grad_dev_acc_raw_((void*)x, d) : 0;
+        int mw = w->requiresGrad && !skipW ? tensor_grad_dev_acc_raw_((void*)w, d) : 0;
         int gx = mx != 0;
         int gw = mw != 0;
-        int gb = b->requiresGrad && tensor_grad_dev_((void*)b, d);
+        int gb = b->requiresGrad && tensor_grad_dev_raw_((void*)b, d);
         int doneX = gx && tdev_lib_grad_(d, &g, DEV_CONV_BWD_DATA, s, x, w, mx == 2) == 1;
         int doneW = gw && tdev_lib_grad_(d, &g, DEV_CONV_BWD_WEIGHTS, s, x, w, mw == 2) == 1;
         int fx = gx && !doneX;
@@ -1400,7 +1400,7 @@ static void tdev_conv_bwd_(void* selfPtr, int skipX, int skipW) {
             if (col == 0UL || cm == 0UL) return;
         }
         // col2im adds with atomics: a 16-bit input gradient goes through fp32
-        unsigned long xg = fx && !g.transpose ? tensor_grad_atomic_begin_((void*)x, d) : x->dgrad;
+        unsigned long xg = fx && !g.transpose ? tensor_grad_atomic_begin_raw_((void*)x, d) : x->dgrad;
         if (fx && xg == 0UL) return;
         unsigned long i = 0UL;
         while ((fx || fw) && i < g.batch) {
@@ -1431,7 +1431,7 @@ static void tdev_conv_bwd_(void* selfPtr, int skipX, int skipW) {
             }
             i = i + nb;
         }
-        if (fx && !g.transpose) tensor_grad_atomic_end_((void*)x, d, xg);
+        if (fx && !g.transpose) tensor_grad_atomic_end_raw_((void*)x, d, xg);
         if (col != 0UL) device_mem_free_(d, col, sizeof(float) * CK * chunk * oP);
         if (cm != 0UL) device_mem_free_(d, cm, sizeof(float) * g.oC * chunk * oP);
         if (gb) {
@@ -1443,9 +1443,9 @@ static void tdev_conv_bwd_(void* selfPtr, int skipX, int skipW) {
             a.u[0] = (unsigned int)ch; a.u[1] = (unsigned int)plane; a.u[2] = (unsigned int)g.batch; a.u[3] = (unsigned int)S;
             device_launch_(d, DK_BIAS_CHANNELS_BWD, ch * S * 256UL, &a);
         }
-        if (gx) tensor_grad_dev_wrote_((void*)x);
-        if (gw) tensor_grad_dev_wrote_((void*)w);
-        if (gb) tensor_grad_dev_wrote_((void*)b);
+        if (gx) tensor_grad_dev_wrote_raw_((void*)x);
+        if (gw) tensor_grad_dev_wrote_raw_((void*)w);
+        if (gb) tensor_grad_dev_wrote_raw_((void*)b);
     }
 }
 
@@ -1457,7 +1457,7 @@ static void tdev_conv_backward_(void* selfPtr) { tdev_conv_bwd_(selfPtr, 0, 0); 
                          unsigned long kH, unsigned long kW, unsigned long sH, unsigned long sW,
                          unsigned long pH, unsigned long pW, unsigned long dH, unsigned long dW) {
     int d;
-    unsafe { d = tensor_op_device_((void*)x, (void*)w, (void*)b); }
+    unsafe { d = tensor_op_device_raw_((void*)x, (void*)w, (void*)b); }
     if (d == DEVICE_CPU) return null;
     struct TdevConv_ g;
     g.C = C; g.H = H; g.W = W; g.oC = oC; g.oH = oH; g.oW = oW;
@@ -1467,7 +1467,7 @@ static void tdev_conv_backward_(void* selfPtr) { tdev_conv_bwd_(selfPtr, 0, 0); 
     unsigned long oP = oH * oW;
     unsigned long iP = H * W;
     unsafe {
-        if (!tensor_dev_((void*)x, d) || !tensor_dev_((void*)w, d) || !tensor_dev_((void*)b, d)) return null;
+        if (!tensor_dev_raw_((void*)x, d) || !tensor_dev_raw_((void*)w, d) || !tensor_dev_raw_((void*)b, d)) return null;
         unsigned long inSz = transpose ? oC * oP : C * iP;
         g.batch = x->size / inSz;
         unsigned long outSz = transpose ? C * iP : oC * oP;
@@ -1577,12 +1577,12 @@ static void tdev_norm_backward_(void* selfPtr) {
         unsigned int act = (unsigned int)aux->data[4];
         unsigned long B = s->size / (C * P);
         unsigned long S = st->size / 2UL;
-        if (!tensor_dev_((void*)x, d) || !tensor_dev_((void*)gm, d)) return;
-        int mx = x->requiresGrad ? tensor_grad_dev_acc_((void*)x, d) : 0;
+        if (!tensor_dev_raw_((void*)x, d) || !tensor_dev_raw_((void*)gm, d)) return;
+        int mx = x->requiresGrad ? tensor_grad_dev_acc_raw_((void*)x, d) : 0;
         int gx = mx != 0;
         if (mx == 2 && G != 0UL && !tdev_fill_(d, x->dgrad, x->size, (float)0.0)) return;   // dk_gn_bwd adds
-        int gg = gm->requiresGrad && tensor_grad_dev_((void*)gm, d);
-        int gb = bt->requiresGrad && tensor_grad_dev_((void*)bt, d);
+        int gg = gm->requiresGrad && tensor_grad_dev_raw_((void*)gm, d);
+        int gb = bt->requiresGrad && tensor_grad_dev_raw_((void*)bt, d);
         unsigned long mean = st->dbuf;
         unsigned long inv = device_offset_el_(d, st->dbuf, S);
         unsigned long sums = 0UL;
@@ -1615,9 +1615,9 @@ static void tdev_norm_backward_(void* selfPtr) {
             }
         }
         if (sums != 0UL) device_mem_free_(d, sums, sizeof(float) * 2UL * C);
-        if (gx) tensor_grad_dev_wrote_((void*)x);
-        if (gg) tensor_grad_dev_wrote_((void*)gm);
-        if (gb) tensor_grad_dev_wrote_((void*)bt);
+        if (gx) tensor_grad_dev_wrote_raw_((void*)x);
+        if (gg) tensor_grad_dev_wrote_raw_((void*)gm);
+        if (gb) tensor_grad_dev_wrote_raw_((void*)bt);
     }
 }
 
@@ -1663,13 +1663,13 @@ static ?&FloatTensor tdev_norm_finish_(int d, FloatTensor* x, FloatTensor* gamma
                                &FloatTensor runMean, &FloatTensor runVar, unsigned long C, unsigned long P,
                                int training, float momentum, float eps, int act) {
     int d;
-    unsafe { d = tensor_op_device_((void*)x, (void*)gamma, (void*)beta); }
+    unsafe { d = tensor_op_device_raw_((void*)x, (void*)gamma, (void*)beta); }
     if (d == DEVICE_CPU || C == 0UL || P == 0UL || act < 0 || act > 2) return null;
     unsafe {
         if (gamma->size != C || beta->size != C || runMean->size != C || runVar->size != C || x->size % (C * P) != 0UL)
             return null;
-        if (!tensor_dev_((void*)x, d) || !tensor_dev_((void*)gamma, d) || !tensor_dev_((void*)beta, d) ||
-            !tensor_dev_((void*)runMean, d) || !tensor_dev_((void*)runVar, d)) return null;
+        if (!tensor_dev_raw_((void*)x, d) || !tensor_dev_raw_((void*)gamma, d) || !tensor_dev_raw_((void*)beta, d) ||
+            !tensor_dev_raw_((void*)runMean, d) || !tensor_dev_raw_((void*)runVar, d)) return null;
         match (tdev_1d_(2UL * C, d)) {
             case some(st): {
                 unsigned long B = x->size / (C * P);
@@ -1691,7 +1691,7 @@ static ?&FloatTensor tdev_norm_finish_(int d, FloatTensor* x, FloatTensor* gamma
                 if (ok) ok = device_launch_(d, DK_BN_FINISH, C, &a);
                 if (part != 0UL) device_mem_free_(d, part, sizeof(double) * 3UL * C * S);
                 if (!ok) { tdev_drop_((FloatTensor*)st); return null; }
-                if (training) { tensor_dev_wrote_((void*)runMean); tensor_dev_wrote_((void*)runVar); }
+                if (training) { tensor_dev_wrote_raw_((void*)runMean); tensor_dev_wrote_raw_((void*)runVar); }
                 return tdev_norm_finish_(d, (FloatTensor*)x, (FloatTensor*)gamma, (FloatTensor*)beta, (FloatTensor*)st,
                                          C, P, 0UL, training, act);
             }
@@ -1704,11 +1704,11 @@ static ?&FloatTensor tdev_norm_finish_(int d, FloatTensor* x, FloatTensor* gamma
 ?&FloatTensor tdev_group_norm_(const &FloatTensor x, const &FloatTensor gamma, const &FloatTensor beta,
                                unsigned long C, unsigned long P, unsigned long G, float eps, int act) {
     int d;
-    unsafe { d = tensor_op_device_((void*)x, (void*)gamma, (void*)beta); }
+    unsafe { d = tensor_op_device_raw_((void*)x, (void*)gamma, (void*)beta); }
     if (d == DEVICE_CPU || C == 0UL || P == 0UL || G == 0UL || C % G != 0UL || act < 0 || act > 2) return null;
     unsafe {
         if (gamma->size != C || beta->size != C || x->size % (C * P) != 0UL) return null;
-        if (!tensor_dev_((void*)x, d) || !tensor_dev_((void*)gamma, d) || !tensor_dev_((void*)beta, d)) return null;
+        if (!tensor_dev_raw_((void*)x, d) || !tensor_dev_raw_((void*)gamma, d) || !tensor_dev_raw_((void*)beta, d)) return null;
         unsigned long U = (x->size / (C * P)) * G;
         match (tdev_1d_(2UL * U, d)) {
             case some(st): {
@@ -1795,28 +1795,28 @@ static void tdev_spatial_backward_(void* selfPtr) {
         FloatTensor* s = (FloatTensor*)selfPtr;
         FloatTensor* x = __tensor_parent(s, 0UL);
         int d = s->dev;
-        if (!x->requiresGrad || !tensor_dev_((void*)x, d)) return;
+        if (!x->requiresGrad || !tensor_dev_raw_((void*)x, d)) return;
         struct TdevSpatial_ g = tdev_sp_of_(__tensor_parent(s, 1UL));
         // every op here writes all of dx except global max pooling (one value
         // per plane) and non-tiling window pools: those need it zeroed
         int whole = !(g.kind == TDEV_GPOOL && g.mode == 0) &&
                     !(g.kind == TDEV_POOL && g.kH == g.sH && g.kW == g.sW && g.pH == 0UL && g.pW == 0UL &&
                       (g.oH * g.kH != g.H || g.oW * g.kW != g.W));
-        int m = whole ? tensor_grad_dev_acc_((void*)x, d) : tensor_grad_dev_((void*)x, d);
+        int m = whole ? tensor_grad_dev_acc_raw_((void*)x, d) : tensor_grad_dev_raw_((void*)x, d);
         if (!m) return;
         tdev_sp_launch_(d, &g, s->dgrad, x->dgrad, x->dbuf, x->size / (g.H * g.W), 1, whole && m == 2);
-        tensor_grad_dev_wrote_((void*)x);
+        tensor_grad_dev_wrote_raw_((void*)x);
     }
 }
 
 ?&FloatTensor tdev_spatial_(const &FloatTensor x, const &TdevSpatial_ g) {
     int d;
-    unsafe { d = tensor_op_device_((void*)x, (void*)0, (void*)0); }
+    unsafe { d = tensor_op_device_raw_((void*)x, (void*)0, (void*)0); }
     unsigned long plane = g.H * g.W;
     if (d == DEVICE_CPU || g.C == 0UL || plane == 0UL || g.oH * g.oW == 0UL) return null;
     unsafe {
         if (x->size % (g.C * plane) != 0UL) return null;
-        if (!tensor_dev_((void*)x, d)) return null;
+        if (!tensor_dev_raw_((void*)x, d)) return null;
         unsigned long batch = x->size / (g.C * plane);
         unsigned long planes = batch * g.C;
         match (tdev_2d_(batch, g.C * g.oH * g.oW, d, tdev_tag1_(d, (FloatTensor*)x))) {

@@ -84,7 +84,7 @@ void* tensor_arena_alloc_raw_(&TensorArena a, unsigned long bytes) {
     }
 }
 
-void tensor_arena_track_(&TensorArena a, void* t) {
+void tensor_arena_track_raw_(&TensorArena a, void* t) {
     unsafe {
         if (a.trackedCount == a.trackedCap) {
             unsigned long cap = a.trackedCap == 0UL ? 256UL : a.trackedCap * 2UL;
@@ -170,7 +170,7 @@ unsigned long TensorArena::used() const {
 // ── Add ──────────────────────────────────────────────────────────────────────
 &FloatTensor tensor_add_f32_(const &FloatTensor a, const &FloatTensor b) {
     match (tdev_binary_(a, b, 0)) { case some(o): { return o; } case null: { } }
-    unsafe { tensor_host_((void*)a); tensor_host_((void*)b); }
+    unsafe { tensor_host_raw_((void*)a); tensor_host_raw_((void*)b); }
     &FloatTensor out = __tensor_alloc_uninit_like(a);
     unsafe {
         __tensor_ew(EW_ADD, (const float*)a->data, (const float*)b->data, (float)0.0, (float*)out->data, out->size);
@@ -182,7 +182,7 @@ unsigned long TensorArena::used() const {
 // ── Sub ──────────────────────────────────────────────────────────────────────
 &FloatTensor tensor_sub_f32_(const &FloatTensor a, const &FloatTensor b) {
     match (tdev_binary_(a, b, 1)) { case some(o): { return o; } case null: { } }
-    unsafe { tensor_host_((void*)a); tensor_host_((void*)b); }
+    unsafe { tensor_host_raw_((void*)a); tensor_host_raw_((void*)b); }
     &FloatTensor out = __tensor_alloc_uninit_like(a);
     unsafe {
         __tensor_ew(EW_SUB, (const float*)a->data, (const float*)b->data, (float)0.0, (float*)out->data, out->size);
@@ -194,7 +194,7 @@ unsigned long TensorArena::used() const {
 // ── Mul (elementwise) ──────────────────────────────────────────────────────────
 &FloatTensor tensor_mul_f32_(const &FloatTensor a, const &FloatTensor b) {
     match (tdev_binary_(a, b, 2)) { case some(o): { return o; } case null: { } }
-    unsafe { tensor_host_((void*)a); tensor_host_((void*)b); }
+    unsafe { tensor_host_raw_((void*)a); tensor_host_raw_((void*)b); }
     &FloatTensor out = __tensor_alloc_uninit_like(a);
     unsafe {
         __tensor_ew(EW_MUL, (const float*)a->data, (const float*)b->data, (float)0.0, (float*)out->data, out->size);
@@ -206,7 +206,7 @@ unsigned long TensorArena::used() const {
 // ── Scale (multiply by a scalar constant) ─────────────────────────────────────
 &FloatTensor tensor_scale_f32_(const &FloatTensor a, float k) {
     match (tdev_unary_(a, EW_SCALE, k, (float)0.0, EW_ACC_SCALE, 0, k, 0)) { case some(o): { return o; } case null: { } }
-    unsafe { tensor_host_((void*)a); }
+    unsafe { tensor_host_raw_((void*)a); }
     &FloatTensor out = __tensor_alloc_uninit_like(a);
     unsafe {
         __tensor_ew(EW_SCALE, (const float*)a->data, (const float*)0, k, (float*)out->data, out->size);
@@ -225,7 +225,7 @@ unsigned long TensorArena::used() const {
 // ── Sum (full reduction to a 1-element tensor) ────────────────────────────────
 &FloatTensor tensor_sum_f32_(const &FloatTensor a) {
     match (tdev_sum_(a, (float)1.0)) { case some(o): { return o; } case null: { } }
-    unsafe { tensor_host_((void*)a); }
+    unsafe { tensor_host_raw_((void*)a); }
     unsigned long one[1];
     unsafe { one[0] = 1UL; }
     &FloatTensor out = __tensor_alloc(one, 1UL, 0);
@@ -249,7 +249,7 @@ unsigned long TensorArena::used() const {
 
 &FloatTensor tensor_matmul_f32_(const &FloatTensor a, const &FloatTensor b) {
     match (tdev_matmul_(a, b)) { case some(o): { return o; } case null: { } }
-    unsafe { tensor_host_((void*)a); tensor_host_((void*)b); }
+    unsafe { tensor_host_raw_((void*)a); tensor_host_raw_((void*)b); }
     unsigned long m; unsigned long k; unsigned long n;
     unsafe { m = a->shape[0]; k = a->shape[1]; n = b->shape[1]; }
     unsigned long shape[2];

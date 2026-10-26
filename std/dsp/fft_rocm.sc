@@ -55,7 +55,7 @@ static unsigned long g_rfft_scratch_bytes = 0UL;
 static int rfft_dim_ok_(unsigned long v) { return v > 0UL && v <= 2147483647UL; }
 
 static void* rfft_stream_() {
-    ?&void s = rocm_stream_handle();
+    ?&RocmNativeStream s = rocm_stream_handle();
     unsafe { return (void*)s; }
 }
 

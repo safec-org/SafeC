@@ -125,10 +125,10 @@ static int fft_host_z2z_(struct Complex* data, unsigned long nx, unsigned long n
     unsafe {
         // gpu_cuda's transfer path: large copies are staged through pinned
         // buffers by the thread pool, faster than the driver's pageable path
-        if (!cuda_copy_to_device((unsigned long)d, (const void*)data, bytes)) return 0;
+        if (!cuda_copy_to_device((unsigned long)d, ((const unsigned char*)data)[0..bytes])) return 0;
         if (cufftExecZ2Z(plan, (void*)(unsigned long)d, (void*)(unsigned long)d,
                          inverse ? FFT_INVERSE : FFT_FORWARD) != 0) return 0;
-        if (!cuda_copy_to_host((void*)data, (unsigned long)d, bytes)) return 0;
+        if (!cuda_copy_to_host(((unsigned char*)data)[0..bytes], (unsigned long)d)) return 0;
         if (inverse) {
             double inv = 1.0 / (double)len;
             unsigned long i = 0UL;

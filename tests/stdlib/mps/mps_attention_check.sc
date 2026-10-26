@@ -151,12 +151,12 @@ static struct MpsBuf upload(&Vec<float> v, int dtype) {
 
 // Reads n values of 'dtype' from 'buf' into 'out' as floats.
 static int download(struct MpsBuf buf, &Vec<float> out, unsigned long n, int dtype) {
-    if (dtype == 0) { unsafe { return buf.read((void*)out.at(0UL), n * 4UL); } }
+    if (dtype == 0) { unsafe { return buf.read(((unsigned char*)out.at(0UL))[0..n * 4UL]); } }
     struct Vec<unsigned short> bits = std::Vec::with_cap(n);
     unsigned long i = 0UL;
     while (i < n) { bits.push((unsigned short)0); i = i + 1UL; }
     int ok = 0;
-    unsafe { ok = buf.read((void*)bits.at(0UL), n * 2UL); }
+    unsafe { ok = buf.read(((unsigned char*)bits.at(0UL))[0..n * 2UL]); }
     i = 0UL;
     while (i < n) {
         unsigned short b = *bits.at(i);
@@ -263,7 +263,7 @@ int main() {
         unsafe {
             ok = l ? std::mps_linear_attention(dq, dk, dv, dout, 1UL, 40UL, 56UL, 64UL, 0)
                    : std::mps_flash_attention(dq, dk, dv, dout, 1UL, 40UL, 56UL, 64UL, (float)0.0, 0);
-            ok = ok && dout.read((void*)got.at(0UL), qn * 4UL);
+            ok = ok && dout.read(((unsigned char*)(void*)(got.at(0UL)))[0..qn * 4UL]);
         }
         double e = relerr(&got, &cpu);
         check(ok && e <= 1.0e-5, l ? "linear matches attention.h" : "flash matches attention.h");
@@ -299,10 +299,10 @@ int main() {
     std::mps_batch_end();
     check(okb, "batched attention encoded");
     struct Vec<float> want = ref_attn(&q, &k, &v, one, 1, 0);
-    unsafe { check(dout.read((void*)got.at(0UL), qn * 4UL) && relerr(&got, &want) <= 2.0e-5, "batched flash"); }
+    unsafe { check(dout.read(((unsigned char*)(void*)(got.at(0UL)))[0..qn * 4UL]) && relerr(&got, &want) <= 2.0e-5, "batched flash"); }
     want.free();
     want = ref_attn(&q, &k, &v, one, 0, 1);
-    unsafe { check(dout2.read((void*)got.at(0UL), qn * 4UL) && relerr(&got, &want) <= 2.0e-5, "batched linear"); }
+    unsafe { check(dout2.read(((unsigned char*)(void*)(got.at(0UL)))[0..qn * 4UL]) && relerr(&got, &want) <= 2.0e-5, "batched linear"); }
     want.free();
 
     // Rejected shapes

@@ -195,7 +195,7 @@ static void check_buffers() {
         struct WebGpuBuf f = WebGpuBuf::upload(a, n);
         check(f.valid() && f.bytes == 4UL * n && f.dtype == 0, "upload: valid fp32 buffer");
         check(f.read_f32(got, n) && relerr(got, a, n) == 0.0, "upload: fp32 round trip");
-        check(!f.read((&void)(void*)got, 4UL * n + 4UL), "read past the end refused");
+        check(!f.read(((unsigned char*)(void*)got)[0..4UL * n + 4UL]), "read past the end refused");
         int dt = WEBGPU_FP16;
         while (dt <= WEBGPU_BF16) {
             struct WebGpuBuf h = dt == WEBGPU_FP16 ? WebGpuBuf::upload_f16(a, n) : WebGpuBuf::upload_bf16(a, n);
@@ -215,7 +215,7 @@ static void check_buffers() {
             bits[0] = dt == WEBGPU_FP16 ? std::f32_to_fp16((float)1.5) : std::f32_to_bf16((float)1.5);
             bits[1] = dt == WEBGPU_FP16 ? std::f32_to_fp16((float)-2.0) : std::f32_to_bf16((float)-2.0);
             bits[2] = dt == WEBGPU_FP16 ? std::f32_to_fp16((float)0.25) : std::f32_to_bf16((float)0.25);
-            check(h.write((const &void)(const void*)&bits[0], 6UL) && h.read_f32(got, 4UL), "write 3 halves");
+            check(h.write(((const unsigned char*)(const void*)&bits[0])[0..6UL]) && h.read_f32(got, 4UL), "write 3 halves");
             check(got[0] == (float)1.5 && got[1] == (float)-2.0 && got[2] == (float)0.25, "write 3 halves: values");
             h.free(); gb.free();
             check(!h.valid() && h.bytes == 0UL, "free invalidates");
@@ -364,7 +364,7 @@ static float conv_err(const float* a, const float* b, unsigned long n) {
 
 static void conv_values(&FloatTensor t, float* out, int grad) {
     unsafe {
-        if (grad) tensor_grad_host_((void*)t); else tensor_host_((void*)t);
+        if (grad) tensor_grad_host_raw_((void*)t); else tensor_host_raw_((void*)t);
         unsigned long i = 0UL;
         while (i < t->size) { out[i] = grad ? t->grad[i] : t->data[i]; i = i + 1UL; }
     }

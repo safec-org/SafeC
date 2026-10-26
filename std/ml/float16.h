@@ -65,7 +65,7 @@ float bf16_to_f32(unsigned short b);
 #define HALF_CPU_BF16_DOT      8   // bf16 dot products (VDPBF16PS / BFDOT)
 int half_cpu_features();
 // "F16C, AVX512-BF16" and the like; "none" for none.
-const char* half_cpu_features_name();
+const &char half_cpu_features_name();
 
 // ── Bulk conversions (src and dst must not overlap) ─────────────────────────
 // Bit-identical to the scalar functions above for every input except NaN

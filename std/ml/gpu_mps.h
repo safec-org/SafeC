@@ -1,4 +1,5 @@
 #pragma once
+#include <std/erased.h>
 // SafeC Standard Library — GPU tensor ops via Metal (Apple Silicon/macOS).
 //
 // The "unified memory" piece of the ML story (MLX's actual selling point):
@@ -153,19 +154,23 @@ int mps_available();
 // is in flight (constructors reuse pool slots); free() exactly once, after
 // every batch reading it has ended. All constructors return an invalid
 // buffer without a Metal device.
+// An Objective-C / Metal object (id<MTLBuffer>, id<MTLDevice>, ...): opaque,
+// never constructed, only passed back to the Metal APIs it comes from.
+struct MtlObject { char opaque_; };
+
 struct MpsBuf {
-    void*         handle;
+    ?&MtlObject   handle;
     unsigned long bytes;
     int           dtype;
 
     int  valid() const;   // handle != null
     void free();          // back to the buffer pool; handle := null
-    // Copies the first 'bytes' (<= this.bytes) into 'dst'. Valid once every
+    // Copies the first dst.len (<= this.bytes) bytes into 'dst'. Valid once every
     // batch writing the buffer has ended (shared memory: no transfer). 1 = done.
-    int  read(&void dst, unsigned long bytes) const;
-    // Copies 'bytes' (<= this.bytes) from 'src' into the buffer: valid while no
+    int  read([]unsigned char dst) const;
+    // Copies src.len bytes (<= this.bytes) from 'src' into the buffer: valid while no
     // batch that reads or writes it is in flight. 1 = done.
-    int  write(const &void src, unsigned long bytes);
+    int  write([]const unsigned char src);
     // The buffer's memory as the CPU sees it (shared storage: the same bytes
     // the GPU reads and writes), null for an invalid buffer or without Metal.
     // Read or write it only while no batch using the buffer is in flight.
@@ -247,9 +252,9 @@ int  mps_batch_is_active();
 // batch.
 void mps_batch_submit();
 
-// Type-erased form behind mps_batch_register_finalize (below).
-typedef fn void(void* ctx) MpsFinalizeFn;
-void mps_batch_register_finalize_raw_(MpsFinalizeFn finalizeFn, void* ctx);
+// Type-erased form behind mps_batch_register_finalize (below; see std/erased.h).
+typedef fn void(?&Erased ctx) MpsFinalizeFn;
+void mps_batch_register_finalize_raw_(MpsFinalizeFn finalizeFn, ?&Erased ctx);
 
 // Register a callback to run once, in registration order, after
 // mps_batch_end()'s single wait and raw GPU->CPU readback of every
@@ -261,7 +266,7 @@ void mps_batch_register_finalize_raw_(MpsFinalizeFn finalizeFn, void* ctx);
 // a batch.
 generic<T>
 void mps_batch_register_finalize(fn void(?&T) finalizeFn, ?&T ctx) {
-    unsafe { mps_batch_register_finalize_raw_((MpsFinalizeFn)finalizeFn, (void*)ctx); }
+    unsafe { mps_batch_register_finalize_raw_((MpsFinalizeFn)finalizeFn, (?&Erased)ctx); }
 }
 
 // Same computation as mps_matmul_f32/mps_relu_f32, but the primary input
@@ -699,19 +704,19 @@ unsigned long mps_linear_attn_state_bytes(unsigned long numHeads, unsigned long 
 // The MTLDevice and the MTLCommandQueue every op above runs on; null without
 // a Metal device. Command buffers another library commits to the queue run
 // in commit order with this backend's batches.
-?&void mps_device_handle();
-?&void mps_queue_handle();
+?&MtlObject mps_device_handle();
+?&MtlObject mps_queue_handle();
 
 // Runs kernel 'kernel' of the embedded library (gpu_mps_kernels.metal) on
 // 'groups' threadgroups of 'groupSize' threads (one dimension): buffers
-// bufs[0 .. count) bound at indices 0 .. count-1 and, when paramBytes > 0,
-// 'params' (copied at encode time) at index 'count'. Encoded onto the open
+// bufs bound at indices 0 .. bufs.len-1 and, when params isn't empty, its
+// bytes (copied at encode time) at index bufs.len. Encoded onto the open
 // batch, or run and waited for outside one, like mps_gemm. The pipeline is
 // built on first use and cached by name (at most 64 names; the cache keeps
 // the 'kernel' pointer, so pass a string literal). 1 = done/encoded,
 // 0 = unknown kernel, an invalid buffer, a group larger than the kernel
 // allows, or no Metal device.
-int mps_dispatch(const &char kernel, const &MpsBuf bufs, unsigned long count, const &void params,
-                 unsigned long paramBytes, unsigned long groups, unsigned long groupSize);
+int mps_dispatch(const &char kernel, []const MpsBuf bufs, []const unsigned char params,
+                 unsigned long groups, unsigned long groupSize);
 
 } // namespace std

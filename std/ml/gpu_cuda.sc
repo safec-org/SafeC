@@ -1117,14 +1117,14 @@ static int cuda_read_bytes_(void* host, unsigned long long src, unsigned long by
     }
 }
 
-int cuda_copy_to_device(unsigned long dev, const &void host, unsigned long bytes) {
-    if (dev == 0UL || bytes == 0UL || !cuda_ensure_()) return 0;
-    unsafe { return cuda_write_bytes_((unsigned long long)dev, (const void*)host, bytes); }
+int cuda_copy_to_device(unsigned long dev, []const unsigned char host) {
+    if (dev == 0UL || host.len == 0UL || !cuda_ensure_()) return 0;
+    unsafe { return cuda_write_bytes_((unsigned long long)dev, (const void*)host.ptr, host.len); }
 }
 
-int cuda_copy_to_host(&void host, unsigned long dev, unsigned long bytes) {
-    if (dev == 0UL || bytes == 0UL || !cuda_ensure_()) return 0;
-    unsafe { return cuda_read_bytes_((void*)host, (unsigned long long)dev, bytes); }
+int cuda_copy_to_host([]unsigned char host, unsigned long dev) {
+    if (dev == 0UL || host.len == 0UL || !cuda_ensure_()) return 0;
+    unsafe { return cuda_read_bytes_((void*)host.ptr, (unsigned long long)dev, host.len); }
 }
 
 struct CudaBuf CudaBuf::alloc(unsigned long n) {
@@ -1508,9 +1508,9 @@ int cuda_copy_rows(struct CudaBuf src, unsigned long srcOff, unsigned long srcSt
 
 // ── Interop ──────────────────────────────────────────────────────────────────
 
-?&void cuda_stream_handle() {
-    if (!cuda_ensure_()) return (void*)0;
-    return g_cuda_stream;
+?&CudaNativeStream cuda_stream_handle() {
+    if (!cuda_ensure_()) return null;
+    unsafe { return (?&CudaNativeStream)g_cuda_stream; }
 }
 
 int cuda_tf32_enabled() { return g_cuda_tf32; }
@@ -1525,9 +1525,9 @@ int cuda_sm_count() {
     return g_cuda_sms;
 }
 
-?&void cuda_load_module(const &char source, const &char name) {
-    if (!cuda_ensure_()) return (void*)0;
-    unsafe { return cuda_compile_module_((const char*)source, (const char*)name); }
+?&CudaNativeModule cuda_load_module(const &char source, const &char name) {
+    if (!cuda_ensure_()) return null;
+    unsafe { return (?&CudaNativeModule)cuda_compile_module_((const char*)source, (const char*)name); }
 }
 
 // ── Graphs ───────────────────────────────────────────────────────────────────
@@ -1684,111 +1684,6 @@ int cuda_matmul_f32(const &float a, const &float b, &float out,
 int cuda_matmul_f32_blas(const &float a, const &float b, &float out,
                          unsigned long M, unsigned long K, unsigned long N) {
     return cuda_host_matmul_(a, b, out, M, K, N, 1);
-}
-
-// ── Raw device pointers (older API) ──────────────────────────────────────────
-
-int cuda_persistent_available() { return cuda_ensure_(); }
-
-?&void cuda_upload_persistent(const &float data, unsigned long bytes) {
-    unsigned long long p = cuda_alloc_bytes_(bytes);
-    if (p == 0ULL) return (void*)0;
-    unsafe {
-        if (!cuda_write_bytes_(p, (const void*)data, bytes)) { cuMemFree_v2(p); return (void*)0; }
-        return (void*)(unsigned long)p;
-    }
-}
-
-void cuda_release_persistent(&void devPtr) {
-    if (devPtr == (void*)0 || !cuda_ensure_()) return;
-    unsafe { cuMemFree_v2((unsigned long long)(unsigned long)devPtr); }
-}
-
-int cuda_matmul_f32_persistent(&void devA, &void devB, &float out,
-                                unsigned long M, unsigned long K, unsigned long N) {
-    if (devA == (void*)0 || devB == (void*)0 || !cuda_gemm_dims_ok_(M, N, K) || !cuda_ensure_()) return 0;
-    unsigned long bytesC = checked_mul_size(checked_mul_size(M, N), sizeof(float));
-    unsigned long long dc = cuda_alloc_bytes_(bytesC);
-    if (dc == 0ULL) return 0;
-    int ok = 0;
-    unsafe {
-        ok = cuda_gemm_raw_((unsigned long)devA, 0, (unsigned long)devB, 0, (unsigned long)dc, M, N, K) &&
-             cuda_read_bytes_((void*)out, dc, bytesC);
-        cuMemFree_v2(dc);
-    }
-    return ok;
-}
-
-int cuda_sgd_update_f32(&void devW, &void devGrad, float lr, unsigned long n) {
-    if (devW == (void*)0 || devGrad == (void*)0 || n == 0UL || n > 4294967295UL || !cuda_ensure_()) return 0;
-    unsafe { return cuda_sgd_raw_(K_SGD, (unsigned long)devW, (unsigned long)devGrad, lr, n); }
-}
-
-// ── fp16 / bf16 ──────────────────────────────────────────────────────────────
-
-extern void* malloc(size_t size);
-extern void  free(void* ptr);
-
-static void* cuda_upload_16_(const float* data, unsigned long n, int bf) {
-    if (n == 0UL) return (void*)0;
-    unsafe {
-        unsigned short* tmp = (unsigned short*)malloc(checked_mul_size(n, 2UL));
-        if (tmp == (unsigned short*)0) return (void*)0;
-        if (bf) f32_to_bf16_bulk(data, tmp, n);
-        else f32_to_fp16_bulk(data, tmp, n);
-        void* buf = cuda_upload_persistent((const float*)tmp, n * 2UL);
-        free((void*)tmp);
-        return buf;
-    }
-}
-
-?&void cuda_upload_f16_persistent(const &float data, unsigned long n) { return cuda_upload_16_(data, n, 0); }
-?&void cuda_upload_bf16_persistent(const &float data, unsigned long n) { return cuda_upload_16_(data, n, 1); }
-
-static int cuda_matmul_16_(int kernel, void* devA, void* devB, unsigned short* out,
-                           unsigned long M, unsigned long K, unsigned long N) {
-    if (devA == (void*)0 || devB == (void*)0 || !cuda_gemm_dims_ok_(M, N, K) || !cuda_ensure_()) return 0;
-    unsigned long bytesC = checked_mul_size(checked_mul_size(M, N), 2UL);
-    unsigned long long dc = cuda_alloc_bytes_(bytesC);
-    if (dc == 0ULL) return 0;
-    int ok = 0;
-    unsafe {
-        void* pa = devA;
-        void* pb = devB;
-        void* pc = (void*)(unsigned long)dc;
-        int m = (int)M;
-        int n = (int)N;
-        int k = (int)K;
-        void* params[6];
-        params[0] = (void*)&pa; params[1] = (void*)&pb; params[2] = (void*)&pc;
-        params[3] = (void*)&m; params[4] = (void*)&n; params[5] = (void*)&k;
-        ok = cuLaunchKernel(g_cuda_fn[kernel],
-                            (unsigned int)((N + 15UL) / 16UL), (unsigned int)((M + 15UL) / 16UL), 1U,
-                            16U, 16U, 1U, 0U, g_cuda_stream, &params[0], (void**)0) == CUDA_OK &&
-             cuda_read_bytes_((void*)out, dc, bytesC);
-        cuMemFree_v2(dc);
-    }
-    return ok;
-}
-
-int cuda_matmul_f16_persistent(&void devA, &void devB, &unsigned short out,
-                                unsigned long M, unsigned long K, unsigned long N) {
-    return cuda_matmul_16_(K_MATMUL_F16, devA, devB, out, M, K, N);
-}
-
-int cuda_matmul_bf16_persistent(&void devA, &void devB, &unsigned short out,
-                                 unsigned long M, unsigned long K, unsigned long N) {
-    return cuda_matmul_16_(K_MATMUL_BF16, devA, devB, out, M, K, N);
-}
-
-int cuda_sgd_update_f16(&void devW, &void devGrad, float lr, unsigned long n) {
-    if (devW == (void*)0 || devGrad == (void*)0 || n == 0UL || n > 4294967295UL || !cuda_ensure_()) return 0;
-    unsafe { return cuda_sgd_raw_(K_SGD_F16, (unsigned long)devW, (unsigned long)devGrad, lr, n); }
-}
-
-int cuda_sgd_update_bf16(&void devW, &void devGrad, float lr, unsigned long n) {
-    if (devW == (void*)0 || devGrad == (void*)0 || n == 0UL || n > 4294967295UL || !cuda_ensure_()) return 0;
-    unsafe { return cuda_sgd_raw_(K_SGD_BF16, (unsigned long)devW, (unsigned long)devGrad, lr, n); }
 }
 
 // ── fp16 / bf16 buffers (CudaHalfBuf) ────────────────────────────────────────

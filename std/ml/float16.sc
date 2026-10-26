@@ -221,7 +221,7 @@ int half_cpu_features() {
     return c;
 }
 
-const char* half_cpu_features_name() {
+const &char half_cpu_features_name() {
     int c = half_cpu_features();
 #if defined(__x86_64__)
     if ((c & HALF_CPU_F16_ARITH) != 0 && (c & HALF_CPU_BF16_CONVERT) != 0) return "F16C, AVX512-FP16, AVX512-BF16";

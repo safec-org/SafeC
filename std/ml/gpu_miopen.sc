@@ -80,7 +80,7 @@ static unsigned long g_mp_wsBytes[MIO_PLANS];
 static int   g_mp_evict = 0;
 
 static void* mio_stream_() {
-    ?&void s = rocm_stream_handle();
+    ?&RocmNativeStream s = rocm_stream_handle();
     unsafe { return (void*)s; }
 }
 

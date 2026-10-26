@@ -822,7 +822,7 @@ void WebGpuBackend::release(unsigned long handle) {
     dwg_put_(unit);
 }
 
-int WebGpuBackend::upload_bytes(unsigned long dst, const void* src, unsigned long bytes) {
+int WebGpuBackend::upload_bytes_(unsigned long dst, const void* src, unsigned long bytes) {
     if (bytes == 0UL) return 1;
     if (!dwg_ensure_()) return 0;
     dst = dev_addr_(dst);
@@ -850,10 +850,10 @@ int WebGpuBackend::upload_bytes(unsigned long dst, const void* src, unsigned lon
 }
 
 int WebGpuBackend::upload(unsigned long dst, const &float src, unsigned long n) {
-    unsafe { return WebGpuBackend::upload_bytes(dst, (const void*)src, n * 4UL); }
+    unsafe { return WebGpuBackend::upload_bytes_(dst, (const void*)src, n * 4UL); }
 }
 
-int WebGpuBackend::download_bytes(void* dst, unsigned long src, unsigned long bytes) {
+int WebGpuBackend::download_bytes_(void* dst, unsigned long src, unsigned long bytes) {
     if (bytes == 0UL) return 1;
     if (!dwg_ensure_()) return 0;
     src = dev_addr_(src);
@@ -884,7 +884,7 @@ int WebGpuBackend::download_bytes(void* dst, unsigned long src, unsigned long by
 }
 
 int WebGpuBackend::download(&float dst, unsigned long src, unsigned long n) {
-    unsafe { return WebGpuBackend::download_bytes((void*)dst, src, n * 4UL); }
+    unsafe { return WebGpuBackend::download_bytes_((void*)dst, src, n * 4UL); }
 }
 
 // n 32-bit words, bit-exact (wk_copy: WebGPU copies within one buffer only

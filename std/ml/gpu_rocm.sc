@@ -1798,9 +1798,9 @@ int rocm_sync() {
     unsafe { return hipStreamSynchronize(g_rocm_stream) == ROCM_HIP_OK; }
 }
 
-?&void rocm_stream_handle() {
+?&RocmNativeStream rocm_stream_handle() {
     if (!rocm_ensure_()) return null;
-    unsafe { return (?&void)g_rocm_stream; }
+    unsafe { return (?&RocmNativeStream)g_rocm_stream; }
 }
 
 int rocm_copy(struct RocmBuf src, unsigned long srcOff, struct RocmBuf dst, unsigned long dstOff, unsigned long n) {

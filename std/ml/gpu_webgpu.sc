@@ -40,7 +40,7 @@ static struct WebGpuBuf wgb_new_(unsigned long bytes, int dtype, const void* src
     if (h == 0UL) return wgb_make_(0UL, 0UL, dtype);
     struct WebGpuBuf b = wgb_make_(dev_tagged_(h, (unsigned long)dtype), bytes, dtype);
     unsafe {
-        if (src != (const void*)0 && !b.write((const &void)src, bytes)) { b.free(); return wgb_make_(0UL, 0UL, dtype); }
+        if (src != (const void*)0 && !b.write(((const unsigned char*)src)[0..bytes])) { b.free(); return wgb_make_(0UL, 0UL, dtype); }
     }
     return b;
 }
@@ -53,19 +53,20 @@ void WebGpuBuf::free() {
     self.bytes = 0UL;
 }
 
-int WebGpuBuf::read(&void dst, unsigned long bytes) const {
-    if (self.handle == 0UL || bytes > self.bytes) return 0;
-    unsafe { return WebGpuBackend::download_bytes((void*)dst, dev_addr_(self.handle), bytes); }
+int WebGpuBuf::read([]unsigned char dst) const {
+    unsigned long bytes = dst.len;
+    if (self.handle == 0UL || bytes > self.bytes || bytes == 0UL) return 0;
+    unsafe { return WebGpuBackend::download_bytes_((void*)dst.ptr, dev_addr_(self.handle), bytes); }
 }
 
 int WebGpuBuf::read_f32(&float dst, unsigned long n) const {
     unsigned long es = wgb_esize_(self.dtype);
     if (self.handle == 0UL || es == 0UL || n * es > self.bytes) return 0;
-    if (self.dtype == 0) { unsafe { return self.read((&void)(void*)dst, 4UL * n); } }
+    if (self.dtype == 0) { unsafe { return self.read(((unsigned char*)(void*)dst)[0..4UL * n]); } }
     unsafe {
         unsigned short* bits = (unsigned short*)malloc(2UL * n + 2UL);
         if (bits == (unsigned short*)0) return 0;
-        int ok = self.read((&void)(void*)bits, 2UL * n);
+        int ok = self.read(((unsigned char*)(void*)((void*)bits))[0..2UL * n]);
         if (ok && self.dtype == WEBGPU_FP16) fp16_to_f32_bulk((const &unsigned short)bits, dst, n);
         if (ok && self.dtype == WEBGPU_BF16) bf16_to_f32_bulk((const &unsigned short)bits, dst, n);
         free((void*)bits);
@@ -74,9 +75,12 @@ int WebGpuBuf::read_f32(&float dst, unsigned long n) const {
 }
 
 // Whole words go to the device: an odd tail is padded within the buffer.
-int WebGpuBuf::write(const &void src, unsigned long bytes) {
-    if (self.handle == 0UL || bytes > self.bytes) return 0;
-    if ((bytes & 3UL) == 0UL) { unsafe { return WebGpuBackend::upload_bytes(dev_addr_(self.handle), (const void*)src, bytes); } }
+int WebGpuBuf::write([]const unsigned char srcs) {
+    unsigned long bytes = srcs.len;
+    const void* src;
+    unsafe { src = (const void*)srcs.ptr; }
+    if (self.handle == 0UL || bytes > self.bytes || bytes == 0UL) return 0;
+    if ((bytes & 3UL) == 0UL) { unsafe { return WebGpuBackend::upload_bytes_(dev_addr_(self.handle), (const void*)src, bytes); } }
     unsafe {
         unsigned long words = (bytes + 3UL) & ~3UL;
         unsigned char* tmp = (unsigned char*)malloc(words);
@@ -84,7 +88,7 @@ int WebGpuBuf::write(const &void src, unsigned long bytes) {
         memcpy((void*)tmp, (const void*)src, bytes);
         unsigned long i = bytes;
         while (i < words) { tmp[i] = (unsigned char)0; i = i + 1UL; }
-        int ok = WebGpuBackend::upload_bytes(dev_addr_(self.handle), (const void*)tmp, words);
+        int ok = WebGpuBackend::upload_bytes_(dev_addr_(self.handle), (const void*)tmp, words);
         free((void*)tmp);
         return ok;
     }
@@ -176,7 +180,7 @@ static int wgb_host_ew_(int ew, int map, const &float a, const ?&float b, float 
             ok = wgb_launch_(device_ew_kernel_(ew), n, x);
         }
     }
-    unsafe { if (ok) ok = bo.read((&void)(void*)out, 4UL * n); }
+    unsafe { if (ok) ok = bo.read(((unsigned char*)(void*)((void*)out))[0..4UL * n]); }
     ba.free(); bb.free(); bo.free();
     return ok;
 }
@@ -204,7 +208,7 @@ int webgpu_sum_f32(const &float a, &float out, unsigned long n) {
         unsafe { x.p[0] = ba.handle; x.p[1] = bo.handle; }
         ok = wgb_launch_(DK_SUM, n, x);
     }
-    unsafe { if (ok) ok = bo.read((&void)(void*)out, 4UL); }
+    unsafe { if (ok) ok = bo.read(((unsigned char*)(void*)((void*)out))[0..4UL]); }
     ba.free(); bo.free();
     return ok;
 }
@@ -216,7 +220,7 @@ int webgpu_matmul_f32(const &float a, const &float b, &float out,
     struct WebGpuBuf bb = WebGpuBuf::upload(b, K * N);
     struct WebGpuBuf bo = WebGpuBuf::alloc(M * N, 0);
     int ok = ba.valid() && bb.valid() && bo.valid() && webgpu_matmul(ba, bb, bo, M, K, N);
-    unsafe { if (ok) ok = bo.read((&void)(void*)out, 4UL * M * N); }
+    unsafe { if (ok) ok = bo.read(((unsigned char*)(void*)((void*)out))[0..4UL * M * N]); }
     ba.free(); bb.free(); bo.free();
     return ok;
 }

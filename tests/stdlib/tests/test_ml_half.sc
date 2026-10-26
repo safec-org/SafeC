@@ -1,6 +1,7 @@
 // fp16 / bf16 on the CPU: hardware-feature detection, the bulk conversions
 // (hardware paths against the scalar reference, bit for bit), and the
 // mixed-precision batch helpers in tensor_half.h.
+#include <std/str.h>
 #include <std/test/test.h>
 #include <std/ml/float16.h>
 #include <std/ml/tensor_half.h>
@@ -66,8 +67,7 @@ void t_half_features() {
     ASSERT_TRUE(c >= 0 && c < 16);
     ASSERT_EQ(c & HALF_CPU_BF16_CONVERT ? 1 : 0, c & HALF_CPU_BF16_DOT ? 1 : 0);
     ASSERT_EQ(half_cpu_features(), c);          // cached
-    const char* name = half_cpu_features_name();
-    unsafe { ASSERT_TRUE(name[0] != (char)0); }
+    ASSERT_TRUE(str_len(half_cpu_features_name()) > 0UL);
 #if defined(__aarch64__)
     ASSERT_TRUE((c & HALF_CPU_F16_CONVERT) != 0);
 #endif

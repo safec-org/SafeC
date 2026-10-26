@@ -191,9 +191,9 @@ static void check_chain_() {
     // queued behind the chain: b := a; the chain read b first
     struct SpirvBuf copy = SpirvBuf::alloc(n, 0);
     ok = ok && spirv_add(bb, ba, copy, n);   // copy = a + b(old)
-    unsafe { ok = ok && bb.write((const &void)a.at(0UL), 4UL * n); }
+    unsafe { ok = ok && bb.write(((const unsigned char*)a.at(0UL))[0..4UL * n]); }
     struct Vec<float> o = zeros(n);
-    unsafe { ok = ok && t.read((&void)o.at(0UL), 4UL * n); }
+    unsafe { ok = ok && t.read(((unsigned char*)o.at(0UL))[0..4UL * n]); }
     double e = relerr(&o, &r, n);
     unsafe { if (!ok || e > 1.0e-6) printf("    chain: ran %d, error %g\n", ok, e); }
     check(ok && e <= 1.0e-6, "buffer chain");
@@ -201,10 +201,10 @@ static void check_chain_() {
     struct Vec<float> cr = zeros(n);
     i = 0UL;
     while (i < n) { *cr.at(i) = *a.at(i) + *b.at(i); i = i + 1UL; }
-    unsafe { ok = copy.read((&void)c.at(0UL), 4UL * n); }
+    unsafe { ok = copy.read(((unsigned char*)(void*)(c.at(0UL)))[0..4UL * n]); }
     check(ok && relerr(&c, &cr, n) <= 1.0e-6, "ops queued before a write read the old contents");
     struct Vec<float> nb = zeros(n);
-    unsafe { ok = bb.read((&void)nb.at(0UL), 4UL * n); }
+    unsafe { ok = bb.read(((unsigned char*)(void*)(nb.at(0UL)))[0..4UL * n]); }
     check(ok && relerr(&nb, &a, n) == 0.0, "write lands");
     ba.free(); bb.free(); t.free(); copy.free();
     check(!ba.valid() && !t.valid(), "free");
@@ -246,11 +246,11 @@ static void check_ieee_() {
     struct SpirvBuf bg = SpirvBuf::alloc(4UL, 0);
     struct SpirvBuf bs = SpirvBuf::alloc(4UL, 0);
     int ok = 0;
-    unsafe { ok = bg.write((const &void)&g[0], 16UL) && bs.write((const &void)&st[0], 16UL); }
+    unsafe { ok = bg.write(((const unsigned char*)(const void*)(&g[0]))[0..16UL]) && bs.write(((const unsigned char*)(const void*)(&st[0]))[0..16UL]); }
     struct DevArgs a = dev_args_();
     unsafe { a.p[0] = bg.handle; a.p[1] = bs.handle; }
     ok = ok && device_launch_(DEVICE_VULKAN, DK_AMP_UNSCALE, 4UL, &a);
-    unsafe { ok = ok && bs.read((&void)&st[0], 16UL); }
+    unsafe { ok = ok && bs.read(((unsigned char*)(void*)(&st[0]))[0..16UL]); }
     unsafe { check(ok && st[2] == (float)1.0, "a non-finite gradient raises the overflow flag"); }
     bg.free(); bs.free();
 }
@@ -270,7 +270,7 @@ static void check_order_() {
     int ok = x.valid() && one.valid() && y.valid();
     int k = 0;
     while (k < 200 && ok) { ok = spirv_add(x, one, y, n) && spirv_add(y, one, x, n); k = k + 1; }
-    unsafe { ok = ok && x.read((&void)z.at(0UL), 4UL * n); }
+    unsafe { ok = ok && x.read(((unsigned char*)(void*)(z.at(0UL)))[0..4UL * n]); }
     unsigned long wrong = 0UL;
     i = 0UL;
     while (i < n) { if (*z.at(i) != (float)400.0) wrong = wrong + 1UL; i = i + 1UL; }

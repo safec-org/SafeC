@@ -740,11 +740,11 @@ static void check_transfers() {
         check(maxdiff(&h2, &back) == 0.0f, "large write values");
         back.free();
         // raw byte copies at an offset
-        unsafe { check(std::cuda_copy_to_device(d.dev + 4UL, (const void*)h.at(0UL), (n - 1UL) * 4UL), "cuda_copy_to_device ran"); }
+        unsafe { check(std::cuda_copy_to_device(d.dev + 4UL, ((const unsigned char*)h.at(0UL))[0..(n - 1UL) * 4UL]), "cuda_copy_to_device ran"); }
         struct Vec<float> raw = std::Vec::with_cap(n);
         unsigned long k = 0UL;
         while (k < n) { unsafe { raw.push(0.0f); } k = k + 1UL; }
-        unsafe { check(std::cuda_copy_to_host((void*)raw.at(0UL), d.dev + 4UL, (n - 1UL) * 4UL), "cuda_copy_to_host ran"); }
+        unsafe { check(std::cuda_copy_to_host(((unsigned char*)raw.at(0UL))[0..(n - 1UL) * 4UL], d.dev + 4UL), "cuda_copy_to_host ran"); }
         unsafe { check(*raw.at(0UL) == *h.at(0UL) && *raw.at(n - 2UL) == *h.at(n - 2UL), "raw byte copies at an offset"); }
         raw.free(); h.free(); h2.free();
         d.free();
@@ -1532,54 +1532,8 @@ int main() {
     if (rel < 0.0) rel = -rel;
     check(rel < 1e-5, "sum_f32 value");
     unsafe {
-        void* pa = std::cuda_upload_persistent(ga.at(0UL), m * k * 4UL);
-        void* pb = std::cuda_upload_persistent(gb.at(0UL), k * nn * 4UL);
-        check(pa != (void*)0 && pb != (void*)0, "persistent upload");
-        check(std::cuda_matmul_f32_persistent(pa, pb, hc.at(0UL), m, k, nn), "persistent matmul ran");
-        check(maxdiff(&hc, &ref) < 1e-4f, "persistent matmul values");
-        check(std::cuda_sgd_update_f32(pa, pa, 1.0f, m * k), "persistent sgd");   // pa -= pa -> 0
-        check(std::cuda_matmul_f32_persistent(pa, pb, hc.at(0UL), m, k, nn), "persistent matmul after sgd");
-        float zmax = 0.0f;
-        i = 0UL;
-        while (i < m * nn) { float v = *hc.at(i); if (v < 0.0f) v = -v; if (v > zmax) zmax = v; i = i + 1UL; }
-        check(zmax == 0.0f, "persistent sgd values");
-        std::cuda_release_persistent(pa);
-        std::cuda_release_persistent(pb);
-
-        // fp16 / bf16: compare with the fp32 product at 16-bit tolerance
-        ?&heap unsigned short rawq = std::alloc(m * nn * 2UL);
-        ?&heap float backq = std::alloc(m * nn * 4UL);
-        unsigned short* raw = (unsigned short*)rawq;
-        float* back = (float*)backq;
-        int bf = 0;
-        while (bf < 2) {
-            void* ha = bf ? std::cuda_upload_bf16_persistent(ga.at(0UL), m * k)
-                          : std::cuda_upload_f16_persistent(ga.at(0UL), m * k);
-            void* hb = bf ? std::cuda_upload_bf16_persistent(gb.at(0UL), k * nn)
-                          : std::cuda_upload_f16_persistent(gb.at(0UL), k * nn);
-            int ran = bf ? std::cuda_matmul_bf16_persistent(ha, hb, raw, m, k, nn)
-                         : std::cuda_matmul_f16_persistent(ha, hb, raw, m, k, nn);
-            check(ran, bf ? "bf16 matmul ran" : "f16 matmul ran");
-            if (bf) std::bf16_to_f32_bulk((const unsigned short*)raw, back, m * nn);
-            else std::fp16_to_f32_bulk((const unsigned short*)raw, back, m * nn);
-            float err = 0.0f;
-            i = 0UL;
-            while (i < m * nn) { float d = back[i] - *ref.at(i); if (d < 0.0f) d = -d; if (d > err) err = d; i = i + 1UL; }
-            check(err < (bf ? 0.05f : 0.01f), bf ? "bf16 matmul values" : "f16 matmul values");
-            check(bf ? std::cuda_sgd_update_bf16(ha, ha, 1.0f, m * k) : std::cuda_sgd_update_f16(ha, ha, 1.0f, m * k),
-                  bf ? "bf16 sgd" : "f16 sgd");
-            int ran2 = bf ? std::cuda_matmul_bf16_persistent(ha, hb, raw, m, k, nn)
-                          : std::cuda_matmul_f16_persistent(ha, hb, raw, m, k, nn);
-            int allZero = ran2;
-            i = 0UL;
-            while (i < m * nn) { if ((raw[i] & (unsigned short)32767) != (unsigned short)0) allZero = 0; i = i + 1UL; }
-            check(allZero, bf ? "bf16 sgd values" : "f16 sgd values");
-            std::cuda_release_persistent(ha);
-            std::cuda_release_persistent(hb);
-            bf = bf + 1;
-        }
-        std::dealloc(rawq);
-        std::dealloc(backq);
+        // (the raw device-pointer API — cuda_upload_persistent & co. — was
+        // removed; CudaBuf / CudaHalfBuf cover it and are checked above)
     }
     dg.free(); w1.free(); w2.free();
     hv.free();

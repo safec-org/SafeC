@@ -235,7 +235,10 @@ int  rocm_graph_launch(struct RocmGraph g);   // queued like any other op
 // The hipStream_t every op above is queued on (MIOpen and hipFFT queue their
 // work on it too); null if there is no GPU. Work another library queues on
 // it is ordered with this backend's ops and recorded by graph capture.
-?&void rocm_stream_handle();
+// Opaque: never constructed, only passed back to HIP / MIOpen / hipFFT
+// (a ?&RocmNativeStream converts to their C 'void*' parameters).
+struct RocmNativeStream { char opaque_; };   // hipStream_t
+?&RocmNativeStream rocm_stream_handle();
 
 // ── Attention ────────────────────────────────────────────────────────────────
 // fp32, batched over heads: q and out are [heads][seqLen][headDim], k and v

@@ -702,10 +702,10 @@ void mps_batch_begin() {
     }
 }
 
-void mps_batch_register_finalize_raw_(MpsFinalizeFn finalizeFn, void* ctx) {
+void mps_batch_register_finalize_raw_(MpsFinalizeFn finalizeFn, ?&Erased ctx) {
     if (__mps_finalize_count >= (unsigned long)MPS_BATCH_MAX_FINALIZE) return;
     __mps_finalize_fn[__mps_finalize_count] = finalizeFn;
-    __mps_finalize_ctx[__mps_finalize_count] = ctx;
+    unsafe { __mps_finalize_ctx[__mps_finalize_count] = (void*)ctx; }
     __mps_finalize_count = __mps_finalize_count + 1UL;
 }
 
@@ -940,7 +940,7 @@ int mps_sum_f32(const &float a, &float out, unsigned long n) {
             }
             struct __MpsSumFinalizeCtx* ctx = (struct __MpsSumFinalizeCtx*)alloc_raw_(sizeof(struct __MpsSumFinalizeCtx));
             ctx->partials = partials; ctx->out = out; ctx->numGroups = numGroups;
-            mps_batch_register_finalize_raw_((MpsFinalizeFn)__mps_sum_finalize, (void*)ctx);
+            mps_batch_register_finalize_raw_((MpsFinalizeFn)__mps_sum_finalize, (?&Erased)ctx);
             return 1;
         }
 
@@ -1006,7 +1006,7 @@ int mps_sum_f32_chained(struct MpsBuf bufA, &float out, unsigned long n) {
         }
         struct __MpsSumFinalizeCtx* ctx = (struct __MpsSumFinalizeCtx*)alloc_raw_(sizeof(struct __MpsSumFinalizeCtx));
         ctx->partials = partials; ctx->out = out; ctx->numGroups = numGroups;
-        mps_batch_register_finalize_raw_((MpsFinalizeFn)__mps_sum_finalize, (void*)ctx);
+        mps_batch_register_finalize_raw_((MpsFinalizeFn)__mps_sum_finalize, (?&Erased)ctx);
         return 1;
     }
 }
@@ -1806,8 +1806,10 @@ void MpsBuf::free() {
     self.bytes = 0UL;
 }
 
-int MpsBuf::read(&void dst, unsigned long bytes) const {
+int MpsBuf::read([]unsigned char dsts) const {
+    unsigned long bytes = dsts.len;
     unsafe {
+        void* dst = (void*)dsts.ptr;
         if (self.handle == (void*)0 || bytes > self.bytes) return 0;
         MMsg0 msg0 = (MMsg0)objc_msgSend;
         void* src = msg0(self.handle, __sel_contents);
@@ -1827,8 +1829,10 @@ int MpsBuf::read(&void dst, unsigned long bytes) const {
     }
 }
 
-int MpsBuf::write(const &void src, unsigned long bytes) {
+int MpsBuf::write([]const unsigned char srcs) {
+    unsigned long bytes = srcs.len;
     unsafe {
+        const void* src = (const void*)srcs.ptr;
         if (self.handle == (void*)0 || bytes > self.bytes) return 0;
         MMsg0 msg0 = (MMsg0)objc_msgSend;
         void* dst = msg0(self.handle, __sel_contents);
@@ -4247,14 +4251,14 @@ int mps_gemm(struct MpsBuf a, int ta, struct MpsBuf b, int tb, struct MpsBuf c,
 }
 
 // ── Interop (see gpu_mps.h's mps_device_handle and mps_dispatch) ────────────
-?&void mps_device_handle() {
+?&MtlObject mps_device_handle() {
     if (!__mps_ensure_device_queue()) return null;
-    unsafe { return (?&void)__mps_device; }
+    unsafe { return (?&MtlObject)__mps_device; }
 }
 
-?&void mps_queue_handle() {
+?&MtlObject mps_queue_handle() {
     if (!__mps_ensure_device_queue()) return null;
-    unsafe { return (?&void)__mps_queue; }
+    unsafe { return (?&MtlObject)__mps_queue; }
 }
 
 #define MPS_DISPATCH_MAX_ 64UL
@@ -4296,12 +4300,14 @@ static long __mps_dispatch_slot(const char* kernel) {
     }
 }
 
-int mps_dispatch(const &char kernel, const &MpsBuf bufs, unsigned long count, const &void params,
-                 unsigned long paramBytes, unsigned long groups, unsigned long groupSize) {
-    if (groups == 0UL || groupSize == 0UL || count > 30UL) return 0;
+int mps_dispatch(const &char kernel, []const MpsBuf bufs, []const unsigned char params,
+                 unsigned long groups, unsigned long groupSize) {
+    unsigned long count = bufs.len;
+    unsigned long paramBytes = params.len;
+    if (groups == 0UL || groupSize == 0UL || count > 30UL || count == 0UL) return 0;
     if (!__mps_ensure_library()) return 0;
     unsafe {
-        const struct MpsBuf* b = (const struct MpsBuf*)bufs;
+        const struct MpsBuf* b = (const struct MpsBuf*)bufs.ptr;
         unsigned long i = 0UL;
         while (i < count) { if (b[i].handle == (void*)0) return 0; i = i + 1UL; }
         long slot = __mps_dispatch_slot((const char*)kernel);
@@ -4316,7 +4322,7 @@ int mps_dispatch(const &char kernel, const &MpsBuf bufs, unsigned long count, co
         while (i < count) { setBufFn(enc, __sel_setBuffer, b[i].handle, 0UL, i); i = i + 1UL; }
         if (paramBytes > 0UL) {
             MMsgSetBuffer setBytesFn = (MMsgSetBuffer)objc_msgSend;
-            setBytesFn(enc, __sel_setBytes, (void*)params, paramBytes, count);
+            setBytesFn(enc, __sel_setBytes, (void*)params.ptr, paramBytes, count);
         }
         struct MTLSize tgSize;
         tgSize.width = groupSize; tgSize.height = 1UL; tgSize.depth = 1UL;

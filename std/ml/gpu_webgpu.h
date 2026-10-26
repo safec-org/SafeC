@@ -46,14 +46,14 @@ struct WebGpuBuf {
 
     int  valid() const;   // handle != 0
     void free();          // back to the device heap; handle := 0
-    // Copies the first 'bytes' (<= this.bytes) into 'dst', once the work
+    // Copies the first dst.len (<= this.bytes) bytes into 'dst', once the work
     // queued before has run. 1 = done.
-    int  read(&void dst, unsigned long bytes) const;
+    int  read([]unsigned char dst) const;
     // The first n elements as fp32 (16-bit ones converted on the CPU).
     int  read_f32(&float dst, unsigned long n) const;
-    // Copies 'bytes' (<= this.bytes) from 'src' into the buffer, after the
+    // Copies src.len bytes (<= this.bytes) from 'src' into the buffer, after the
     // work queued before. 1 = done.
-    int  write(const &void src, unsigned long bytes);
+    int  write([]const unsigned char src);
 
     static struct WebGpuBuf alloc(unsigned long n, int dtype);       // n uninitialized elements
     static struct WebGpuBuf upload(const &float host, unsigned long n);          // n fp32 values

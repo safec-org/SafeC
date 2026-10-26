@@ -38,11 +38,11 @@ struct SpirvBuf {
     void free();          // back to the cache; handle := 0
     // Copies the first 'bytes' (<= this.bytes, whole 32-bit words) into
     // 'dst' once the queued work is done (waits). 1 = done.
-    int  read(&void dst, unsigned long bytes) const;
-    // Copies 'bytes' (<= this.bytes, whole 32-bit words) from 'src' into the
+    int  read([]unsigned char dst) const;
+    // Copies src.len bytes (<= this.bytes, whole 32-bit words) from 'src' into the
     // buffer, in order with the queued work (ops queued before it read the
     // old contents). 1 = done.
-    int  write(const &void src, unsigned long bytes);
+    int  write([]const unsigned char src);
 
     static struct SpirvBuf alloc(unsigned long n, int dtype);       // n uninitialized elements
     static struct SpirvBuf upload(const &float host, unsigned long n);          // n fp32 values

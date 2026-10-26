@@ -261,11 +261,17 @@ int cuda_half_avgpool2d(struct CudaHalfBuf x, struct CudaHalfBuf y, unsigned lon
 
 // ── Interop: for libraries layered on this backend (gpu_cudnn.h, dsp/fft_cuda.h)
 
+// Opaque native handles: never constructed, only passed back to the CUDA
+// driver / runtime APIs they come from (a ?&CudaNativeStream converts to
+// their C 'void*' parameters).
+struct CudaNativeStream { char opaque_; };   // CUstream / cudaStream_t
+struct CudaNativeModule { char opaque_; };   // CUmodule
+
 // The CUstream every op above is queued on (a cudaStream_t to the runtime
 // API, cuDNN and cuFFT); null if there is no GPU. Work another library
 // queues on it is ordered with this backend's ops and recorded by graph
 // capture.
-?&void cuda_stream_handle();
+?&CudaNativeStream cuda_stream_handle();
 // 1 if cuda_set_tf32(1) is in effect.
 int cuda_tf32_enabled();
 // Compute capability of the selected GPU as major * 10 + minor (80 on an
@@ -278,14 +284,14 @@ int cuda_sm_count();
 // own kernels (gpu_cuda_attention.h). Null on failure, after printing the
 // compile log. Look kernels up with cuModuleGetFunction and launch them on
 // cuda_stream_handle().
-?&void cuda_load_module(const &char source, const &char name);
-// Byte copies between host memory and a raw device address (e.g. a
+?&CudaNativeModule cuda_load_module(const &char source, const &char name);
+// Byte copies (host.len bytes) between host memory and a raw device address (e.g. a
 // CudaBuf's dev plus an offset, or memory from cuMemAlloc), through the
 // same path as cuda_write / cuda_read (pinned lanes from 1 MiB up).
 // cuda_copy_to_device returns once 'host' may be reused; cuda_copy_to_host
 // waits for queued work first. 1 on success.
-int cuda_copy_to_device(unsigned long dev, const &void host, unsigned long bytes);
-int cuda_copy_to_host(&void host, unsigned long dev, unsigned long bytes);
+int cuda_copy_to_device(unsigned long dev, []const unsigned char host);
+int cuda_copy_to_host([]unsigned char host, unsigned long dev);
 
 // ── Host-array convenience ops (upload → compute → read back) ────────────────
 // 1 on success, 0 on failure (no GPU, allocation failure).
@@ -310,35 +316,5 @@ int cuda_matmul_f32(const &float a, const &float b, &float out,
 // Same product through cuBLAS.
 int cuda_matmul_f32_blas(const &float a, const &float b, &float out,
                          unsigned long M, unsigned long K, unsigned long N);
-
-// ── Raw device pointers (older API) ──────────────────────────────────────────
-// Same context and kernels as the CudaBuf layer; a '&void' here is a device
-// address. Prefer CudaBuf in new code: it carries its length, so every op
-// can check sizes.
-
-// 1 if the backend initialized (same as cuda_available()).
-int cuda_persistent_available();
-// Uploads 'bytes' of host memory to a new device buffer; null on failure.
-?&void cuda_upload_persistent(const &float data, unsigned long bytes);
-// Frees a buffer from any cuda_upload_*_persistent function.
-void cuda_release_persistent(&void devPtr);
-// out[M,N] (host) = devA[M,K] * devB[K,N], both already on the device.
-int cuda_matmul_f32_persistent(&void devA, &void devB, &float out,
-                                unsigned long M, unsigned long K, unsigned long N);
-// devW[i] -= lr * devGrad[i], in place on the device; nothing is read back.
-int cuda_sgd_update_f32(&void devW, &void devGrad, float lr, unsigned long n);
-
-// fp16 / bf16 storage (2 bytes per element), fp32 arithmetic: each kernel
-// widens on load and rounds to nearest-even on store. The upload functions
-// convert from float32 on the host; 'out' receives raw fp16/bf16 bits (see
-// float16.h's fp16_to_f32_bulk / bf16_to_f32_bulk).
-?&void cuda_upload_f16_persistent(const &float data, unsigned long n);
-?&void cuda_upload_bf16_persistent(const &float data, unsigned long n);
-int cuda_matmul_f16_persistent(&void devA, &void devB, &unsigned short out,
-                                unsigned long M, unsigned long K, unsigned long N);
-int cuda_matmul_bf16_persistent(&void devA, &void devB, &unsigned short out,
-                                 unsigned long M, unsigned long K, unsigned long N);
-int cuda_sgd_update_f16(&void devW, &void devGrad, float lr, unsigned long n);
-int cuda_sgd_update_bf16(&void devW, &void devGrad, float lr, unsigned long n);
 
 } // namespace std
