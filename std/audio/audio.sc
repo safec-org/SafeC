@@ -63,32 +63,32 @@ int audio_api_by_name(const &char name) {
 // ── the registry ─────────────────────────────────────────────────────────
 
 // The compiled backends, in preference order.
-static int audio_backends_(&?&AudioBackendVt_ out, int cap) {
+static int audio_backends_(&?&static AudioBackendVt_ out, int cap) {
     int n = 0;
 #if defined(__APPLE__)
-    if (n < cap) { unsafe { out[n] = (?&AudioBackendVt_)audio_coreaudio_backend_(); } n = n + 1; }
-    if (n < cap) { unsafe { out[n] = (?&AudioBackendVt_)audio_jack_backend_(); } n = n + 1; }
+    if (n < cap) { unsafe { out[n] = (?&static AudioBackendVt_)audio_coreaudio_backend_(); } n = n + 1; }
+    if (n < cap) { unsafe { out[n] = (?&static AudioBackendVt_)audio_jack_backend_(); } n = n + 1; }
 #endif
 #if defined(__linux__)
-    if (n < cap) { unsafe { out[n] = (?&AudioBackendVt_)audio_alsa_backend_(); } n = n + 1; }
-    if (n < cap) { unsafe { out[n] = (?&AudioBackendVt_)audio_jack_backend_(); } n = n + 1; }
+    if (n < cap) { unsafe { out[n] = (?&static AudioBackendVt_)audio_alsa_backend_(); } n = n + 1; }
+    if (n < cap) { unsafe { out[n] = (?&static AudioBackendVt_)audio_jack_backend_(); } n = n + 1; }
 #endif
 #if defined(_WIN32)
-    if (n < cap) { unsafe { out[n] = (?&AudioBackendVt_)audio_wasapi_backend_(); } n = n + 1; }
+    if (n < cap) { unsafe { out[n] = (?&static AudioBackendVt_)audio_wasapi_backend_(); } n = n + 1; }
 #endif
 #if defined(__wasm__)
-    if (n < cap) { unsafe { out[n] = (?&AudioBackendVt_)audio_webaudio_backend_(); } n = n + 1; }
+    if (n < cap) { unsafe { out[n] = (?&static AudioBackendVt_)audio_webaudio_backend_(); } n = n + 1; }
 #endif
-    if (n < cap) { unsafe { out[n] = (?&AudioBackendVt_)audio_dummy_backend_(); } n = n + 1; }
+    if (n < cap) { unsafe { out[n] = (?&static AudioBackendVt_)audio_dummy_backend_(); } n = n + 1; }
     return n;
 }
 
-static ?&AudioBackendVt_ audio_backend_for_(int api) {
-    ?&AudioBackendVt_ list[AUDIO_API_COUNT];
+static ?&static AudioBackendVt_ audio_backend_for_(int api) {
+    ?&static AudioBackendVt_ list[AUDIO_API_COUNT];
     int n = audio_backends_(&list[0], AUDIO_API_COUNT);
     for (int i = 0; i < n; i = i + 1) {
         match (list[i]) {
-            case some(vt): { if (vt.api == api) return (?&AudioBackendVt_)vt; }
+            case some(vt): { if (vt.api == api) return (?&static AudioBackendVt_)vt; }
             case null: {}
         }
     }
@@ -96,7 +96,7 @@ static ?&AudioBackendVt_ audio_backend_for_(int api) {
 }
 
 int audio_compiled_apis([]int out) {
-    ?&AudioBackendVt_ list[AUDIO_API_COUNT];
+    ?&static AudioBackendVt_ list[AUDIO_API_COUNT];
     int n = audio_backends_(&list[0], AUDIO_API_COUNT);
     int k = 0;
     for (int i = 0; i < n && (unsigned long)k < out.len; i = i + 1) {
@@ -125,7 +125,7 @@ int audio_default_api() {
         }
         case null: {}
     }
-    ?&AudioBackendVt_ list[AUDIO_API_COUNT];
+    ?&static AudioBackendVt_ list[AUDIO_API_COUNT];
     int n = audio_backends_(&list[0], AUDIO_API_COUNT);
     // JACK only when its server is up (it's a choice the user made then).
     for (int i = 0; i < n; i = i + 1) {
@@ -157,7 +157,7 @@ int AudioDeviceInfo::supports_rate(unsigned int rate) const {
 
 struct AudioDeviceInfo AudioDeviceInfo::none() {
     struct AudioDeviceInfo d;
-    unsafe { safe_memset_raw_((void*)&d, 0, sizeof(struct AudioDeviceInfo)); }
+    safe_memset_obj(&d, 0);
     return d;
 }
 
@@ -200,8 +200,9 @@ static unsigned int audio_host_id_for_(&AudioHost_ h, const &char key) {
             if (audio_streq_(&h.known[i].key[0], key)) return h.known[i].id;
         if (h.known_count >= h.known_cap) {
             unsigned int ncap = h.known_cap == 0U ? 8U : h.known_cap * 2U;
-            void* nk = realloc_buf_raw_((void*)h.known, (unsigned long)ncap * sizeof(struct AudioKnownId_));
-            if (nk == (void*)0) return 0U;
+            ?&heap AudioKnownId_ nk = realloc_buf((?&heap AudioKnownId_)h.known,
+                                                  checked_mul_size((unsigned long)ncap, sizeof(struct AudioKnownId_)));
+            if (nk.is_null()) return 0U;
             h.known = (struct AudioKnownId_*)nk;
             h.known_cap = ncap;
         }
@@ -220,8 +221,9 @@ static unsigned int audio_host_id_for_(&AudioHost_ h, const &char key) {
     unsafe {
         if (h.count >= h.cap) {
             unsigned int ncap = h.cap == 0U ? 8U : h.cap * 2U;
-            void* nd = realloc_buf_raw_((void*)h.devs, (unsigned long)ncap * sizeof(struct AudioDeviceRec_));
-            if (nd == (void*)0) return null;
+            ?&heap AudioDeviceRec_ nd = realloc_buf((?&heap AudioDeviceRec_)h.devs,
+                                                    checked_mul_size((unsigned long)ncap, sizeof(struct AudioDeviceRec_)));
+            if (nd.is_null()) return null;
             h.devs = (struct AudioDeviceRec_*)nd;
             h.cap = ncap;
         }
@@ -257,7 +259,7 @@ static ?&AudioHost_ audio_host_of_(const &Audio a) {
 }
 
 static int audio_host_probe_(&AudioHost_ h) {
-    ?&AudioBackendVt_ vt = audio_backend_for_(h.api);
+    ?&static AudioBackendVt_ vt = audio_backend_for_(h.api);
     match (vt) {
         case some(v): {
             audio_host_clear_(h);
@@ -272,7 +274,7 @@ static int audio_host_probe_(&AudioHost_ h) {
 }
 
 static struct Result<Audio, AudioError> audio_open_api_(int api) {
-    ?&AudioBackendVt_ vt = audio_backend_for_(api);
+    ?&static AudioBackendVt_ vt = audio_backend_for_(api);
     if (vt.is_null()) {
         struct AudioError e = AudioError::make2(AUDIO_ERR_UNSUPPORTED, "audio API not compiled in",
                                                 audio_api_name(api));
@@ -288,9 +290,9 @@ static struct Result<Audio, AudioError> audio_open_api_(int api) {
                 struct AudioError e = h.error;
                 unsafe {
                     match (vt) { case some(v): { v.host_close(h); } case null: {} }
-                    dealloc_raw_((void*)h.devs);
-                    dealloc_raw_((void*)h.known);
-                    dealloc_raw_((void*)h);
+                    dealloc((?&heap AudioDeviceRec_)h.devs);
+                    dealloc((?&heap AudioKnownId_)h.known);
+                    dealloc((?&heap AudioHost_)h);
                 }
                 return Result::new_err(e);
             }
@@ -322,7 +324,7 @@ struct Result<Audio, AudioError> Audio::open(int api) {
     int firstHasDevices = 0;
     match (r.get_ok()) { case some(a): { firstHasDevices = a.device_count() > 0U; } case null: {} }
     if (firstHasDevices) return r;
-    ?&AudioBackendVt_ list[AUDIO_API_COUNT];
+    ?&static AudioBackendVt_ list[AUDIO_API_COUNT];
     int n = audio_backends_(&list[0], AUDIO_API_COUNT);
     for (int i = 0; i < n; i = i + 1) {
         int api2 = 0;
@@ -422,9 +424,9 @@ void Audio::drop() {
                 case null: {}
             }
             unsafe {
-                dealloc_raw_((void*)h.devs);
-                dealloc_raw_((void*)h.known);
-                dealloc_raw_((void*)h);
+                dealloc((?&heap AudioDeviceRec_)h.devs);
+                dealloc((?&heap AudioKnownId_)h.known);
+                dealloc((?&heap AudioHost_)h);
             }
         }
         case null: {}
@@ -445,7 +447,7 @@ struct AudioStreamParams AudioStreamParams::of(unsigned int device, int channels
 
 struct AudioStreamOptions AudioStreamOptions::none() {
     struct AudioStreamOptions o;
-    unsafe { safe_memset_raw_((void*)&o, 0, sizeof(struct AudioStreamOptions)); }
+    safe_memset_obj(&o, 0);
     return o;
 }
 
@@ -503,14 +505,32 @@ static int audio_resolve_dir_(&AudioHost_ h, &AudioStreamState_ st, int dir, &Au
     return audio_fail_(err, AUDIO_ERR_INVALID_DEVICE, "audio: no device with that id");
 }
 
+// An empty buffer (an unused direction's).
+static []unsigned char audio_no_bytes_() {
+    unsafe { return ((unsigned char*)0)[0..0]; }
+}
+
+// A zeroed heap buffer of 'n' bytes (at least 16); empty on OOM.
+static []unsigned char audio_alloc_bytes_(unsigned long n) {
+    unsigned long len = n == 0UL ? 16UL : n;
+    ?&heap unsigned char p = alloc_zeroed(len);
+    match (p) {
+        case some(b): { unsafe { return ((unsigned char*)b)[0..len]; } }
+        case null: {}
+    }
+    return audio_no_bytes_();
+}
+
 static void audio_stream_free_buffers_(&AudioStreamState_ st) {
-    unsafe {
-        for (int d = 0; d < 2; d = d + 1) {
-            if (st.device_buf[d] != st.user_buf[d]) dealloc_raw_(st.device_buf[d]);
-            dealloc_raw_(st.user_buf[d]);
-            st.device_buf[d] = (void*)0;
-            st.user_buf[d] = (void*)0;
+    for (int d = 0; d < 2; d = d + 1) {
+        unsafe {
+            unsigned char* db = st.device_buf[d].ptr;
+            unsigned char* ub = st.user_buf[d].ptr;
+            if (db != ub) dealloc((?&heap unsigned char)db);
+            dealloc((?&heap unsigned char)ub);
         }
+        st.device_buf[d] = audio_no_bytes_();
+        st.user_buf[d] = audio_no_bytes_();
     }
 }
 
@@ -531,21 +551,19 @@ static int audio_stream_alloc_buffers_(&AudioStreamState_ st) {
                    st.first_channel[d] == 0 &&
                    (st.device_interleaved[d] == st.user_interleaved || st.user_channels[d] == 1);
         st.convert[d] = !same;
-        unsafe {
-            st.user_buf[d] = alloc_zeroed_raw_(ub == 0UL ? 16UL : ub);
-            if (st.user_buf[d] == (void*)0) return AUDIO_ERR_NO_MEMORY;
-            if (same) st.device_buf[d] = st.user_buf[d];
-            else {
-                st.device_buf[d] = alloc_zeroed_raw_(db == 0UL ? 16UL : db);
-                if (st.device_buf[d] == (void*)0) return AUDIO_ERR_NO_MEMORY;
-            }
+        st.user_buf[d] = audio_alloc_bytes_(ub);
+        if (st.user_buf[d].len == 0UL) return AUDIO_ERR_NO_MEMORY;
+        if (same) st.device_buf[d] = st.user_buf[d];
+        else {
+            st.device_buf[d] = audio_alloc_bytes_(db);
+            if (st.device_buf[d].len == 0UL) return AUDIO_ERR_NO_MEMORY;
         }
     }
     return AUDIO_OK;
 }
 
-static ?&AudioBackendVt_ audio_stream_vt_(&AudioStreamState_ st) {
-    unsafe { return (?&AudioBackendVt_)st.vt; }
+static ?&static AudioBackendVt_ audio_stream_vt_(&AudioStreamState_ st) {
+    return st.vt;
 }
 
 struct Result<AudioStream, AudioError> Audio::open_stream_raw_(?&AudioStreamParams output, ?&AudioStreamParams input,
@@ -558,7 +576,7 @@ struct Result<AudioStream, AudioError> Audio::open_stream_raw_(?&AudioStreamPara
         return audio_stream_err_(AUDIO_ERR_INVALID_PARAM, "audio: a stream needs output and/or input parameters");
     if (!audio_format_valid_(format)) return audio_stream_err_(AUDIO_ERR_INVALID_PARAM, "audio: invalid sample format");
     if (sample_rate == 0U) return audio_stream_err_(AUDIO_ERR_INVALID_PARAM, "audio: sample rate must be > 0");
-    ?&AudioBackendVt_ vtp = audio_backend_for_(self.api_id);
+    ?&static AudioBackendVt_ vtp = audio_backend_for_(self.api_id);
     if (vtp.is_null()) return audio_stream_err_(AUDIO_ERR_UNSUPPORTED, "audio: API not compiled in");
 
     ?&AudioStreamState_ sp = null;
@@ -573,7 +591,7 @@ struct Result<AudioStream, AudioError> Audio::open_stream_raw_(?&AudioStreamPara
                         case null: {}
                         case some(vt): {
                             st.api = self.api_id;
-                            unsafe { st.vt = (void*)vt; }
+                            st.vt = vt;
                             st.user_format = format;
                             st.sample_rate = sample_rate;
                             st.buffer_frames = *frames;
@@ -620,7 +638,7 @@ struct Result<AudioStream, AudioError> Audio::open_stream_raw_(?&AudioStreamPara
                             }
                             if (rc != AUDIO_OK && rc != AUDIO_ERR_WARNING) {
                                 audio_stream_free_buffers_(st);
-                                unsafe { dealloc_raw_((void*)st); }
+                                unsafe { dealloc((?&heap AudioStreamState_)st); }
                                 return Result::new_err(err);
                             }
                             *frames = st.buffer_frames;
@@ -632,7 +650,7 @@ struct Result<AudioStream, AudioError> Audio::open_stream_raw_(?&AudioStreamPara
                     }
                 }
             }
-            unsafe { dealloc_raw_((void*)st); }
+            unsafe { dealloc((?&heap AudioStreamState_)st); }
         }
     }
     return audio_stream_err_(AUDIO_ERR_INVALID_USE, "audio: not open");
@@ -683,21 +701,18 @@ void audio_stream_set_rt_error_(&AudioStreamState_ st, int code, const &char mes
 void audio_stream_silence_(&AudioStreamState_ st, unsigned int frames) {
     if (!st.mode_out) return;
     unsigned long n = (unsigned long)frames * audio_stream_device_frame_bytes_(st, AUDIO_DIR_OUT);
-    unsafe {
-        unsigned char* p = (unsigned char*)st.device_buf[AUDIO_DIR_OUT];
-        for (unsigned long i = 0UL; i < n; i = i + 1UL) p[i] = (unsigned char)0;
-    }
+    safe_memset(st.device_buf[AUDIO_DIR_OUT][0..n], 0);
 }
 
 // The bytes of one period of direction 'd''s user / device buffer.
 static []unsigned char audio_user_bytes_(&AudioStreamState_ st, int d, unsigned int frames) {
     unsigned long n = (unsigned long)frames * (unsigned long)st.user_channels[d] *
                       (unsigned long)audio_format_bytes(st.user_format);
-    unsafe { return ((unsigned char*)st.user_buf[d])[0..n]; }
+    return st.user_buf[d][0..n];
 }
 static []unsigned char audio_device_bytes_(&AudioStreamState_ st, int d, unsigned int frames) {
     unsigned long n = (unsigned long)frames * audio_stream_device_frame_bytes_(st, d);
-    unsafe { return ((unsigned char*)st.device_buf[d])[0..n]; }
+    return st.device_buf[d][0..n];
 }
 
 int audio_stream_process_(&AudioStreamState_ st, unsigned int frames) {
@@ -754,15 +769,13 @@ int audio_stream_process_(&AudioStreamState_ st, unsigned int frames) {
 
 // ── stream threads ───────────────────────────────────────────────────────
 
-typedef fn void(&AudioStreamState_) AudioThreadBody_;
-
 static ?&AudioStreamState_ audio_thread_tramp_(?&AudioStreamState_ arg) {
     match (arg) {
         case some(st): {
             if ((st.flags & AUDIO_FLAG_SCHEDULE_REALTIME) != 0U) audio_thread_make_realtime_(st.priority);
-            unsafe {
-                AudioThreadBody_ body = (AudioThreadBody_)st.thread_body;
-                body(st);
+            match (st.thread_body) {
+                case some(body): { body(st); }
+                case null: {}
             }
         }
         case null: {}
@@ -784,7 +797,7 @@ int audio_stream_thread_start_(&AudioStreamState_ st, fn void(&AudioStreamState_
     return audio_fail_(&st.error, AUDIO_ERR_THREAD, "audio: no threads on this target (use AUDIO_FLAG_DUMMY_MANUAL)");
 #else
     audio_stream_thread_join_(st);
-    unsafe { st.thread_body = (void*)body; }
+    st.thread_body = body;
     unsigned long long tid = 0ULL;
     int rc = 0;
     unsafe { rc = thread_create(&tid, audio_thread_tramp_, (?&AudioStreamState_)st); }
@@ -884,7 +897,7 @@ void AudioStream::drop() {
                 }
             }
             audio_stream_free_buffers_(st);
-            unsafe { dealloc_raw_((void*)st); }
+            unsafe { dealloc((?&heap AudioStreamState_)st); }
         }
         case null: {}
     }

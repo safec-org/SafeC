@@ -87,9 +87,9 @@ void cwt_morlet_n_(const &double signal, unsigned long signalLen,
         if (rows >= 4096UL) parallel_for(rows, 1024UL, cwt_rows_, &j);
         else cwt_rows_(&j, 0UL, rows);
         si = 0UL;
-        while (si < numScales) { dealloc_raw_((void*)kRe[si]); dealloc_raw_((void*)kIm[si]); si = si + 1UL; }
-        dealloc_raw_((void*)kRe);
-        dealloc_raw_((void*)kIm);
+        while (si < numScales) { dealloc(kRe[si]); dealloc(kIm[si]); si = si + 1UL; }
+        dealloc(kRe);
+        dealloc(kIm);
     }
 }
 

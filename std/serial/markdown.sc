@@ -68,7 +68,7 @@ static void md_add_inline_(struct MdNode* parent, struct MdNode* child) {
                 child->text.free();
                 child->children.free();
                 child->info.free(); child->id.free(); child->title.free();
-                dealloc_raw_((void*)child);
+                dealloc(child);
                 return;
             }
         }
@@ -90,7 +90,7 @@ void MdNode::drop() {
     self.info.free();
     self.id.free();
     self.title.free();
-    unsafe { dealloc_raw_((void*)self); }
+    unsafe { dealloc((?&heap MdNode)self); }
 }
 
 // ── character classes ────────────────────────────────────────────────────────

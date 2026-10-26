@@ -160,13 +160,13 @@ struct GuiCanvas GuiCanvas::for_image(&GuiImage img) {
 
 static void __gui_canvas_drop_masks(&GuiCanvas c) {
     unsafe {
-        if (c.st.ownsMask && !c.st.mask.is_null()) { dealloc_raw_((void*)c.st.mask); }
+        if (c.st.ownsMask && !c.st.mask.is_null()) { dealloc(c.st.mask); }
         c.st.mask = null;
         c.st.ownsMask = 0;
         unsigned long i = 0UL;
         while (i < c.saved.len) {
             &GuiCanvasState s = c.saved.at(i);
-            if (s.ownsMask && !s.mask.is_null()) { dealloc_raw_((void*)s.mask); }
+            if (s.ownsMask && !s.mask.is_null()) { dealloc(s.mask); }
             s.mask = null;
             s.ownsMask = 0;
             i = i + 1UL;
@@ -231,7 +231,7 @@ void GuiCanvas::save() {
 void GuiCanvas::restore() {
     if (self.saved.len == 0UL) { return; }
     unsafe {
-        if (self.st.ownsMask && !self.st.mask.is_null()) { dealloc_raw_((void*)self.st.mask); }
+        if (self.st.ownsMask && !self.st.mask.is_null()) { dealloc(self.st.mask); }
     }
     ?struct GuiCanvasState top = self.saved.pop();
     match (top) {
@@ -328,7 +328,7 @@ void GuiCanvas::clip_path(const &GuiPath p) {
     }
     ?&heap unsigned char m = __gui_canvas_mask_edges(self, self.st.fillRule);
     unsafe {
-        if (self.st.ownsMask && !self.st.mask.is_null()) { dealloc_raw_((void*)self.st.mask); }
+        if (self.st.ownsMask && !self.st.mask.is_null()) { dealloc(self.st.mask); }
     }
     self.st.mask = m;
     self.st.ownsMask = 1;
@@ -357,7 +357,7 @@ void GuiCanvas::clip() { self.clip_path(&self.path); }
 
 void GuiCanvas::reset_clip() {
     unsafe {
-        if (self.st.ownsMask && !self.st.mask.is_null()) { dealloc_raw_((void*)self.st.mask); }
+        if (self.st.ownsMask && !self.st.mask.is_null()) { dealloc(self.st.mask); }
     }
     self.st.mask = null;
     self.st.ownsMask = 0;

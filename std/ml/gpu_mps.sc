@@ -996,8 +996,8 @@ static void __mps_sum_finalize(void* ctxPtr) {
         unsigned long g = 0UL;
         while (g < ctx->numGroups) { acc = acc + ctx->partials[g]; g = g + 1UL; }
         *(ctx->out) = acc;
-        dealloc_raw_((void*)ctx->partials);
-        dealloc_raw_((void*)ctx);
+        dealloc(ctx->partials);
+        dealloc(ctx);
     }
 }
 

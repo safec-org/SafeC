@@ -127,7 +127,7 @@ static struct Vec<unsigned char> dbuf_to_vec_(struct DeflateBuf_* b) {
     struct Vec<unsigned char> v = Vec::new();
     unsafe {
         if (b->failed || b->data == (unsigned char*)0) {
-            if (b->data != (unsigned char*)0) { dealloc_raw_((void*)b->data); }
+            if (b->data != (unsigned char*)0) { dealloc(b->data); }
             return v;
         }
         v.data = (?&heap unsigned char)b->data;
@@ -139,7 +139,7 @@ static struct Vec<unsigned char> dbuf_to_vec_(struct DeflateBuf_* b) {
 
 static void dbuf_free_(struct DeflateBuf_* b) {
     unsafe {
-        if (b->data != (unsigned char*)0) { dealloc_raw_((void*)b->data); }
+        if (b->data != (unsigned char*)0) { dealloc(b->data); }
         b->data = (unsigned char*)0;
         b->len = 0UL;
         b->cap = 0UL;
@@ -960,10 +960,10 @@ static struct Vec<unsigned char> deflate_raw_n_(const &unsigned char data, unsig
         }
     }
     unsafe {
-        if (head != (int*)0) { dealloc_raw_((void*)head); }
-        if (prev != (int*)0) { dealloc_raw_((void*)prev); }
-        if (s.litlen != (unsigned short*)0) { dealloc_raw_((void*)s.litlen); }
-        if (s.dists != (unsigned short*)0) { dealloc_raw_((void*)s.dists); }
+        if (head != (int*)0) { dealloc(head); }
+        if (prev != (int*)0) { dealloc(prev); }
+        if (s.litlen != (unsigned short*)0) { dealloc(s.litlen); }
+        if (s.dists != (unsigned short*)0) { dealloc(s.dists); }
     }
     return dbuf_to_vec_(&s.out);
 }

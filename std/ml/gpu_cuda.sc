@@ -794,7 +794,7 @@ static ?&void cuda_compile_module_(const char* src, const char* name) {
             if (log != (char*)0) {
                 nvrtcGetProgramLog(prog, log);
                 printf("std::cuda: kernel compile failed (%s, %s):\n%s\n", name, (const char*)&arch[0], (const char*)log);
-                dealloc_raw_((void*)log);
+                dealloc(log);
             }
             nvrtcDestroyProgram(&prog);
             return (void*)0;
@@ -807,7 +807,7 @@ static ?&void cuda_compile_module_(const char* src, const char* name) {
         nvrtcDestroyProgram(&prog);
         void* module = (void*)0;
         int loaded = cuModuleLoadData(&module, (const void*)cubin);
-        dealloc_raw_((void*)cubin);
+        dealloc(cubin);
         if (loaded != CUDA_OK) return (void*)0;
         return module;
     }

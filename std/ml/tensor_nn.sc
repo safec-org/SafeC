@@ -173,7 +173,7 @@ static void softmax_rows_(&SoftmaxJob j, unsigned long lo, unsigned long hi) {
         outShape[ndim - 1UL] = outShape[ndim - 1UL] / 2UL;
     }
     &FloatTensor out = __tensor_alloc((const unsigned long*)outShape, ndim, 0);
-    unsafe { dealloc_raw_((void*)outShape); }
+    unsafe { dealloc(outShape); }
     unsafe {
         unsigned long outLast = out->shape[out->ndim - 1UL];
         unsigned long inLast = outLast * 2UL;
@@ -206,7 +206,7 @@ static void softmax_rows_(&SoftmaxJob j, unsigned long lo, unsigned long hi) {
         outShape[ndim - 1UL] = outShape[ndim - 1UL] / 2UL;
     }
     &FloatTensor out = __tensor_alloc((const unsigned long*)outShape, ndim, 0);
-    unsafe { dealloc_raw_((void*)outShape); }
+    unsafe { dealloc(outShape); }
     unsafe {
         unsigned long outLast = out->shape[out->ndim - 1UL];
         unsigned long inLast = outLast * 2UL;
@@ -302,7 +302,7 @@ void AdamState::drop() {
     }
     &FloatTensor out = __tensor_alloc((const unsigned long*)outShape, ndim, 0);
     &FloatTensor idxCache = __tensor_alloc((const unsigned long*)outShape, ndim, 0);
-    unsafe { dealloc_raw_((void*)outShape); }
+    unsafe { dealloc(outShape); }
     unsafe {
         unsigned long rows = out->size / outLen;
         unsigned long r = 0UL;
@@ -350,7 +350,7 @@ void AdamState::drop() {
         outShape[ndim - 1UL] = outLen;
     }
     &FloatTensor out = __tensor_alloc((const unsigned long*)outShape, ndim, 0);
-    unsafe { dealloc_raw_((void*)outShape); }
+    unsafe { dealloc(outShape); }
     unsafe {
         float invK = (float)1.0 / (float)kernel;
         unsigned long rows = out->size / outLen;

@@ -89,7 +89,7 @@ static int audio_dummy_open_(&AudioHost_ h, &AudioStreamState_ st) {
 #if defined(__wasm__)
             d.manual = 1;
 #endif
-            unsafe { st.backend = (void*)d; }
+            unsafe { st.backend = (?&heap AudioStreamImpl_)d; }
             return AUDIO_OK;
         }
         case null: {}
@@ -114,10 +114,10 @@ static void audio_dummy_capture_(&AudioStreamState_ st, &AudioDummyStream_ d, un
     if (!st.mode_in) return;
     unsigned long ch = (unsigned long)st.device_channels[AUDIO_DIR_IN];
     unsafe {
-        float* in = (float*)st.device_buf[AUDIO_DIR_IN];
+        float* in = (float*)st.device_buf[AUDIO_DIR_IN].ptr;
         if (st.mode_out) {
             // Loopback: last period's output, channel for channel.
-            float* out = (float*)st.device_buf[AUDIO_DIR_OUT];
+            float* out = (float*)st.device_buf[AUDIO_DIR_OUT].ptr;
             unsigned long och = (unsigned long)st.device_channels[AUDIO_DIR_OUT];
             for (unsigned long f = 0UL; f < (unsigned long)frames; f = f + 1UL)
                 for (unsigned long c = 0UL; c < ch; c = c + 1UL)
@@ -188,7 +188,8 @@ static int audio_dummy_stop_(&AudioStreamState_ st) {
 
 static void audio_dummy_close_(&AudioStreamState_ st) {
     audio_stream_thread_join_(st);
-    unsafe { dealloc_raw_(st.backend); st.backend = (void*)0; }
+    dealloc(st.backend);
+    st.backend = null;
 }
 
 int audio_dummy_pump_(&AudioStreamState_ st) {

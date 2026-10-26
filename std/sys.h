@@ -1,5 +1,6 @@
 // SafeC Standard Library — System declarations (C11/C17/C23 stdlib coverage)
 #pragma once
+#include <std/erased.h>
 
 // ── Process control constants ─────────────────────────────────────────────────
 #define EXIT_SUCCESS  0
@@ -40,16 +41,19 @@ double        sys_strtod(const &char s, ?&&const char end);
 float         sys_strtof(const &char s, ?&&const char end);
 
 // ── Sorting and searching ─────────────────────────────────────────────────────
-// libc-boundary sort/search over untyped elements; use sys_qsort/sys_bsearch.
-void  sys_qsort_raw_(void* base, unsigned long n, unsigned long elem_size, void* cmp);
-void* sys_bsearch_raw_(const void* key, const void* base,
-                       unsigned long n, unsigned long elem_size, void* cmp);
+// libc-boundary sort/search over type-erased elements (see std/erased.h):
+// 'base' is the elements' bytes, cmp a typed comparator erased by
+// sys_qsort/sys_bsearch, which are what to call.
+typedef fn int(const &Erased, const &Erased) SysCmpRaw_;
+void  sys_qsort_raw_(unsigned char* base, unsigned long n, unsigned long elem_size, SysCmpRaw_ cmp);
+const unsigned char* sys_bsearch_raw_(const &Erased key, const unsigned char* base,
+                                      unsigned long n, unsigned long elem_size, SysCmpRaw_ cmp);
 
 // Sorts items in place; cmp(a, b) returns <0 / 0 / >0.
 generic<T>
 void sys_qsort([]T items, fn int(const &T, const &T) cmp) {
     if (items.len < 2UL) { return; }
-    unsafe { sys_qsort_raw_((void*)items.ptr, items.len, sizeof(T), (void*)cmp); }
+    unsafe { sys_qsort_raw_((unsigned char*)items.ptr, items.len, sizeof(T), (SysCmpRaw_)cmp); }
 }
 
 // Binary search of sorted items; the index of an element equal to key, or
@@ -57,9 +61,11 @@ void sys_qsort([]T items, fn int(const &T, const &T) cmp) {
 generic<T>
 ?unsigned long sys_bsearch(const &T key, []const T items, fn int(const &T, const &T) cmp) {
     if (items.len == 0UL) { return null; }
-    void* hit;
-    unsafe { hit = sys_bsearch_raw_((const void*)key, (const void*)items.ptr, items.len, sizeof(T), (void*)cmp); }
-    if (hit == (void*)0) { return null; }
+    const unsigned char* hit;
+    unsafe {
+        hit = sys_bsearch_raw_((const &Erased)key, (const unsigned char*)items.ptr, items.len, sizeof(T), (SysCmpRaw_)cmp);
+    }
+    if (hit == (const unsigned char*)0) { return null; }
     unsigned long off;
     unsafe { off = ((unsigned long)hit - (unsigned long)items.ptr) / sizeof(T); }
     return off;

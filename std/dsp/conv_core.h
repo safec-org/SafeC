@@ -73,7 +73,7 @@ void CV_DIRECT(const &CV_R x, unsigned long len_x,
     unsigned long outLen = len_x + len_h - 1UL;
     if (outLen * len_h >= 1048576UL) parallel_for(outLen, 4096UL, conv_direct_outs_, &j);
     else conv_direct_outs_(&j, 0UL, outLen);
-    unsafe { dealloc_raw_((void*)hrev); }
+    unsafe { dealloc(hrev); }
 }
 
 // Two strategies, both on fft_batch / fft_n_ (threaded, vendor FFT if linked):
@@ -191,7 +191,7 @@ static void conv_fft_ola_(const CV_R* x, unsigned long lenX, const CV_R* h, unsi
         unsigned long batch = pairs < CONV_OLA_BATCH ? pairs : CONV_OLA_BATCH;
         CV_C* B = (CV_C*)alloc_raw_(batch * N * (unsigned long)sizeof(CV_C));
         if (H == (CV_C*)0 || B == (CV_C*)0) {
-            dealloc_raw_((void*)H); dealloc_raw_((void*)B);
+            dealloc(H); dealloc(B);
             return;
         }
         unsigned long i = 0UL;
@@ -233,8 +233,8 @@ static void conv_fft_ola_(const CV_R* x, unsigned long lenX, const CV_R* h, unsi
             }
             p0 = p0 + np;
         }
-        dealloc_raw_((void*)H);
-        dealloc_raw_((void*)B);
+        dealloc(H);
+        dealloc(B);
     }
 }
 
@@ -268,7 +268,7 @@ static void conv_fft_packed_(const CV_R* x, unsigned long lenX, const CV_R* h, u
         CV_IFFT(Z, N);
         i = 0UL;
         while (i < outLen) { out[i] = Z[i].re; i = i + 1UL; }
-        dealloc_raw_((void*)Z);
+        dealloc(Z);
     }
 }
 

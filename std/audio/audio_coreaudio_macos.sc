@@ -57,7 +57,7 @@ struct CAPropertyAddress_ {
 struct CABuffer_ {
     unsigned int channels;
     unsigned int bytes;
-    void* data;
+    unsigned char* data;
 };
 struct CAValueRange_ {
     double minimum;
@@ -67,21 +67,35 @@ struct CAValueRange_ {
 static_assert(sizeof(struct CAPropertyAddress_) == 12, "AudioObjectPropertyAddress is 12 bytes");
 static_assert(sizeof(struct CABuffer_) == 16, "AudioBuffer is 16 bytes on 64-bit");
 
+// Opaque Core Foundation / HAL types.
+struct CFString_    { char opaque_; };   // CFStringRef
+struct CFRunLoop_   { char opaque_; };   // CFRunLoopRef
+struct CAIOProcID_  { char opaque_; };   // AudioDeviceIOProcID
+struct CATimeStamp_ { char opaque_; };   // AudioTimeStamp (never read)
+
+// AudioObjectPropertyListenerProc and AudioDeviceIOProc; 'client' is the
+// stream's CAStream_, erased (see std/erased.h).
+typedef fn int(unsigned int, unsigned int, const CAPropertyAddress_*, ?&Erased) CAListenerFn_;
+typedef fn int(unsigned int, const CATimeStamp_*, const unsigned char*, const CATimeStamp_*,
+               unsigned char*, const CATimeStamp_*, ?&Erased) CAIOProcFn_;
+
+// Property values are the bytes of whatever the property holds (a UInt32,
+// a Float64, an AudioBufferList, a CFStringRef, ...); the qualifier is unused.
 extern int  AudioObjectGetPropertyDataSize(unsigned int obj, const CAPropertyAddress_* addr, unsigned int qualSize,
-                                           const void* qual, unsigned int* outSize);
+                                           const unsigned char* qual, unsigned int* outSize);
 extern int  AudioObjectGetPropertyData(unsigned int obj, const CAPropertyAddress_* addr, unsigned int qualSize,
-                                       const void* qual, unsigned int* ioSize, void* outData);
+                                       const unsigned char* qual, unsigned int* ioSize, unsigned char* outData);
 extern int  AudioObjectSetPropertyData(unsigned int obj, const CAPropertyAddress_* addr, unsigned int qualSize,
-                                       const void* qual, unsigned int size, const void* data);
+                                       const unsigned char* qual, unsigned int size, const unsigned char* data);
 extern unsigned char AudioObjectHasProperty(unsigned int obj, const CAPropertyAddress_* addr);
-extern int  AudioObjectAddPropertyListener(unsigned int obj, const CAPropertyAddress_* addr, void* proc, void* client);
-extern int  AudioObjectRemovePropertyListener(unsigned int obj, const CAPropertyAddress_* addr, void* proc, void* client);
-extern int  AudioDeviceCreateIOProcID(unsigned int dev, void* proc, void* client, void** outID);
-extern int  AudioDeviceDestroyIOProcID(unsigned int dev, void* procID);
-extern int  AudioDeviceStart(unsigned int dev, void* procID);
-extern int  AudioDeviceStop(unsigned int dev, void* procID);
-extern unsigned char CFStringGetCString(const void* str, char* buf, long size, unsigned int encoding);
-extern void CFRelease(const void* cf);
+extern int  AudioObjectAddPropertyListener(unsigned int obj, const CAPropertyAddress_* addr, CAListenerFn_ proc, ?&Erased client);
+extern int  AudioObjectRemovePropertyListener(unsigned int obj, const CAPropertyAddress_* addr, CAListenerFn_ proc, ?&Erased client);
+extern int  AudioDeviceCreateIOProcID(unsigned int dev, CAIOProcFn_ proc, ?&Erased client, CAIOProcID_** outID);
+extern int  AudioDeviceDestroyIOProcID(unsigned int dev, CAIOProcID_* procID);
+extern int  AudioDeviceStart(unsigned int dev, CAIOProcID_* procID);
+extern int  AudioDeviceStop(unsigned int dev, CAIOProcID_* procID);
+extern unsigned char CFStringGetCString(const CFString_* str, char* buf, long size, unsigned int encoding);
+extern void CFRelease(const CFString_* cf);
 extern int  getpid();
 
 static struct CAPropertyAddress_ ca_addr_(unsigned int selector, unsigned int scope) {
@@ -95,13 +109,13 @@ static struct CAPropertyAddress_ ca_addr_(unsigned int selector, unsigned int sc
 static int ca_get_u32_(unsigned int obj, unsigned int selector, unsigned int scope, &unsigned int out) {
     struct CAPropertyAddress_ a = ca_addr_(selector, scope);
     unsigned int size = 4U;
-    unsafe { return AudioObjectGetPropertyData(obj, &a, 0U, (const void*)0, &size, (void*)out); }
+    unsafe { return AudioObjectGetPropertyData(obj, &a, 0U, (const unsigned char*)0, &size, (unsigned char*)out); }
 }
 
 static int ca_get_f64_(unsigned int obj, unsigned int selector, unsigned int scope, &double out) {
     struct CAPropertyAddress_ a = ca_addr_(selector, scope);
     unsigned int size = 8U;
-    unsafe { return AudioObjectGetPropertyData(obj, &a, 0U, (const void*)0, &size, (void*)out); }
+    unsafe { return AudioObjectGetPropertyData(obj, &a, 0U, (const unsigned char*)0, &size, (unsigned char*)out); }
 }
 
 // Total channels of a device in one scope (sum over its streams' buffers).
@@ -110,15 +124,15 @@ static int ca_channels_(unsigned int dev, unsigned int scope) {
     unsigned int size = 0U;
     int total = 0;
     unsafe {
-        if (AudioObjectGetPropertyDataSize(dev, &a, 0U, (const void*)0, &size) != 0 || size < 8U) return 0;
+        if (AudioObjectGetPropertyDataSize(dev, &a, 0U, (const unsigned char*)0, &size) != 0 || size < 8U) return 0;
         unsigned char* list = (unsigned char*)alloc_zeroed_raw_((unsigned long)size);
         if (list == (unsigned char*)0) return 0;
-        if (AudioObjectGetPropertyData(dev, &a, 0U, (const void*)0, &size, (void*)list) == 0) {
+        if (AudioObjectGetPropertyData(dev, &a, 0U, (const unsigned char*)0, &size, list) == 0) {
             unsigned int n = *(unsigned int*)list;
             struct CABuffer_* bufs = (struct CABuffer_*)(list + 8);
             for (unsigned int i = 0U; i < n; i = i + 1U) total = total + (int)bufs[i].channels;
         }
-        dealloc_raw_((void*)list);
+        dealloc(list);
     }
     return total;
 }
@@ -128,8 +142,8 @@ static int audio_coreaudio_available_() { return 1; }
 // Let the HAL run its own notification thread (no run loop of ours).
 static void ca_init_run_loop_() {
     struct CAPropertyAddress_ a = ca_addr_(CA_PROP_RUN_LOOP, CA_SCOPE_GLOBAL);
-    void* none = (void*)0;
-    unsafe { AudioObjectSetPropertyData(CA_SYSTEM_OBJECT, &a, 0U, (const void*)0, (unsigned int)sizeof(void*), (const void*)&none); }
+    CFRunLoop_* none = (CFRunLoop_*)0;
+    unsafe { AudioObjectSetPropertyData(CA_SYSTEM_OBJECT, &a, 0U, (const unsigned char*)0, (unsigned int)sizeof(CFRunLoop_*), (const unsigned char*)&none); }
 }
 
 static int audio_coreaudio_probe_(&AudioHost_ h) {
@@ -141,23 +155,23 @@ static int audio_coreaudio_probe_(&AudioHost_ h) {
     ca_get_u32_(CA_SYSTEM_OBJECT, CA_PROP_DEFAULT_OUTPUT, CA_SCOPE_GLOBAL, &defOut);
     ca_get_u32_(CA_SYSTEM_OBJECT, CA_PROP_DEFAULT_INPUT, CA_SCOPE_GLOBAL, &defIn);
     unsafe {
-        int rc = AudioObjectGetPropertyDataSize(CA_SYSTEM_OBJECT, &a, 0U, (const void*)0, &size);
+        int rc = AudioObjectGetPropertyDataSize(CA_SYSTEM_OBJECT, &a, 0U, (const unsigned char*)0, &size);
         if (rc != 0) return audio_fail_code_(&h.error, AUDIO_ERR_SYSTEM, "coreaudio: listing devices failed", (long long)rc);
         if (size == 0U) return AUDIO_OK;
         unsigned int* ids = (unsigned int*)alloc_zeroed_raw_((unsigned long)size);
         if (ids == (unsigned int*)0) return audio_fail_(&h.error, AUDIO_ERR_NO_MEMORY, "coreaudio: out of memory");
-        rc = AudioObjectGetPropertyData(CA_SYSTEM_OBJECT, &a, 0U, (const void*)0, &size, (void*)ids);
+        rc = AudioObjectGetPropertyData(CA_SYSTEM_OBJECT, &a, 0U, (const unsigned char*)0, &size, (unsigned char*)ids);
         unsigned int n = rc == 0 ? size / 4U : 0U;
         for (unsigned int i = 0U; i < n; i = i + 1U) {
             unsigned int dev = ids[i];
             struct AudioDeviceInfo info = audio_device_info_blank_();
             // Name: a CFString.
             struct CAPropertyAddress_ na = ca_addr_(CA_PROP_NAME, CA_SCOPE_GLOBAL);
-            void* cfname = (void*)0;
-            unsigned int nsize = (unsigned int)sizeof(void*);
-            if (AudioObjectGetPropertyData(dev, &na, 0U, (const void*)0, &nsize, (void*)&cfname) == 0 && cfname != (void*)0) {
-                CFStringGetCString((const void*)cfname, (char*)&info.name[0], (long)AUDIO_DEVICE_NAME_MAX, CA_UTF8);
-                CFRelease((const void*)cfname);
+            CFString_* cfname = (CFString_*)0;
+            unsigned int nsize = (unsigned int)sizeof(CFString_*);
+            if (AudioObjectGetPropertyData(dev, &na, 0U, (const unsigned char*)0, &nsize, (unsigned char*)&cfname) == 0 && cfname != (CFString_*)0) {
+                CFStringGetCString(cfname, (char*)&info.name[0], (long)AUDIO_DEVICE_NAME_MAX, CA_UTF8);
+                CFRelease(cfname);
             }
             if (info.name[0] == (char)0) audio_strcpy_(&info.name[0], (unsigned long)AUDIO_DEVICE_NAME_MAX, "Core Audio device");
             info.output_channels = ca_channels_(dev, CA_SCOPE_OUTPUT);
@@ -168,10 +182,10 @@ static int audio_coreaudio_probe_(&AudioHost_ h) {
             // Rates: every standard rate inside an available range.
             struct CAPropertyAddress_ ra = ca_addr_(CA_PROP_AVAILABLE_RATES, CA_SCOPE_GLOBAL);
             unsigned int rsize = 0U;
-            if (AudioObjectGetPropertyDataSize(dev, &ra, 0U, (const void*)0, &rsize) == 0 && rsize >= 16U) {
+            if (AudioObjectGetPropertyDataSize(dev, &ra, 0U, (const unsigned char*)0, &rsize) == 0 && rsize >= 16U) {
                 struct CAValueRange_* ranges = (struct CAValueRange_*)alloc_zeroed_raw_((unsigned long)rsize);
                 if (ranges != (struct CAValueRange_*)0) {
-                    if (AudioObjectGetPropertyData(dev, &ra, 0U, (const void*)0, &rsize, (void*)ranges) == 0) {
+                    if (AudioObjectGetPropertyData(dev, &ra, 0U, (const unsigned char*)0, &rsize, (unsigned char*)ranges) == 0) {
                         unsigned int nr = rsize / 16U;
                         for (unsigned int r = 0U; r < nr; r = r + 1U) {
                             if (ranges[r].minimum == ranges[r].maximum) {
@@ -185,7 +199,7 @@ static int audio_coreaudio_probe_(&AudioHost_ h) {
                             }
                         }
                     }
-                    dealloc_raw_((void*)ranges);
+                    dealloc(ranges);
                 }
             }
             double nominal = 0.0;
@@ -206,7 +220,7 @@ static int audio_coreaudio_probe_(&AudioHost_ h) {
                 case null: {}
             }
         }
-        dealloc_raw_((void*)ids);
+        dealloc(ids);
     }
     return AUDIO_OK;
 }
@@ -217,7 +231,7 @@ static void audio_coreaudio_host_close_(&AudioHost_ h) { }
 
 struct CAStream_ {
     unsigned int device;
-    void* proc_id;
+    CAIOProcID_* proc_id;
     int running;            // AudioDeviceStart'ed
     int stopped;            // (rt) the IOProc outputs silence
     int hogged;
@@ -242,8 +256,8 @@ static unsigned int ca_list_frames_(const unsigned char* list) {
 }
 
 // The HAL's IOProc (its real-time thread).
-static int ca_ioproc_(unsigned int dev, const void* now, const unsigned char* inList, const void* inTime,
-                      unsigned char* outList, const void* outTime, void* client) {
+static int ca_ioproc_(unsigned int dev, const CATimeStamp_* now, const unsigned char* inList, const CATimeStamp_* inTime,
+                      unsigned char* outList, const CATimeStamp_* outTime, ?&Erased client) {
     unsafe {
         struct CAStream_* c = (struct CAStream_*)client;
         struct AudioStreamState_* st = c->st;
@@ -255,7 +269,7 @@ static int ca_ioproc_(unsigned int dev, const void* now, const unsigned char* in
         }
         if (live && st->mode_in && inList != (const unsigned char*)0) {
             // Gather the device's input streams into one interleaved frame.
-            float* dst = (float*)st->device_buf[AUDIO_DIR_IN];
+            float* dst = (float*)st->device_buf[AUDIO_DIR_IN].ptr;
             unsigned int total = (unsigned int)st->device_channels[AUDIO_DIR_IN];
             unsigned int nb = *(const unsigned int*)inList;
             const struct CABuffer_* bufs = (const struct CABuffer_*)(inList + 8);
@@ -274,7 +288,7 @@ static int ca_ioproc_(unsigned int dev, const void* now, const unsigned char* in
         if (st->mode_out && outList != (unsigned char*)0) {
             unsigned int nb = *(unsigned int*)outList;
             struct CABuffer_* bufs = (struct CABuffer_*)(outList + 8);
-            const float* src = (const float*)st->device_buf[AUDIO_DIR_OUT];
+            const float* src = (const float*)st->device_buf[AUDIO_DIR_OUT].ptr;
             unsigned int total = (unsigned int)st->device_channels[AUDIO_DIR_OUT];
             unsigned int base = 0U;
             for (unsigned int b = 0U; b < nb; b = b + 1U) {
@@ -303,7 +317,7 @@ static int ca_ioproc_(unsigned int dev, const void* now, const unsigned char* in
 }
 
 // 'over' (processor overload) and 'livn' (device gone) notifications.
-static int ca_listener_(unsigned int obj, unsigned int n, const CAPropertyAddress_* addrs, void* client) {
+static int ca_listener_(unsigned int obj, unsigned int n, const CAPropertyAddress_* addrs, ?&Erased client) {
     unsafe {
         struct CAStream_* c = (struct CAStream_*)client;
         for (unsigned int i = 0U; i < n; i = i + 1U) {
@@ -329,15 +343,15 @@ static void ca_release_(&CAStream_ c) {
         if (c.listening) {
             struct CAPropertyAddress_ o = ca_addr_(CA_PROP_OVERLOAD, CA_SCOPE_GLOBAL);
             struct CAPropertyAddress_ l = ca_addr_(CA_PROP_IS_ALIVE, CA_SCOPE_GLOBAL);
-            AudioObjectRemovePropertyListener(c.device, &o, (void*)ca_listener_, (void*)c);
-            AudioObjectRemovePropertyListener(c.device, &l, (void*)ca_listener_, (void*)c);
+            AudioObjectRemovePropertyListener(c.device, &o, ca_listener_, (?&Erased)c);
+            AudioObjectRemovePropertyListener(c.device, &l, ca_listener_, (?&Erased)c);
             c.listening = 0;
         }
-        if (c.proc_id != (void*)0) { AudioDeviceDestroyIOProcID(c.device, c.proc_id); c.proc_id = (void*)0; }
+        if (c.proc_id != (CAIOProcID_*)0) { AudioDeviceDestroyIOProcID(c.device, c.proc_id); c.proc_id = (CAIOProcID_*)0; }
         if (c.hogged) {
             int none = -1;
             struct CAPropertyAddress_ hog = ca_addr_(CA_PROP_HOG_MODE, CA_SCOPE_GLOBAL);
-            AudioObjectSetPropertyData(c.device, &hog, 0U, (const void*)0, 4U, (const void*)&none);
+            AudioObjectSetPropertyData(c.device, &hog, 0U, (const unsigned char*)0, 4U, (const unsigned char*)&none);
             c.hogged = 0;
         }
     }
@@ -363,7 +377,7 @@ static int audio_coreaudio_open_(&AudioHost_ h, &AudioStreamState_ st) {
                 if ((st.flags & AUDIO_FLAG_EXCLUSIVE) != 0U) {
                     int pid = getpid();
                     struct CAPropertyAddress_ hog = ca_addr_(CA_PROP_HOG_MODE, CA_SCOPE_GLOBAL);
-                    if (AudioObjectSetPropertyData(dev, &hog, 0U, (const void*)0, 4U, (const void*)&pid) == 0) c.hogged = 1;
+                    if (AudioObjectSetPropertyData(dev, &hog, 0U, (const unsigned char*)0, 4U, (const unsigned char*)&pid) == 0) c.hogged = 1;
                     else rc = audio_fail_(&st.error, AUDIO_ERR_DEVICE_BUSY, "coreaudio: could not take hog mode");
                 }
                 // Sample rate: set it when it differs, then wait for the change.
@@ -372,7 +386,7 @@ static int audio_coreaudio_open_(&AudioHost_ h, &AudioStreamState_ st) {
                     (unsigned int)cur != st.sample_rate) {
                     double want = (double)st.sample_rate;
                     struct CAPropertyAddress_ ra = ca_addr_(CA_PROP_NOMINAL_RATE, CA_SCOPE_GLOBAL);
-                    int e = AudioObjectSetPropertyData(dev, &ra, 0U, (const void*)0, 8U, (const void*)&want);
+                    int e = AudioObjectSetPropertyData(dev, &ra, 0U, (const unsigned char*)0, 8U, (const unsigned char*)&want);
                     if (e != 0) rc = audio_fail_code_(&st.error, AUDIO_ERR_INVALID_PARAM, "coreaudio: sample rate not supported", (long long)st.sample_rate);
                     for (int t = 0; rc == AUDIO_OK && t < 100; t = t + 1) {
                         ca_get_f64_(dev, CA_PROP_NOMINAL_RATE, CA_SCOPE_GLOBAL, &cur);
@@ -390,12 +404,12 @@ static int audio_coreaudio_open_(&AudioHost_ h, &AudioStreamState_ st) {
                     range.minimum = 0.0; range.maximum = 0.0;
                     struct CAPropertyAddress_ fr = ca_addr_(CA_PROP_BUFFER_RANGE, CA_SCOPE_GLOBAL);
                     unsigned int rs = 16U;
-                    if (AudioObjectGetPropertyData(dev, &fr, 0U, (const void*)0, &rs, (void*)&range) == 0 && range.maximum > 0.0) {
+                    if (AudioObjectGetPropertyData(dev, &fr, 0U, (const unsigned char*)0, &rs, (unsigned char*)&range) == 0 && range.maximum > 0.0) {
                         if ((double)frames < range.minimum) frames = (unsigned int)range.minimum;
                         if ((double)frames > range.maximum) frames = (unsigned int)range.maximum;
                     }
                     struct CAPropertyAddress_ fs = ca_addr_(CA_PROP_BUFFER_FRAMES, CA_SCOPE_GLOBAL);
-                    AudioObjectSetPropertyData(dev, &fs, 0U, (const void*)0, 4U, (const void*)&frames);
+                    AudioObjectSetPropertyData(dev, &fs, 0U, (const unsigned char*)0, 4U, (const unsigned char*)&frames);
                     unsigned int got = frames;
                     ca_get_u32_(dev, CA_PROP_BUFFER_FRAMES, CA_SCOPE_GLOBAL, &got);
                     st.buffer_frames = got;
@@ -416,23 +430,23 @@ static int audio_coreaudio_open_(&AudioHost_ h, &AudioStreamState_ st) {
                     st.latency[d] = (long)lat + (long)safety + (long)st.buffer_frames;
                 }
                 if (rc == AUDIO_OK) {
-                    int e = AudioDeviceCreateIOProcID(dev, (void*)ca_ioproc_, (void*)c, &c.proc_id);
+                    int e = AudioDeviceCreateIOProcID(dev, ca_ioproc_, (?&Erased)c, &c.proc_id);
                     if (e != 0) rc = audio_fail_code_(&st.error, AUDIO_ERR_SYSTEM, "coreaudio: AudioDeviceCreateIOProcID", (long long)e);
                 }
                 if (rc == AUDIO_OK) {
                     struct CAPropertyAddress_ o = ca_addr_(CA_PROP_OVERLOAD, CA_SCOPE_GLOBAL);
                     struct CAPropertyAddress_ l = ca_addr_(CA_PROP_IS_ALIVE, CA_SCOPE_GLOBAL);
-                    AudioObjectAddPropertyListener(dev, &o, (void*)ca_listener_, (void*)c);
-                    AudioObjectAddPropertyListener(dev, &l, (void*)ca_listener_, (void*)c);
+                    AudioObjectAddPropertyListener(dev, &o, ca_listener_, (?&Erased)c);
+                    AudioObjectAddPropertyListener(dev, &l, ca_listener_, (?&Erased)c);
                     c.listening = 1;
                 }
             }
             if (rc != AUDIO_OK) {
                 ca_release_(c);
-                unsafe { dealloc_raw_((void*)c); }
+                unsafe { dealloc((?&heap CAStream_)c); }
                 return rc;
             }
-            unsafe { st.backend = (void*)c; }
+            unsafe { st.backend = (?&heap AudioStreamImpl_)c; }
             return AUDIO_OK;
         }
     }
@@ -476,11 +490,11 @@ static void audio_coreaudio_close_(&AudioStreamState_ st) {
     match (ca_of_(st)) {
         case some(c): {
             ca_release_(c);
-            unsafe { dealloc_raw_((void*)c); }
+            unsafe { dealloc((?&heap CAStream_)c); }
         }
         case null: {}
     }
-    unsafe { st.backend = (void*)0; }
+    unsafe { st.backend = null; }
 }
 
 static struct AudioBackendVt_ g_audio_coreaudio_vt_;

@@ -27,7 +27,7 @@ void RpcResult::free() { self.drop(); }
 
 void RpcResult::drop() {
     if (self.data != (unsigned char*)0) {
-        unsafe { dealloc_raw_((void*)self.data); }
+        unsafe { dealloc(self.data); }
     }
     self.error_message.free();
 }
@@ -185,7 +185,7 @@ static struct HttpResponse rpc_dispatch_(&HttpRequest req) {
     } else {
         unsafe { result = handlerFn(((const unsigned char*)reqData)[0..reqLen]); }
     }
-    if (reqData != (unsigned char*)0) { unsafe { dealloc_raw_((void*)reqData); } }
+    if (reqData != (unsigned char*)0) { unsafe { dealloc(reqData); } }
 
     if (!result.ok) {
         resp.status = 500;

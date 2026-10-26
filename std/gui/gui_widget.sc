@@ -2072,7 +2072,7 @@ void GuiUi::drop() {
     if (self.canvasReady) { self.canvas.free(); }
     self.root.uiPtr = null;
     self.root.free();
-    unsafe { dealloc_raw_((void*)self); }
+    unsafe { dealloc((?&heap GuiUi)self); }
 }
 
 // ── message boxes ─────────────────────────────────────────────────────────
@@ -2223,7 +2223,7 @@ void Widget::drop() {
         }
         case null: { }
     }
-    unsafe { dealloc_raw_((void*)self); }
+    unsafe { dealloc((?&heap Widget)self); }
 }
 
 } // namespace std

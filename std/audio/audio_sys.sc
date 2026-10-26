@@ -5,15 +5,26 @@
 
 namespace std {
 
+static void audio_sym_missing_() { }
+
+fn void() audio_dlsym_or_(?&AudioLib_ lib, const &char name, &int ok) {
+    match (audio_dlsym_(lib, name)) {
+        case some(f): { return f; }
+        case null: {}
+    }
+    *ok = 0;
+    return audio_sym_missing_;
+}
+
 #if defined(__wasm__)
 // ════════════════════════════ WebAssembly ════════════════════════════════════
 // No dynamic loading, no threads; the clock is the host's performance.now()
 // (std/audio/audio_web.js provides 'std_audio_js_now_ms' in the import object).
 extern double std_audio_js_now_ms();
 
-?&void audio_dlopen_(const &char name) { return null; }
-?&void audio_dlopen2_(const &char name, const ?&char fallback) { return null; }
-?&void audio_dlsym_(?&void lib, const &char name) { return null; }
+?&AudioLib_ audio_dlopen_(const &char name) { return null; }
+?&AudioLib_ audio_dlopen2_(const &char name, const ?&char fallback) { return null; }
+AudioSym_ audio_dlsym_(?&AudioLib_ lib, const &char name) { return null; }
 long long audio_now_ns_() {
     double ms = 0.0;
     unsafe { ms = std_audio_js_now_ms(); }
@@ -25,32 +36,34 @@ int audio_thread_make_realtime_(int priority) { return -1; }
 
 #elif defined(_WIN32)
 // ════════════════════════════════ Windows ════════════════════════════════════
-extern void* LoadLibraryA(const char* name);
-extern void* GetProcAddress(void* module, const char* name);
+extern AudioLib_* LoadLibraryA(const char* name);       // HMODULE
+extern AudioSym_ GetProcAddress(AudioLib_* module, const char* name);   // FARPROC
 extern int   QueryPerformanceCounter(long long* out);
 extern int   QueryPerformanceFrequency(long long* out);
 extern void  Sleep(unsigned int ms);
 extern char* getenv(const char* name);
 // avrt.dll's AvSetMmThreadCharacteristicsA(LPCSTR task, LPDWORD index) ->
 // HANDLE: looked up at run time so std links no avrt.lib.
-typedef fn void*(const char*, unsigned int*) AvSetMmThreadFn_;
+struct AudioWinHandle_ { char opaque_; };
+typedef fn AudioWinHandle_*(const char*, unsigned int*) AvSetMmThreadFn_;
 
-?&void audio_dlopen_(const &char name) {
-    unsafe { return (?&void)LoadLibraryA(name); }
+?&AudioLib_ audio_dlopen_(const &char name) {
+    unsafe { return (?&AudioLib_)LoadLibraryA(name); }
 }
-?&void audio_dlopen2_(const &char name, const ?&char fallback) {
-    ?&void h = audio_dlopen_(name);
+?&AudioLib_ audio_dlopen2_(const &char name, const ?&char fallback) {
+    ?&AudioLib_ h = audio_dlopen_(name);
     if (!h.is_null()) return h;
     unsafe {
         if ((const char*)fallback == (const char*)0) return null;
-        return (?&void)LoadLibraryA((const char*)fallback);
+        return (?&AudioLib_)LoadLibraryA((const char*)fallback);
     }
 }
-?&void audio_dlsym_(?&void lib, const &char name) {
-    unsafe {
-        if ((void*)lib == (void*)0) return null;
-        return (?&void)GetProcAddress((void*)lib, name);
+AudioSym_ audio_dlsym_(?&AudioLib_ lib, const &char name) {
+    match (lib) {
+        case some(l): { unsafe { return GetProcAddress((AudioLib_*)l, name); } }
+        case null: {}
     }
+    return null;
 }
 long long audio_now_ns_() {
     long long freq = 0LL;
@@ -71,14 +84,13 @@ void audio_sleep_us_(long long us) {
 }
 int audio_thread_make_realtime_(int priority) {
     unsafe {
-        void* avrt = LoadLibraryA("avrt.dll");
-        if (avrt == (void*)0) return -1;
-        void* f = GetProcAddress(avrt, "AvSetMmThreadCharacteristicsA");
-        if (f == (void*)0) return -1;
+        int ok = 1;
+        fn void() f = audio_dlsym_or_(audio_dlopen_("avrt.dll"), "AvSetMmThreadCharacteristicsA", &ok);
+        if (!ok) return -1;
         AvSetMmThreadFn_ set = (AvSetMmThreadFn_)f;
         unsigned int index = 0U;
-        void* h = set("Pro Audio", &index);
-        return h == (void*)0 ? -1 : 0;
+        AudioWinHandle_* h = set("Pro Audio", &index);
+        return h == (AudioWinHandle_*)0 ? -1 : 0;
     }
 }
 ?&char audio_getenv_(const &char name) {
@@ -87,13 +99,10 @@ int audio_thread_make_realtime_(int priority) {
 
 #else
 // ═════════════════════════════════ POSIX ═════════════════════════════════════
-extern void* dlopen(const char* file, int mode);
-extern void* dlsym(void* handle, const char* name);
+extern AudioLib_* dlopen(const char* file, int mode);
+extern AudioSym_ dlsym(AudioLib_* handle, const char* name);
 extern char* getenv(const char* name);
-extern int   clock_gettime(int clk, void* ts);
-extern int   nanosleep(const void* req, void* rem);
 extern unsigned long pthread_self();
-extern int   pthread_setschedparam(unsigned long thread, int policy, const void* param);
 
 #define AUDIO_RTLD_NOW 2
 #if defined(__APPLE__)
@@ -112,29 +121,35 @@ struct AudioTimespec_ {
     AUDIO_TS_FIELD_ tv_sec;
     AUDIO_TS_FIELD_ tv_nsec;
 };
+// struct sched_param (+ room).
+struct AudioSchedParam_ { int priority; int pad_[3]; };
+extern int clock_gettime(int clk, AudioTimespec_* ts);
+extern int nanosleep(const AudioTimespec_* req, AudioTimespec_* rem);
+extern int pthread_setschedparam(unsigned long thread, int policy, const AudioSchedParam_* param);
 
-?&void audio_dlopen_(const &char name) {
-    unsafe { return (?&void)dlopen(name, AUDIO_RTLD_NOW); }
+?&AudioLib_ audio_dlopen_(const &char name) {
+    unsafe { return (?&AudioLib_)dlopen(name, AUDIO_RTLD_NOW); }
 }
-?&void audio_dlopen2_(const &char name, const ?&char fallback) {
-    ?&void h = audio_dlopen_(name);
+?&AudioLib_ audio_dlopen2_(const &char name, const ?&char fallback) {
+    ?&AudioLib_ h = audio_dlopen_(name);
     if (!h.is_null()) return h;
     unsafe {
         if ((const char*)fallback == (const char*)0) return null;
-        return (?&void)dlopen((const char*)fallback, AUDIO_RTLD_NOW);
+        return (?&AudioLib_)dlopen((const char*)fallback, AUDIO_RTLD_NOW);
     }
 }
-?&void audio_dlsym_(?&void lib, const &char name) {
-    unsafe {
-        if ((void*)lib == (void*)0) return null;
-        return (?&void)dlsym((void*)lib, name);
+AudioSym_ audio_dlsym_(?&AudioLib_ lib, const &char name) {
+    match (lib) {
+        case some(l): { unsafe { return dlsym((AudioLib_*)l, name); } }
+        case null: {}
     }
+    return null;
 }
 long long audio_now_ns_() {
     struct AudioTimespec_ ts;
     ts.tv_sec = (AUDIO_TS_FIELD_)0;
     ts.tv_nsec = (AUDIO_TS_FIELD_)0;
-    unsafe { clock_gettime(AUDIO_CLOCK_MONOTONIC_, (void*)&ts); }
+    unsafe { clock_gettime(AUDIO_CLOCK_MONOTONIC_, &ts); }
     return (long long)ts.tv_sec * 1000000000LL + (long long)ts.tv_nsec;
 }
 void audio_sleep_us_(long long us) {
@@ -142,16 +157,17 @@ void audio_sleep_us_(long long us) {
     struct AudioTimespec_ ts;
     ts.tv_sec = (AUDIO_TS_FIELD_)(us / 1000000LL);
     ts.tv_nsec = (AUDIO_TS_FIELD_)((us % 1000000LL) * 1000LL);
-    unsafe { nanosleep((const void*)&ts, (void*)0); }
+    unsafe { nanosleep(&ts, (AudioTimespec_*)0); }
 }
 int audio_thread_make_realtime_(int priority) {
     int p = priority;
     if (p <= 0) p = 70;
     if (p > 99) p = 99;
-    int param[4];
-    param[0] = p; param[1] = 0; param[2] = 0; param[3] = 0;   // struct sched_param (+ room)
+    struct AudioSchedParam_ param;
+    param.priority = p;
+    param.pad_[0] = 0; param.pad_[1] = 0; param.pad_[2] = 0;
     int rc = 0;
-    unsafe { rc = pthread_setschedparam(pthread_self(), AUDIO_SCHED_FIFO_, (const void*)&param[0]); }
+    unsafe { rc = pthread_setschedparam(pthread_self(), AUDIO_SCHED_FIFO_, &param); }
     return rc == 0 ? 0 : -1;
 }
 ?&char audio_getenv_(const &char name) {

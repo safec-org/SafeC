@@ -124,7 +124,7 @@ inline void Reactor::remove(int fd, int filter) {
 }
 
 // Reactor::poll(sched, ...) is reactor.sc's, over this.
-inline int Reactor::poll_events_raw_(void* on_ready, void* ctx, long long timeout_ms) {
+inline int Reactor::poll_events_raw_(fn void(?&Erased, int, int) on_ready, ?&Erased ctx, long long timeout_ms) {
     struct KEvent events[64];
     struct TimeSpec ts;
     const void* toPtr;
@@ -145,7 +145,7 @@ inline int Reactor::poll_events_raw_(void* on_ready, void* ctx, long long timeou
     int i = 0;
     while (i < n) {
         int filter = reactor_portable_filter_(events[i].filter);
-        unsafe { fn void(void*, int, int) cb = (fn void(void*, int, int))on_ready; cb(ctx, (int)events[i].ident, filter); }
+        on_ready(ctx, (int)events[i].ident, filter);
         i = i + 1;
     }
     return n;

@@ -1708,7 +1708,7 @@ static int rocm_ensure_() {
         hiprtcDestroyProgram(&prog);
         void* module = (void*)0;
         int loaded = hipModuleLoadData(&module, (const void*)code);
-        dealloc_raw_((void*)code);
+        dealloc(code);
         if (loaded != ROCM_HIP_OK) return 0;
         int k = 0;
         while (k < K_COUNT) {

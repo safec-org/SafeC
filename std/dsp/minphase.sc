@@ -87,7 +87,7 @@ void minimum_phase_n_(const &double x, unsigned long n, unsigned long fftLen, &d
         i = i + 1UL;
     }
 
-    unsafe { dealloc_raw_((void*)spec); }
+    unsafe { dealloc(spec); }
 }
 
 // ── Slice API (the public signatures; the (reference, length) cores above

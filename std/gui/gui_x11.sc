@@ -570,7 +570,7 @@ static void __gui_x11_free_image(struct GuiX11Window* w) {
             w->image = (void*)0;
         }
         if (w->staging != (unsigned int*)0) {
-            dealloc_raw_((void*)w->staging);
+            dealloc(w->staging);
             w->staging = (unsigned int*)0;
         }
         w->stagingW = 0;
@@ -587,7 +587,7 @@ static void __gui_x11_destroy(&GuiWindowState st) {
         if (w->gc != (void*)0) { XFreeGC(gX.display, w->gc); }
         XDestroyWindow(gX.display, w->window);
         XFlush(gX.display);
-        dealloc_raw_((void*)w);
+        dealloc(w);
         st.native = null;
     }
 }

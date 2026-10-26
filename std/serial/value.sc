@@ -129,7 +129,7 @@ void Value::free() { self.drop(); }
 void Value::drop() {
     int kind = self.kind;
     if (kind == VAL_STRING) {
-        unsafe { if (self.str_val != (char*)0) { dealloc_raw_((void*)self.str_val); } }
+        unsafe { if (self.str_val != (char*)0) { dealloc(self.str_val); } }
     } else if (kind == VAL_ARRAY) {
         unsigned long i = 0UL;
         unsigned long n = self.arr_val.length();
@@ -148,8 +148,8 @@ void Value::drop() {
             unsafe {
                 e = self.obj_val.at(i);
                 e->val.free();
-                dealloc_raw_((void*)e->val);
-                dealloc_raw_((void*)e->key);
+                dealloc((?&heap Value)e->val);
+                dealloc(e->key);
             }
             i = i + 1UL;
         }

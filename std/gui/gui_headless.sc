@@ -60,7 +60,7 @@ static int __hl_create(&GuiWindowState st, const &GuiWindowOptions opts) {
 static void __hl_destroy(&GuiWindowState st) {
     if (gHeadlessFocusId == st.id) { gHeadlessFocusId = 0U; }
     unsafe {
-        if (!st.native.is_null()) { dealloc_raw_((void*)st.native); }
+        if (!st.native.is_null()) { dealloc((?&heap Erased)st.native); }
     }
     st.native = null;
 }

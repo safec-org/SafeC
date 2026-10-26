@@ -376,7 +376,7 @@ void tls_st_free_(&TlsStream s) {
         if (c->ctx != (void*)0) { CFRelease((const void*)c->ctx); }
         if (c->anchors != (void*)0) { CFRelease((const void*)c->anchors); }
         c->name.free();
-        dealloc_raw_((void*)c);
+        dealloc(c);
     }
     s.impl_ = null;
 }

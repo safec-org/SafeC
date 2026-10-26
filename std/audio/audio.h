@@ -269,8 +269,12 @@ struct Audio {
     // Opens a stream: output, input or both (duplex; give both params).
     // 'frames' is the requested frames per callback (0 = the API's default)
     // and receives what the device actually uses. 'opts' may be null. The
-    // callback gets 'user' back as its second argument.
-    generic<T>
+    // callback gets 'user' back as its second argument. The callback runs on
+    // the audio thread while 'user' stays reachable from the caller's, so T
+    // must be Send + Sync (plain data, atomics, a Mutex; no raw pointers,
+    // stack references or !Send handles such as GUI windows); writes shared
+    // with other threads still need atomics or a lock.
+    generic<T: Send + Sync>
     struct Result<AudioStream, AudioError> open_stream(?&AudioStreamParams output, ?&AudioStreamParams input,
                                                        unsigned int format, unsigned int sample_rate,
                                                        &unsigned int frames,
@@ -286,7 +290,7 @@ struct Audio {
     void close() consume;   // = drop()
 };
 
-generic<T>
+generic<T: Send + Sync>
 struct Result<AudioStream, AudioError> Audio::open_stream(?&AudioStreamParams output, ?&AudioStreamParams input,
                                                           unsigned int format, unsigned int sample_rate,
                                                           &unsigned int frames,

@@ -180,7 +180,7 @@ int HashMap::rehash_(unsigned long new_cap) __attribute__((noinline, cold)) {
         ns = (?&heap unsigned char)alloc_zeroed_raw_(new_cap);
     }
     if (nk.is_null() || nv.is_null() || nh.is_null() || ns.is_null()) {
-        unsafe { dealloc_raw_((void*)nk); dealloc_raw_((void*)nv); dealloc_raw_((void*)nh); dealloc_raw_((void*)ns); }
+        unsafe { dealloc(nk); dealloc(nv); dealloc(nh); dealloc(ns); }
         return 0;
     }
     unsigned long mask = new_cap - 1UL;
@@ -209,8 +209,8 @@ int HashMap::rehash_(unsigned long new_cap) __attribute__((noinline, cold)) {
             }
             i = i + 1UL;
         }
-        dealloc_raw_((void*)self.keys); dealloc_raw_((void*)self.vals);
-        dealloc_raw_((void*)self.hashes); dealloc_raw_((void*)self.states);
+        dealloc(self.keys); dealloc(self.vals);
+        dealloc(self.hashes); dealloc(self.states);
     }
     self.keys = nk; self.vals = nv; self.hashes = nh; self.states = ns;
     self.cap = new_cap;
@@ -320,8 +320,8 @@ void HashMap::free() { self.drop(); }
 generic<K, V>
 void HashMap::drop() {
     unsafe {
-        dealloc_raw_((void*)self.keys); dealloc_raw_((void*)self.vals);
-        dealloc_raw_((void*)self.hashes); dealloc_raw_((void*)self.states);
+        dealloc(self.keys); dealloc(self.vals);
+        dealloc(self.hashes); dealloc(self.states);
     }
     self.keys = null; self.vals = null; self.hashes = null; self.states = null;
     self.cap = 0UL; self.len = 0UL; self.tombstones = 0UL;
@@ -403,7 +403,7 @@ int StrMap::rehash_(unsigned long new_cap) {
         ns = (?&heap unsigned char)alloc_zeroed_raw_(new_cap);
     }
     if (nk.is_null() || nv.is_null() || nh.is_null() || ns.is_null()) {
-        unsafe { dealloc_raw_((void*)nk); dealloc_raw_((void*)nv); dealloc_raw_((void*)nh); dealloc_raw_((void*)ns); }
+        unsafe { dealloc(nk); dealloc(nv); dealloc(nh); dealloc(ns); }
         return 0;
     }
     unsigned long mask = new_cap - 1UL;
@@ -421,8 +421,8 @@ int StrMap::rehash_(unsigned long new_cap) {
             }
             i = i + 1UL;
         }
-        dealloc_raw_((void*)self.keys); dealloc_raw_((void*)self.vals);
-        dealloc_raw_((void*)self.hashes); dealloc_raw_((void*)self.states);
+        dealloc(self.keys); dealloc(self.vals);
+        dealloc(self.hashes); dealloc(self.states);
     }
     self.keys = nk; self.vals = nv; self.hashes = nh; self.states = ns;
     self.cap = new_cap;
@@ -524,8 +524,8 @@ generic<V>
 void StrMap::drop() {
     self.clear();
     unsafe {
-        dealloc_raw_((void*)self.keys); dealloc_raw_((void*)self.vals);
-        dealloc_raw_((void*)self.hashes); dealloc_raw_((void*)self.states);
+        dealloc(self.keys); dealloc(self.vals);
+        dealloc(self.hashes); dealloc(self.states);
     }
     self.keys = null; self.vals = null; self.hashes = null; self.states = null;
     self.cap = 0UL;

@@ -7,6 +7,26 @@ release tags.
 
 ## [Unreleased]
 
+### Changed — no `void*` left in std/audio; fewer in std's internals
+
+- **std/audio** has no `void*` at all, internal headers and FFI included:
+  the audio/MIDI backend tables are `?&static AudioBackendVt_` /
+  `MidiBackendVt_`, each backend's state is an opaque typed handle
+  (`?&heap AudioStreamImpl_` / `MidiPortImpl_`), the stream buffers are
+  `[]unsigned char` slices, the stream thread's body and the MIDI callback
+  slot are `?fn`, dlopen()/dlsym() return `?&AudioLib_` / a function, and
+  libasound, libjack, Core Audio, Core MIDI, WASAPI (COM) and WinMM are
+  declared with opaque handle structs, typed callbacks taking `?&Erased`
+  and byte pointers for their buffers.
+- **Breaking:** `Audio::open_stream<T>` and `MidiIn::set_callback<T>` require
+  `T: Send + Sync`: the callback runs on the audio/MIDI thread while the
+  context stays reachable from its owner's (plain data and atomics pass; raw
+  pointers, stack references and `!Send` handles are compile errors).
+- `Reactor::poll_events_raw_`, `parallel_for_raw_`'s job, `sys_qsort` /
+  `sys_bsearch` / `sys_atexit`, the HTTP server's handler context and the
+  fs drivers use typed `fn` / `?&Erased` instead of `void*`;
+  `dealloc_raw_((void*)p)` is the typed `dealloc(p)` throughout std.
+
 ### Changed — std's public API has no `void*` and no pointer + length pairs
 
 std's public declarations no longer take or return `void*`, raw `T*`

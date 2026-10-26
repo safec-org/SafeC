@@ -1,6 +1,7 @@
 // SafeC Standard Library — VFS Implementation
 #pragma once
 #include <std/stddef.h>
+#include <std/mem.h>
 #include <std/fs/vfs.h>
 
 namespace std {
@@ -9,21 +10,19 @@ namespace std {
 struct Vfs vfs_root;
 
 
-extern void* memset(void* p, int v, size_t n);
-extern void* memcpy(void* d, const void* s, size_t n);
 extern int   strcmp(const char* a, const char* b);
 extern size_t strlen(const char* s);
-extern void* strncpy(char* d, const char* s, size_t n);
+extern char* strncpy(char* d, const char* s, size_t n);
 
 
 inline struct VfsOps vfs_ops_none_() {
     struct VfsOps ops;
-    unsafe { memset((void*)&ops, 0, sizeof(struct VfsOps)); }
+    safe_memset_obj(&ops, 0);
     return ops;
 }
 
 inline void vfs_init() {
-    unsafe { memset((void*)&vfs_root, 0, sizeof(struct Vfs)); }
+    safe_memset_obj(&vfs_root, 0);
     vfs_root.mount_count = 0;
 }
 

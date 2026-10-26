@@ -19,8 +19,8 @@
 namespace std {
 
 struct JackMidi_ {
-    void* client;
-    void* port;
+    JackClient_* client;
+    JackPort_* port;
     int active;
     char own_prefix[MIDI_CLIENT_NAME_MAX + 2];
     // output: [u32 len][bytes] records from send() to the process thread
@@ -32,8 +32,8 @@ struct JackMidi_ {
 
 static int midi_jack_available_() {
     if (!audio_jack_load_()) return 0;
-    void* c = audio_jack_client_open_("SafeC probe");
-    if (c == (void*)0) return 0;
+    JackClient_* c = audio_jack_client_open_("SafeC probe");
+    if (c == (JackClient_*)0) return 0;
     unsafe { g_std_audio_jack_.client_close(c); }
     return 1;
 }
@@ -48,12 +48,12 @@ static void midi_jack_q_get_(&JackMidi_ j, unsigned long at, &unsigned char dst,
     }
 }
 
-static int midi_jack_process_(unsigned int nframes, void* arg) {
+static int midi_jack_process_(unsigned int nframes, ?&Erased arg) {
     unsafe {
         struct JackMidi_* j = (struct JackMidi_*)arg;
         struct MidiPortState_* st = j->st;
-        if (j->port == (void*)0) return 0;
-        void* buf = g_std_audio_jack_.port_get_buffer(j->port, nframes);
+        if (j->port == (JackPort_*)0) return 0;
+        JackMidiBuf_* buf = (JackMidiBuf_*)g_std_audio_jack_.port_get_buffer(j->port, nframes);
         if (st->is_input) {
             unsigned int n = g_std_audio_jack_.midi_get_event_count(buf);
             for (unsigned int i = 0U; i < n; i = i + 1U) {
@@ -90,8 +90,8 @@ static int midi_jack_client_open_(&MidiPortState_ st) {
         case null: { return audio_fail_(&st.error, AUDIO_ERR_NO_MEMORY, "jack: out of memory"); }
         case some(j): {
             j.client = audio_jack_client_open_(&st.client_name[0]);
-            if (j.client == (void*)0) {
-                unsafe { dealloc_raw_((void*)j); }
+            if (j.client == (JackClient_*)0) {
+                unsafe { dealloc((?&heap JackMidi_)j); }
                 return audio_fail_(&st.error, AUDIO_ERR_UNAVAILABLE, "jack: server not running");
             }
             unsafe {
@@ -100,17 +100,17 @@ static int midi_jack_client_open_(&MidiPortState_ st) {
                     j.q = (unsigned char*)alloc_zeroed_raw_(MIDI_JACK_OUT_QUEUE);
                     if (j.q == (unsigned char*)0) {
                         g_std_audio_jack_.client_close(j.client);
-                        dealloc_raw_((void*)j);
+                        dealloc((?&heap JackMidi_)j);
                         return audio_fail_(&st.error, AUDIO_ERR_NO_MEMORY, "jack: out of memory");
                     }
                 }
-                g_std_audio_jack_.set_process_callback(j.client, (void*)midi_jack_process_, (void*)j);
+                g_std_audio_jack_.set_process_callback(j.client, midi_jack_process_, (?&Erased)j);
                 // Our own ports start with "<actual client name>:" (JACK
                 // renames a client whose name is taken).
                 audio_strcpy_(&j.own_prefix[0], (unsigned long)(MIDI_CLIENT_NAME_MAX + 2),
                               (const ?&char)g_std_audio_jack_.get_client_name(j.client));
                 audio_strcat_(&j.own_prefix[0], (unsigned long)(MIDI_CLIENT_NAME_MAX + 2), ":");
-                st.backend = (void*)j;
+                st.backend = (?&heap MidiPortImpl_)j;
             }
             return AUDIO_OK;
         }
@@ -148,7 +148,7 @@ static unsigned int midi_jack_port_count_(&MidiPortState_ st) {
             const char** list = midi_jack_ports_(st, j);
             unsigned int n = 0U;
             midi_jack_port_at_(j, list, 0xFFFFFFFFU, &n);
-            unsafe { if (list != (const char**)0) g_std_audio_jack_.free((void*)list); }
+            unsafe { if (list != (const char**)0) g_std_audio_jack_.free(list); }
             return n;
         }
         case null: {}
@@ -165,7 +165,7 @@ static int midi_jack_port_name_(&MidiPortState_ st, unsigned int index, &char ou
             int rc = AUDIO_ERR_INVALID_DEVICE;
             unsafe {
                 if (p != (const char*)0) { audio_strcpy_(out, cap, (const ?&char)p); rc = AUDIO_OK; }
-                if (list != (const char**)0) g_std_audio_jack_.free((void*)list);
+                if (list != (const char**)0) g_std_audio_jack_.free(list);
             }
             return rc;
         }
@@ -178,11 +178,11 @@ static int midi_jack_make_port_(&MidiPortState_ st, &JackMidi_ j, const &char na
     unsafe {
         j.port = g_std_audio_jack_.port_register(j.client, name, (const char*)AUDIO_JACK_MIDI_TYPE,
                                                  st.is_input ? AUDIO_JACK_IS_INPUT : AUDIO_JACK_IS_OUTPUT, 0UL);
-        if (j.port == (void*)0) return audio_fail_(&st.error, AUDIO_ERR_SYSTEM, "jack: could not register a MIDI port");
+        if (j.port == (JackPort_*)0) return audio_fail_(&st.error, AUDIO_ERR_SYSTEM, "jack: could not register a MIDI port");
         if (!j.active) {
             if (g_std_audio_jack_.activate(j.client) != 0) {
                 g_std_audio_jack_.port_unregister(j.client, j.port);
-                j.port = (void*)0;
+                j.port = (JackPort_*)0;
                 return audio_fail_(&st.error, AUDIO_ERR_SYSTEM, "jack: could not activate the client");
             }
             j.active = 1;
@@ -227,7 +227,7 @@ static void midi_jack_close_port_(&MidiPortState_ st) {
         case some(j): {
             unsafe {
                 if (j.active) { g_std_audio_jack_.deactivate(j.client); j.active = 0; }
-                if (j.port != (void*)0) { g_std_audio_jack_.port_unregister(j.client, j.port); j.port = (void*)0; }
+                if (j.port != (JackPort_*)0) { g_std_audio_jack_.port_unregister(j.client, j.port); j.port = (JackPort_*)0; }
             }
         }
         case null: {}
@@ -243,7 +243,7 @@ static void midi_jack_q_put_(&JackMidi_ j, unsigned long at, const &unsigned cha
 static int midi_jack_send_(&MidiPortState_ st, const &unsigned char msg, unsigned long len) {
     match (midi_jack_of_(st)) {
         case some(j): {
-            if (j.port == (void*)0) return audio_fail_(&st.error, AUDIO_ERR_INVALID_USE, "jack: no port open");
+            if (j.port == (JackPort_*)0) return audio_fail_(&st.error, AUDIO_ERR_INVALID_USE, "jack: no port open");
             if (len > 1024UL) return audio_fail_(&st.error, AUDIO_ERR_INVALID_PARAM, "jack: message longer than 1024 bytes");
             unsigned long head = j.q_head;
             unsigned long tail = 0UL;
@@ -269,9 +269,9 @@ static void midi_jack_client_close_(&MidiPortState_ st) {
             midi_jack_close_port_(st);
             unsafe {
                 g_std_audio_jack_.client_close(j.client);
-                dealloc_raw_((void*)j.q);
-                dealloc_raw_((void*)j);
-                st.backend = (void*)0;
+                dealloc(j.q);
+                dealloc((?&heap JackMidi_)j);
+                st.backend = null;
             }
         }
         case null: {}

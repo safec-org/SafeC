@@ -84,7 +84,7 @@ float* audio_web_buffer(int handle, int dir) {
     unsafe {
         struct AudioStreamState_* st = g_audio_web_streams_[handle];
         if (st == (struct AudioStreamState_*)0) return (float*)0;
-        return (float*)st->device_buf[dir];
+        return (float*)st->device_buf[dir].ptr;
     }
 }
 
@@ -156,7 +156,7 @@ static int audio_webaudio_open_(&AudioHost_ h, &AudioStreamState_ st) {
             int got = 0;
             unsafe { got = std_audio_web_open(handle, outCh, inCh, (int)st.sample_rate, frames, nbuf); }
             if (got <= 0) {
-                unsafe { dealloc_raw_((void*)w); }
+                unsafe { dealloc((?&heap AudioWebStream_)w); }
                 return audio_fail_code_(&st.error, AUDIO_ERR_SYSTEM, "webaudio: could not open an AudioContext", (long long)got);
             }
             w.opened = 1;
@@ -174,7 +174,7 @@ static int audio_webaudio_open_(&AudioHost_ h, &AudioStreamState_ st) {
                 st.latency[d] = lat;
             }
             unsafe {
-                st.backend = (void*)w;
+                st.backend = (?&heap AudioStreamImpl_)w;
                 g_audio_web_streams_[handle] = (struct AudioStreamState_*)st;
             }
             return AUDIO_OK;
@@ -210,12 +210,12 @@ static void audio_webaudio_close_(&AudioStreamState_ st) {
             unsafe {
                 std_audio_web_close(w.handle);
                 g_audio_web_streams_[w.handle] = (struct AudioStreamState_*)0;
-                dealloc_raw_((void*)w);
+                dealloc((?&heap AudioWebStream_)w);
             }
         }
         case null: {}
     }
-    unsafe { st.backend = (void*)0; }
+    unsafe { st.backend = null; }
 }
 
 static struct AudioBackendVt_ g_audio_webaudio_vt_;

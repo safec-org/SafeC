@@ -365,10 +365,10 @@ int GuiTypeface::load_file_index(const &char path, int index) {
             int ok;
             unsafe { ok = read_exact(f, ((unsigned char*)buf)[0..(unsigned long)n]); }
             f.close();
-            if (!ok) { unsafe { dealloc_raw_((void*)buf); } return 0; }
+            if (!ok) { unsafe { dealloc(buf); } return 0; }
             int r;
             unsafe { r = self.load_memory_index_n_((const unsigned char*)buf, (unsigned long)n, index, 0); }
-            if (!r) { unsafe { dealloc_raw_((void*)buf); } return 0; }
+            if (!r) { unsafe { dealloc(buf); } return 0; }
             self.owned = 1;    // the buffer is ours now
             return 1;
         }
@@ -384,7 +384,7 @@ void GuiTypeface::cache_clear() {
     unsigned long i = 0UL;
     while (i < self.cache.len) {
         &GuiGlyphBitmap b = self.cache.at(i);
-        unsafe { if (!b.coverage.is_null()) { dealloc_raw_((void*)b.coverage); } }
+        unsafe { if (!b.coverage.is_null()) { dealloc(b.coverage); } }
         b.coverage = null;
         i = i + 1UL;
     }
@@ -401,7 +401,7 @@ void GuiTypeface::drop() {
     self.gposPairs.free();
     self.family.free();
     unsafe {
-        if (self.owned && !self.data.is_null()) { dealloc_raw_((void*)self.data); }
+        if (self.owned && !self.data.is_null()) { dealloc((?&heap unsigned char)self.data); }
     }
     self.data = null;
     self.size = 0UL;
@@ -816,9 +816,9 @@ static int __tt_outline(const &GuiTypeface f, int glyph, &GuiPath out, struct Gu
             out.close();
             start = end + 1;
         }
-        dealloc_raw_((void*)flg);
-        dealloc_raw_((void*)xs);
-        dealloc_raw_((void*)ys);
+        dealloc(flg);
+        dealloc(xs);
+        dealloc(ys);
     }
     return 1;
 }
@@ -1051,7 +1051,7 @@ static ?&GuiTypeface __tt_system_lookup(const &char family, int bold) {
             }
             ni = ni + 1UL;
         }
-        if (ok) { found = face; } else { face.free(); dealloc_raw_((void*)face); }
+        if (ok) { found = face; } else { face.free(); dealloc((?&heap GuiTypeface)face); }
     }
     names.free();   // and each name
     dirs.free();

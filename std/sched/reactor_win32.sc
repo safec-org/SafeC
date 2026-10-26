@@ -180,7 +180,7 @@ inline void Reactor::remove(int fd, int filter) {
 }
 
 // Reactor::poll(sched, ...) is reactor.sc's, over this.
-inline int Reactor::poll_events_raw_(void* on_ready, void* ctx, long long timeout_ms) {
+inline int Reactor::poll_events_raw_(fn void(?&Erased, int, int) on_ready, ?&Erased ctx, long long timeout_ms) {
     unsigned long n;
     unsafe { n = self.watched.length(); }
     if (n == 0UL) {
@@ -245,7 +245,7 @@ inline int Reactor::poll_events_raw_(void* on_ready, void* ctx, long long timeou
         if (revents != (short)0) {
             int wFilter;
             unsafe { wFilter = filters[i]; }
-            unsafe { fn void(void*, int, int) cb = (fn void(void*, int, int))on_ready; cb(ctx, (int)readyFd, wFilter); }
+            on_ready(ctx, (int)readyFd, wFilter);
             processed = processed + 1;
         }
         i = i + 1UL;

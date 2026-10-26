@@ -118,10 +118,10 @@ void bilinear_nth_order_n_(const &double B, const &double A, unsigned long order
     }
 
     unsafe {
-        dealloc_raw_((void*)numPoly);
-        dealloc_raw_((void*)denPoly);
-        dealloc_raw_((void*)bufA);
-        dealloc_raw_((void*)bufB);
+        dealloc(numPoly);
+        dealloc(denPoly);
+        dealloc(bufA);
+        dealloc(bufB);
     }
 }
 

@@ -182,7 +182,7 @@ static void __d3d_free(struct GuiD3dWindow* w) {
         __d3d_release(w->swapChain);
         __d3d_release(w->context);
         __d3d_release(w->device);
-        dealloc_raw_((void*)w);
+        dealloc(w);
     }
 }
 

@@ -1709,7 +1709,7 @@ static void t13_acc_unref_(struct T13Acc_* acc) {
         tls_key_destroy_(&acc->key);
         acc->alpn.free();
         tls_trust_free_(&acc->client_ca);
-        dealloc_raw_((void*)acc);
+        dealloc(acc);
     }
 }
 
@@ -1905,7 +1905,7 @@ void tls_safec_free_(&TlsStream s) {
         t.cr_context.free();
         if (t.acc != (struct T13Acc_*)0) { t13_acc_unref_(t.acc); }
         mem_zero_secure_raw_((void*)tp, sizeof(struct T13_));
-        dealloc_raw_((void*)tp);
+        dealloc(tp);
     }
     s.impl_ = null;
 }

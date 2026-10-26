@@ -131,7 +131,7 @@ void Dir::drop() {
         struct DirPosix_* h = (struct DirPosix_*)(void*)self;
         closedir(h->dirp);
         h->path.free();
-        dealloc_raw_((void*)h);
+        dealloc(h);
     }
 }
 

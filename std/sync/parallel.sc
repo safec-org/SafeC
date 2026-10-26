@@ -17,11 +17,11 @@ namespace std {
 static int g_par_busy = 0;               // 1 while a job runs (atomic)
 static unsigned long g_par_want = 0UL;   // configured thread count, 0 = not yet decided
 
-static void par_run_(void* body, void* ctx, unsigned long lo, unsigned long hi) {
-    unsafe {
-        fn void(void*, unsigned long, unsigned long) f = (fn void(void*, unsigned long, unsigned long))body;
-        f(ctx, lo, hi);
-    }
+// The job: parallel_for_raw_'s body and context (erased, see std/erased.h).
+typedef fn void(&Erased, unsigned long, unsigned long) ParBody_;
+
+static void par_run_(ParBody_ body, &Erased ctx, unsigned long lo, unsigned long hi) {
+    body(ctx, lo, hi);
 }
 
 #if defined(__SAFEC_FREESTANDING__) || defined(__wasm__)
@@ -31,9 +31,8 @@ void parallel_set_threads(unsigned long n) { g_par_want = 1UL; }
 
 void parallel_for_raw_(unsigned long n, unsigned long grain,
                        fn void(&Erased, unsigned long, unsigned long) fbody, &Erased fctx) {
-    void* body;
-    void* ctx;
-    unsafe { body = (void*)fbody; ctx = (void*)fctx; }
+    ParBody_ body = fbody;
+    &Erased ctx = fctx;
     if (n > 0UL) par_run_(body, ctx, 0UL, n);
 }
 
@@ -43,7 +42,7 @@ void parallel_for_raw_(unsigned long n, unsigned long grain,
 extern unsigned int GetActiveProcessorCount(unsigned short group);   // DWORD
 #else
 #if defined(__APPLE__)
-extern int sysctlbyname(const char* name, void* oldp, void* oldlenp, void* newp, unsigned long newlen);
+extern int sysctlbyname(const char* name, int* oldp, unsigned long* oldlenp, int* newp, unsigned long newlen);   // an int value
 #endif
 extern long sysconf(int name);
 #endif
@@ -66,7 +65,7 @@ static unsigned long par_cpus_() {
         // kernels already saturate bandwidth on the performance cluster.
         int perf = 0;
         unsigned long len = 4UL;
-        if (sysctlbyname("hw.perflevel0.logicalcpu", (void*)&perf, (void*)&len, (void*)0, 0UL) == 0 && perf > 0)
+        if (sysctlbyname("hw.perflevel0.logicalcpu", &perf, &len, (int*)0, 0UL) == 0 && perf > 0)
             c = (long)perf;
         else
             c = sysconf(58);                                         // _SC_NPROCESSORS_ONLN
@@ -92,8 +91,8 @@ static unsigned long g_par_workers = 0UL;      // workers started
 static unsigned long g_par_active = 0UL;       // workers taking part in the current job
 static unsigned long g_par_gen = 0UL;
 static unsigned long g_par_pending = 0UL;      // workers yet to report on this generation
-static void* g_par_body = (void*)0;
-static void* g_par_ctx = (void*)0;
+static ?fn void(&Erased, unsigned long, unsigned long) g_par_body = null;
+static ?&Erased g_par_ctx = null;
 static unsigned long g_par_n = 0UL;
 static unsigned long g_par_chunk = 1UL;
 static long long g_par_next = 0LL;             // next chunk index (atomic)
@@ -145,7 +144,7 @@ static int par_spin_until_change_(&long long p, long long value) {
     return 0;
 }
 
-static void par_chunks_(void* body, void* ctx, unsigned long n, unsigned long chunk) {
+static void par_chunks_(ParBody_ body, &Erased ctx, unsigned long n, unsigned long chunk) {
     while (1) {
         unsigned long c = (unsigned long)atomic_fetch_add_ll(&g_par_next, 1LL);
         unsigned long lo = c * chunk;
@@ -172,12 +171,22 @@ static ?&unsigned long par_worker_(?&unsigned long arg) {
         while (g_par_gen == seen) cond_wait(&g_par_wake, &g_par_mu);
         seen = g_par_gen;
         int take = id < g_par_active;
-        void* body = g_par_body;
-        void* ctx = g_par_ctx;
+        ?fn void(&Erased, unsigned long, unsigned long) body = g_par_body;
+        ?&Erased ctx = g_par_ctx;
         unsigned long n = g_par_n;
         unsigned long chunk = g_par_chunk;
         mutex_unlock(&g_par_mu);
-        if (take) par_chunks_(body, ctx, n, chunk);
+        if (take) {
+            match (body) {
+                case some(b): {
+                    match (ctx) {
+                        case some(c): { par_chunks_(b, c, n, chunk); }
+                        case null: {}
+                    }
+                }
+                case null: {}
+            }
+        }
         mutex_lock(&g_par_mu);
         g_par_pending = g_par_pending - 1UL;
         atomic_store_ll(&g_par_pending_a, (long long)g_par_pending);
@@ -218,9 +227,8 @@ static unsigned long par_start_(unsigned long want) {
 
 void parallel_for_raw_(unsigned long n, unsigned long grain,
                        fn void(&Erased, unsigned long, unsigned long) fbody, &Erased fctx) {
-    void* body;
-    void* ctx;
-    unsafe { body = (void*)fbody; ctx = (void*)fctx; }
+    ParBody_ body = fbody;
+    &Erased ctx = fctx;
     if (n == 0UL) return;
     if (grain < 1UL) grain = 1UL;
     unsigned long want = parallel_threads();

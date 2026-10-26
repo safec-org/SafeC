@@ -85,8 +85,8 @@ void GuiApp::close_window(&GuiWindow win) {
                 // The record (raw heap, freed below) is taken apart in place.
                 if (r.canvasReady) { r.canvas.free(); }
                 r.win.destroy();
-                dealloc_raw_((void*)r.win);
-                dealloc_raw_((void*)r);
+                dealloc((?&heap GuiWindow)r.win);
+                dealloc((?&heap GuiAppWindow)r);
             }
             return;
         }

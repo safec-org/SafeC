@@ -40,6 +40,7 @@
 //      queue (zero CPU spin) until the next fd becomes ready, then resumes
 //      exactly the task(s) waiting on it.
 #pragma once
+#include <std/erased.h>
 #include <std/sync/task.h>
 #include <std/collections/vec.h>
 
@@ -122,15 +123,15 @@ struct Reactor {
     // number. Returns the number of OS events processed. poll() is this
     // with a callback that calls sched->unblock_fd().
     generic<T> int poll_events(fn void(?&T, int, int) on_ready, ?&T ctx, long long timeout_ms);
-    // Type-erased form, implemented by each backend.
-    int  poll_events_raw_(void* on_ready, void* ctx, long long timeout_ms);
+    // Type-erased form (see std/erased.h), implemented by each backend.
+    int  poll_events_raw_(fn void(?&Erased, int, int) on_ready, ?&Erased ctx, long long timeout_ms);
 
     void close_();
 };
 
 generic<T>
 int Reactor::poll_events(fn void(?&T, int, int) on_ready, ?&T ctx, long long timeout_ms) {
-    unsafe { return self.poll_events_raw_((void*)on_ready, (void*)ctx, timeout_ms); }
+    unsafe { return self.poll_events_raw_((fn void(?&Erased, int, int))on_ready, (?&Erased)ctx, timeout_ms); }
 }
 
 // Drives 'sched' to completion: repeatedly ticks every runnable task, and

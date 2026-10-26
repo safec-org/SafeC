@@ -27,8 +27,8 @@ namespace std {
 
 static int audio_jack_available_() {
     if (!audio_jack_load_()) return 0;
-    void* c = audio_jack_client_open_("SafeC probe");
-    if (c == (void*)0) return 0;
+    JackClient_* c = audio_jack_client_open_("SafeC probe");
+    if (c == (JackClient_*)0) return 0;
     unsafe { g_std_audio_jack_.client_close(c); }
     return 1;
 }
@@ -46,7 +46,7 @@ static void audio_jack_client_of_(&char out, unsigned long cap, const &char port
 
 // Ports of client 'client' with JACK flag 'flag' (JackPortIsInput/Output),
 // in JACK's order. The list must be freed with g_std_audio_jack_.free.
-static const char** audio_jack_ports_of_(void* jc, const &char client, unsigned long flag, const &char type) {
+static const char** audio_jack_ports_of_(JackClient_* jc, const &char client, unsigned long flag, const &char type) {
     char pattern[AUDIO_DEVICE_KEY_MAX];
     audio_strcpy_(&pattern[0], (unsigned long)AUDIO_DEVICE_KEY_MAX, "^");
     // Escape regex metacharacters in the client name.
@@ -80,8 +80,8 @@ static int audio_jack_count_(const char** list) {
 
 static int audio_jack_probe_(&AudioHost_ h) {
     if (!audio_jack_load_()) return audio_fail_(&h.error, AUDIO_ERR_UNAVAILABLE, "jack: libjack not found");
-    void* jc = audio_jack_client_open_("SafeC probe");
-    if (jc == (void*)0) return audio_fail_(&h.error, AUDIO_ERR_UNAVAILABLE, "jack: server not running");
+    JackClient_* jc = audio_jack_client_open_("SafeC probe");
+    if (jc == (JackClient_*)0) return audio_fail_(&h.error, AUDIO_ERR_UNAVAILABLE, "jack: server not running");
     unsigned int rate = 0U;
     unsafe {
         rate = g_std_audio_jack_.get_sample_rate(jc);
@@ -111,8 +111,8 @@ static int audio_jack_probe_(&AudioHost_ h) {
             int isSystem = audio_streq_(&client[0], "system");
             info.is_default_output = isSystem && info.output_channels > 0;
             info.is_default_input = isSystem && info.input_channels > 0;
-            if (ins != (const char**)0) g_std_audio_jack_.free((void*)ins);
-            if (outs != (const char**)0) g_std_audio_jack_.free((void*)outs);
+            if (ins != (const char**)0) g_std_audio_jack_.free(ins);
+            if (outs != (const char**)0) g_std_audio_jack_.free(outs);
             match (audio_host_add_(h, &info, &client[0], 0LL)) {
                 case some(r): {
                     if (r.info.is_default_output) h.default_out = r.info.id;
@@ -121,7 +121,7 @@ static int audio_jack_probe_(&AudioHost_ h) {
                 case null: {}
             }
         }
-        if (all != (const char**)0) g_std_audio_jack_.free((void*)all);
+        if (all != (const char**)0) g_std_audio_jack_.free(all);
         g_std_audio_jack_.client_close(jc);
     }
     return AUDIO_OK;
@@ -134,8 +134,8 @@ static void audio_jack_host_close_(&AudioHost_ h) { }
 #define AUDIO_JACK_MAX_PORTS 64
 
 struct JackStream_ {
-    void* client;
-    void* ports[2][AUDIO_JACK_MAX_PORTS];
+    JackClient_* client;
+    JackPort_* ports[2][AUDIO_JACK_MAX_PORTS];
     int nports[2];
     int offset[2];               // the stream's first_channel per direction
     int active;
@@ -154,7 +154,7 @@ static int audio_jack_load_flag_(&int p) {
 }
 
 // JACK's process thread.
-static int audio_jack_process_(unsigned int nframes, void* arg) {
+static int audio_jack_process_(unsigned int nframes, ?&Erased arg) {
     unsafe {
         struct JackStream_* j = (struct JackStream_*)arg;
         struct AudioStreamState_* st = j->st;
@@ -174,7 +174,7 @@ static int audio_jack_process_(unsigned int nframes, void* arg) {
         }
         unsigned long n = (unsigned long)nframes;
         if (st->mode_in) {
-            float* dst = (float*)st->device_buf[AUDIO_DIR_IN];
+            float* dst = (float*)st->device_buf[AUDIO_DIR_IN].ptr;
             for (int p = 0; p < j->nports[AUDIO_DIR_IN]; p = p + 1) {
                 const float* b = (const float*)g_std_audio_jack_.port_get_buffer(j->ports[AUDIO_DIR_IN][p], nframes);
                 for (unsigned long f = 0UL; f < n; f = f + 1UL) dst[(unsigned long)p * n + f] = b[f];
@@ -182,7 +182,7 @@ static int audio_jack_process_(unsigned int nframes, void* arg) {
         }
         int r = audio_stream_process_((&AudioStreamState_)st, nframes);
         if (st->mode_out) {
-            const float* src = (const float*)st->device_buf[AUDIO_DIR_OUT];
+            const float* src = (const float*)st->device_buf[AUDIO_DIR_OUT].ptr;
             for (int p = 0; p < j->nports[AUDIO_DIR_OUT]; p = p + 1) {
                 float* b = (float*)g_std_audio_jack_.port_get_buffer(j->ports[AUDIO_DIR_OUT][p], nframes);
                 for (unsigned long f = 0UL; f < n; f = f + 1UL) b[f] = src[(unsigned long)p * n + f];
@@ -198,7 +198,7 @@ static int audio_jack_process_(unsigned int nframes, void* arg) {
     return 0;
 }
 
-static int audio_jack_xrun_(void* arg) {
+static int audio_jack_xrun_(?&Erased arg) {
     unsafe {
         struct JackStream_* j = (struct JackStream_*)arg;
         audio_stream_flag_status_((&AudioStreamState_)j->st, AUDIO_STATUS_INPUT_OVERFLOW | AUDIO_STATUS_OUTPUT_UNDERFLOW);
@@ -206,7 +206,7 @@ static int audio_jack_xrun_(void* arg) {
     return 0;
 }
 
-static void audio_jack_shutdown_(void* arg) {
+static void audio_jack_shutdown_(?&Erased arg) {
     unsafe {
         struct JackStream_* j = (struct JackStream_*)arg;
         atomic_store((_Atomic int*)&j->stopped, 1);
@@ -217,11 +217,11 @@ static void audio_jack_shutdown_(void* arg) {
 
 static void audio_jack_release_(&JackStream_ j) {
     unsafe {
-        if (j.client != (void*)0) {
+        if (j.client != (JackClient_*)0) {
             if (j.active) g_std_audio_jack_.deactivate(j.client);
             g_std_audio_jack_.client_close(j.client);
         }
-        j.client = (void*)0;
+        j.client = (JackClient_*)0;
         j.active = 0;
     }
 }
@@ -235,8 +235,8 @@ static int audio_jack_open_(&AudioHost_ h, &AudioStreamState_ st) {
         case some(j): {
             unsafe { j.st = (struct AudioStreamState_*)st; }
             j.client = audio_jack_client_open_(&st.stream_name[0]);
-            if (j.client == (void*)0) {
-                unsafe { dealloc_raw_((void*)j); }
+            if (j.client == (JackClient_*)0) {
+                unsafe { dealloc((?&heap JackStream_)j); }
                 return audio_fail_(&st.error, AUDIO_ERR_UNAVAILABLE, "jack: server not running");
             }
             int rc = AUDIO_OK;
@@ -259,9 +259,9 @@ static int audio_jack_open_(&AudioHost_ h, &AudioStreamState_ st) {
                         char pname[32];
                         audio_strcpy_(&pname[0], 32UL, d == AUDIO_DIR_OUT ? "out_" : "in_");
                         audio_strcat_int_(&pname[0], 32UL, (long long)(p + 1));
-                        void* port = g_std_audio_jack_.port_register(j.client, (const char*)&pname[0], (const char*)AUDIO_JACK_AUDIO_TYPE,
+                        JackPort_* port = g_std_audio_jack_.port_register(j.client, (const char*)&pname[0], (const char*)AUDIO_JACK_AUDIO_TYPE,
                                                            d == AUDIO_DIR_OUT ? AUDIO_JACK_IS_OUTPUT : AUDIO_JACK_IS_INPUT, 0UL);
-                        if (port == (void*)0) { rc = audio_fail_(&st.error, AUDIO_ERR_SYSTEM, "jack: could not register a port"); break; }
+                        if (port == (JackPort_*)0) { rc = audio_fail_(&st.error, AUDIO_ERR_SYSTEM, "jack: could not register a port"); break; }
                         j.ports[d][p] = port;
                         j.nports[d] = p + 1;
                     }
@@ -277,17 +277,17 @@ static int audio_jack_open_(&AudioHost_ h, &AudioStreamState_ st) {
                     else audio_strcpy_(&j.target[d][0], (unsigned long)AUDIO_DEVICE_KEY_MAX, &st.device_key[d][0]);
                 }
                 if (rc == AUDIO_OK) {
-                    g_std_audio_jack_.set_process_callback(j.client, (void*)audio_jack_process_, (void*)j);
-                    g_std_audio_jack_.set_xrun_callback(j.client, (void*)audio_jack_xrun_, (void*)j);
-                    g_std_audio_jack_.on_shutdown(j.client, (void*)audio_jack_shutdown_, (void*)j);
+                    g_std_audio_jack_.set_process_callback(j.client, audio_jack_process_, (?&Erased)j);
+                    g_std_audio_jack_.set_xrun_callback(j.client, audio_jack_xrun_, (?&Erased)j);
+                    g_std_audio_jack_.on_shutdown(j.client, audio_jack_shutdown_, (?&Erased)j);
                 }
             }
             if (rc != AUDIO_OK) {
                 audio_jack_release_(j);
-                unsafe { dealloc_raw_((void*)j); }
+                unsafe { dealloc((?&heap JackStream_)j); }
                 return rc;
             }
-            unsafe { st.backend = (void*)j; }
+            unsafe { st.backend = (?&heap AudioStreamImpl_)j; }
             return AUDIO_OK;
         }
     }
@@ -318,7 +318,7 @@ static int audio_jack_connect_(&AudioStreamState_ st, &JackStream_ j) {
                 g_std_audio_jack_.port_get_latency_range(j.ports[d][0], d == AUDIO_DIR_OUT ? 1 : 0, &range[0]);
                 st.latency[d] = (long)st.buffer_frames + (long)range[1];
             }
-            if (targets != (const char**)0) g_std_audio_jack_.free((void*)targets);
+            if (targets != (const char**)0) g_std_audio_jack_.free(targets);
         }
     }
     return AUDIO_OK;
@@ -364,11 +364,11 @@ static void audio_jack_close_(&AudioStreamState_ st) {
     match (audio_jack_of_(st)) {
         case some(j): {
             audio_jack_release_(j);
-            unsafe { dealloc_raw_((void*)j); }
+            unsafe { dealloc((?&heap JackStream_)j); }
         }
         case null: {}
     }
-    unsafe { st.backend = (void*)0; }
+    unsafe { st.backend = null; }
 }
 
 static struct AudioBackendVt_ g_audio_jack_vt_;

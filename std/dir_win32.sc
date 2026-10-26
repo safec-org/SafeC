@@ -72,7 +72,7 @@ static long long dir_filetime_ns_(const &unsigned char b, unsigned long off) {
     pattern.free();
     unsafe {
         if (h->handle == (void*)(long long)-1) {
-            dealloc_raw_((void*)h);
+            dealloc(h);
             return (?&Dir)null;
         }
         h->pending = 1;
@@ -105,7 +105,7 @@ void Dir::drop() {
     unsafe {
         struct DirWin32_* h = (struct DirWin32_*)(void*)self;
         FindClose(h->handle);
-        dealloc_raw_((void*)h);
+        dealloc(h);
     }
 }
 

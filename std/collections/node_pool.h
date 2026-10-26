@@ -100,7 +100,7 @@ void NodePool::free_all() {
             void* nextRaw = (void*)0;
             memcpy((void*)&nextRaw, (const void*)c, (size_t)sizeof(void*));
             unsigned char* next = (unsigned char*)nextRaw;
-            dealloc_raw_((void*)c);
+            dealloc(c);
             c = next;
         }
     }

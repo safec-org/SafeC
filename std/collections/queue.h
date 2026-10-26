@@ -66,7 +66,7 @@ int Queue::reserve(unsigned long n) {
         unsigned long mask = self.cap - 1UL;
         unsigned long i = 0UL;
         while (i < self.len) { grown[i] = self.data[(self.head + i) & mask]; i = i + 1UL; }
-        dealloc_raw_((void*)self.data);
+        dealloc(self.data);
     }
     self.data = grown;
     self.head = 0UL;
@@ -119,7 +119,7 @@ void Queue::free() { self.drop(); }
 
 generic<T>
 void Queue::drop() {
-    unsafe { dealloc_raw_((void*)self.data); }
+    unsafe { dealloc(self.data); }
     self.data = null;
     self.head = 0UL;
     self.len = 0UL;

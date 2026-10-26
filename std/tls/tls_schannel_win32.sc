@@ -685,7 +685,7 @@ void tls_schannel_free_(&TlsStream s) {
         tls_trust_free_(&c->extra);
         c->alpn.free();
         mem_zero_secure_raw_((void*)c, sizeof(struct SchConn_));
-        dealloc_raw_((void*)c);
+        dealloc(c);
     }
     s.impl_ = null;
 }

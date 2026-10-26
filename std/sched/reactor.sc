@@ -24,7 +24,7 @@ static void reactor_unblock_(?&TaskScheduler sq, int fd, int filter) {
 
 int Reactor::poll(&TaskScheduler sched, long long timeout_ms) {
     fn void(?&TaskScheduler, int, int) cb = reactor_unblock_;
-    unsafe { return self.poll_events_raw_((void*)cb, (void*)sched, timeout_ms); }
+    unsafe { return self.poll_events_raw_((fn void(?&Erased, int, int))cb, (?&Erased)sched, timeout_ms); }
 }
 
 void reactor_run(&TaskScheduler sched, &Reactor r) {

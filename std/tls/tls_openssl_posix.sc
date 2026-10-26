@@ -683,7 +683,7 @@ void tls_openssl_free_(&TlsStream s) {
     unsafe {
         if (c->ssl != (void*)0) { g_ossl_.ssl_free(c->ssl); }   // frees the BIOs too
         if (c->ctx != (void*)0) { g_ossl_.ctx_free(c->ctx); }
-        dealloc_raw_((void*)c);
+        dealloc(c);
     }
     s.impl_ = null;
 }
@@ -755,7 +755,7 @@ void tls_openssl_acceptor_free_(&TlsAcceptor a) {
         if (acc == (struct OsslAcc_*)0) { return; }
         g_ossl_.ctx_free(acc->ctx);   // reference-counted: live SSLs keep it
         acc->alpn.free();
-        dealloc_raw_((void*)acc);
+        dealloc(acc);
     }
 }
 

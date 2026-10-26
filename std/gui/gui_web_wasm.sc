@@ -88,8 +88,8 @@ static void __web_destroy(&GuiWindowState st) {
         std_gui_web_destroy((int)st.id);
         struct GuiWebWindow* w = (struct GuiWebWindow*)st.native;
         if (w != (struct GuiWebWindow*)0) {
-            if (w->staging != (unsigned char*)0) { dealloc_raw_((void*)w->staging); }
-            dealloc_raw_((void*)w);
+            if (w->staging != (unsigned char*)0) { dealloc(w->staging); }
+            dealloc(w);
         }
         st.native = null;
     }
@@ -101,7 +101,7 @@ static void __web_present(&GuiWindowState st, const &unsigned char px, int bw, i
         struct GuiWebWindow* w = (struct GuiWebWindow*)st.native;
         if (w == (struct GuiWebWindow*)0) { return; }
         if (w->stagingW != bw || w->stagingH != bh) {
-            if (w->staging != (unsigned char*)0) { dealloc_raw_((void*)w->staging); }
+            if (w->staging != (unsigned char*)0) { dealloc(w->staging); }
             w->staging = (unsigned char*)alloc_zeroed_raw_((unsigned long)bw * (unsigned long)bh * 4UL);
             w->stagingW = bw;
             w->stagingH = bh;
@@ -192,7 +192,7 @@ static int __web_clip_get(&String out) {
         int got = std_gui_web_clipboard_get(buf, n);
         if (got > n) { got = n; }
         out.push_n_((const char*)buf, (unsigned long)got);
-        dealloc_raw_((void*)buf);
+        dealloc(buf);
         return 1;
     }
 }

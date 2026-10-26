@@ -10,12 +10,22 @@
 
 namespace std {
 
+// A loaded system library (a dlopen()/LoadLibraryA handle; opaque).
+struct AudioLib_ { char opaque_; };
+// A function looked up in one, untyped: the backend casts it to the
+// function's real signature (in 'unsafe', where it vouches for it).
+typedef ?fn void() AudioSym_;
+
 // dlopen()/LoadLibraryA: a library handle, or null if it isn't installed.
 // The names are tried in order.
-?&void audio_dlopen_(const &char name);
-?&void audio_dlopen2_(const &char name, const ?&char fallback);
+?&AudioLib_ audio_dlopen_(const &char name);
+?&AudioLib_ audio_dlopen2_(const &char name, const ?&char fallback);
 // dlsym()/GetProcAddress: null if the library lacks it.
-?&void audio_dlsym_(?&void lib, const &char name);
+AudioSym_ audio_dlsym_(?&AudioLib_ lib, const &char name);
+// The same for a function a backend can't do without: when it's missing,
+// clears *ok and returns a stub (never to be called: the backend doesn't
+// load). A backend fills its table with these, cast to each signature.
+fn void() audio_dlsym_or_(?&AudioLib_ lib, const &char name, &int ok);
 
 // Monotonic nanoseconds (arbitrary origin).
 long long audio_now_ns_();

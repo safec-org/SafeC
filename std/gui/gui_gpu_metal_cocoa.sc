@@ -219,7 +219,7 @@ static void __mtl_free(struct GuiMtlWindow* w) {
         }
         __mtl_release(w->oldLayer);
         __mtl_release(w->layer);
-        dealloc_raw_((void*)w);
+        dealloc(w);
     }
 }
 
@@ -231,7 +231,7 @@ static int __mtl_attach(&GuiWindowState st, struct GuiNativeHandle h) {
         w->view = (void*)(unsigned long)h.view;
         void* pool = objc_autoreleasePoolPush();
         void* layer = __mtl_send0(objc_getClass("CAMetalLayer"), "layer");
-        if (layer == (void*)0) { objc_autoreleasePoolPop(pool); dealloc_raw_((void*)w); return 0; }
+        if (layer == (void*)0) { objc_autoreleasePoolPop(pool); dealloc(w); return 0; }
         __mtl_send0(layer, "retain");
         w->layer = layer;
         __mtl_void1(layer, "setDevice:", gMtlDevice);
