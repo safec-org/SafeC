@@ -116,8 +116,8 @@ static int midi_winmm_client_open_(&MidiPortState_ st) {
                     w.sysex = (unsigned char*)alloc_zeroed_raw_((unsigned long)(MIDI_WINMM_SYSEX_BUFFERS * (int)MIDI_WINMM_SYSEX_SIZE));
                     if (w.sysex == (unsigned char*)0) ok = 0;
                 }
-                if (ok) st.backend = (void*)w;
-                else dealloc_raw_((void*)w);
+                if (ok) st.backend = (?&heap MidiPortImpl_)w;
+                else dealloc(w);
             }
             if (ok) return AUDIO_OK;
         }
@@ -133,13 +133,13 @@ static int wmm_raw_name_(int input, unsigned int index, &char out, unsigned long
     unsafe {
         if (input) {
             struct WmmInCaps_ c;
-            safe_memset_raw_((void*)&c, 0, sizeof(struct WmmInCaps_));
+            safe_memset_obj(&c, 0);
             if (midiInGetDevCapsA((unsigned long long)index, &c, (unsigned int)sizeof(struct WmmInCaps_)) != 0U) return 0;
             c.name[31] = (char)0;
             audio_strcpy_(out, cap, &c.name[0]);
         } else {
             struct WmmOutCaps_ c;
-            safe_memset_raw_((void*)&c, 0, sizeof(struct WmmOutCaps_));
+            safe_memset_obj(&c, 0);
             if (midiOutGetDevCapsA((unsigned long long)index, &c, (unsigned int)sizeof(struct WmmOutCaps_)) != 0U) return 0;
             c.name[31] = (char)0;
             audio_strcpy_(out, cap, &c.name[0]);
@@ -211,7 +211,7 @@ static int midi_winmm_open_port_(&MidiPortState_ st, unsigned int index, const &
                                WMM_CALLBACK_FUNCTION);
                 if (r != 0U) return audio_fail_code_(&st.error, AUDIO_ERR_DEVICE_BUSY, "winmm: midiInOpen", (long long)r);
                 for (int i = 0; i < MIDI_WINMM_SYSEX_BUFFERS; i = i + 1) {
-                    safe_memset_raw_((void*)&w.hdr[i], 0, sizeof(struct WmmHdr_));
+                    safe_memset_obj(&w.hdr[i], 0);
                     w.hdr[i].data = (char*)(w.sysex + (unsigned long)i * (unsigned long)MIDI_WINMM_SYSEX_SIZE);
                     w.hdr[i].buffer_length = MIDI_WINMM_SYSEX_SIZE;
                     midiInPrepareHeader(w.handle, &w.hdr[i], (unsigned int)sizeof(struct WmmHdr_));
@@ -278,7 +278,7 @@ static int midi_winmm_send_(&MidiPortState_ st, const &unsigned char msg, unsign
                 if (copy == (char*)0) return audio_fail_(&st.error, AUDIO_ERR_NO_MEMORY, "winmm: out of memory");
                 safe_memcpy_raw_((void*)copy, (const void*)msg, len);
                 struct WmmHdr_ hdr;
-                safe_memset_raw_((void*)&hdr, 0, sizeof(struct WmmHdr_));
+                safe_memset_obj(&hdr, 0);
                 hdr.data = copy;
                 hdr.buffer_length = (unsigned int)len;
                 hdr.bytes_recorded = (unsigned int)len;
@@ -288,7 +288,7 @@ static int midi_winmm_send_(&MidiPortState_ st, const &unsigned char msg, unsign
                     while (midiOutUnprepareHeader(w.handle, &hdr, (unsigned int)sizeof(struct WmmHdr_)) == (unsigned int)WMM_STILLPLAYING)
                         Sleep(1U);
                 }
-                dealloc_raw_((void*)copy);
+                dealloc(copy);
                 if (r != 0U) return audio_fail_code_(&st.error, AUDIO_ERR_SYSTEM, "winmm: midiOutLongMsg", (long long)r);
             }
             return AUDIO_OK;
@@ -303,9 +303,9 @@ static void midi_winmm_client_close_(&MidiPortState_ st) {
         case some(w): {
             midi_winmm_close_port_(st);
             unsafe {
-                dealloc_raw_((void*)w.sysex);
-                dealloc_raw_((void*)w);
-                st.backend = (void*)0;
+                dealloc(w.sysex);
+                dealloc(w);
+                st.backend = null;
             }
         }
         case null: {}

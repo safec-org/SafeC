@@ -67,7 +67,7 @@ static int midi_dummy_client_open_(&MidiPortState_ st) {
         case some(c): {
             c.bus = -1;
             c.slot = -1;
-            unsafe { st.backend = (void*)c; }
+            unsafe { st.backend = (?&heap MidiPortImpl_)c; }
             return AUDIO_OK;
         }
         case null: {}
@@ -224,7 +224,7 @@ static int midi_dummy_send_(&MidiPortState_ st, const &unsigned char msg, unsign
 static void midi_dummy_client_close_(&MidiPortState_ st) {
     unsafe {
         dealloc_raw_(st.backend);
-        st.backend = (void*)0;
+        st.backend = null;
     }
 }
 

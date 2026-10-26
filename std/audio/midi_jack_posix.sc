@@ -91,7 +91,7 @@ static int midi_jack_client_open_(&MidiPortState_ st) {
         case some(j): {
             j.client = audio_jack_client_open_(&st.client_name[0]);
             if (j.client == (void*)0) {
-                unsafe { dealloc_raw_((void*)j); }
+                unsafe { dealloc(j); }
                 return audio_fail_(&st.error, AUDIO_ERR_UNAVAILABLE, "jack: server not running");
             }
             unsafe {
@@ -100,7 +100,7 @@ static int midi_jack_client_open_(&MidiPortState_ st) {
                     j.q = (unsigned char*)alloc_zeroed_raw_(MIDI_JACK_OUT_QUEUE);
                     if (j.q == (unsigned char*)0) {
                         g_std_audio_jack_.client_close(j.client);
-                        dealloc_raw_((void*)j);
+                        dealloc(j);
                         return audio_fail_(&st.error, AUDIO_ERR_NO_MEMORY, "jack: out of memory");
                     }
                 }
@@ -110,7 +110,7 @@ static int midi_jack_client_open_(&MidiPortState_ st) {
                 audio_strcpy_(&j.own_prefix[0], (unsigned long)(MIDI_CLIENT_NAME_MAX + 2),
                               (const ?&char)g_std_audio_jack_.get_client_name(j.client));
                 audio_strcat_(&j.own_prefix[0], (unsigned long)(MIDI_CLIENT_NAME_MAX + 2), ":");
-                st.backend = (void*)j;
+                st.backend = (?&heap MidiPortImpl_)j;
             }
             return AUDIO_OK;
         }
@@ -269,9 +269,9 @@ static void midi_jack_client_close_(&MidiPortState_ st) {
             midi_jack_close_port_(st);
             unsafe {
                 g_std_audio_jack_.client_close(j.client);
-                dealloc_raw_((void*)j.q);
-                dealloc_raw_((void*)j);
-                st.backend = (void*)0;
+                dealloc(j.q);
+                dealloc(j);
+                st.backend = null;
             }
         }
         case null: {}

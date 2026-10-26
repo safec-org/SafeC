@@ -12,20 +12,18 @@ struct JackLib_ g_std_audio_jack_;
 // through AudioError instead.
 static void audio_jack_quiet_(const char* msg) { }
 
-static void* audio_jack_sym_(?&void lib, const &char name, &int ok) {
-    ?&void p = audio_dlsym_(lib, name);
-    if (p.is_null()) *ok = 0;
-    unsafe { return (void*)p; }
+static fn void() audio_jack_sym_(?&AudioLib_ lib, const &char name, &int ok) {
+    return audio_dlsym_or_(lib, name, ok);
 }
 
 int audio_jack_load_() {
     if (g_std_audio_jack_.loaded != 0) return g_std_audio_jack_.loaded > 0;
     g_std_audio_jack_.loaded = -1;
 #if defined(__APPLE__)
-    ?&void lib = audio_dlopen2_("libjack.0.dylib", "/usr/local/lib/libjack.0.dylib");
+    ?&AudioLib_ lib = audio_dlopen2_("libjack.0.dylib", "/usr/local/lib/libjack.0.dylib");
     if (lib.is_null()) lib = audio_dlopen_("/opt/homebrew/lib/libjack.0.dylib");
 #else
-    ?&void lib = audio_dlopen2_("libjack.so.0", "libjack.so");
+    ?&AudioLib_ lib = audio_dlopen2_("libjack.so.0", "libjack.so");
 #endif
     if (lib.is_null()) return 0;
     int ok = 1;
@@ -40,8 +38,8 @@ int audio_jack_load_() {
         g_std_audio_jack_.port_unregister = (JackPortUnregister_)audio_jack_sym_(lib, "jack_port_unregister", &ok);
         g_std_audio_jack_.port_get_buffer = (JackPortGetBuffer_)audio_jack_sym_(lib, "jack_port_get_buffer", &ok);
         g_std_audio_jack_.port_name = (JackPortName_)audio_jack_sym_(lib, "jack_port_name", &ok);
-        g_std_audio_jack_.set_process_callback = (JackSetCallback_)audio_jack_sym_(lib, "jack_set_process_callback", &ok);
-        g_std_audio_jack_.set_xrun_callback = (JackSetCallback_)audio_jack_sym_(lib, "jack_set_xrun_callback", &ok);
+        g_std_audio_jack_.set_process_callback = (JackSetProcess_)audio_jack_sym_(lib, "jack_set_process_callback", &ok);
+        g_std_audio_jack_.set_xrun_callback = (JackSetXrun_)audio_jack_sym_(lib, "jack_set_xrun_callback", &ok);
         g_std_audio_jack_.on_shutdown = (JackOnShutdown_)audio_jack_sym_(lib, "jack_on_shutdown", &ok);
         g_std_audio_jack_.get_ports = (JackGetPorts_)audio_jack_sym_(lib, "jack_get_ports", &ok);
         g_std_audio_jack_.connect = (JackConnect_)audio_jack_sym_(lib, "jack_connect", &ok);
@@ -57,15 +55,15 @@ int audio_jack_load_() {
         g_std_audio_jack_.frame_time = (JackFrameTime_)audio_jack_sym_(lib, "jack_frame_time", &ok);
         g_std_audio_jack_.get_client_name = (JackClientName_)audio_jack_sym_(lib, "jack_get_client_name", &ok);
         if (!ok) return 0;
-        g_std_audio_jack_.set_error_function((void*)audio_jack_quiet_);
-        g_std_audio_jack_.set_info_function((void*)audio_jack_quiet_);
+        g_std_audio_jack_.set_error_function(audio_jack_quiet_);
+        g_std_audio_jack_.set_info_function(audio_jack_quiet_);
     }
     g_std_audio_jack_.loaded = 1;
     return 1;
 }
 
-void* audio_jack_client_open_(const &char name) {
-    if (!audio_jack_load_()) return (void*)0;
+JackClient_* audio_jack_client_open_(const &char name) {
+    if (!audio_jack_load_()) return (JackClient_*)0;
     int status = 0;
     unsafe { return g_std_audio_jack_.client_open(name, AUDIO_JACK_NO_START_SERVER, &status); }
 }

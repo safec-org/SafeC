@@ -43,37 +43,52 @@
 namespace std {
 
 // ── libasound, loaded at run time ────────────────────────────────────────
-typedef fn int(void**, const char*, int, int) AlsaPcmOpen_;
-typedef fn int(void*) AlsaPcm1_;                                  // close/prepare/start/drop/drain
-typedef fn int(void*, int) AlsaPcmNonblock_;
+// libasound's handles and parameter blocks (opaque; the blocks are
+// allocated at the size snd_*_sizeof() reports).
+struct SndPcm_         { char opaque_; };   // snd_pcm_t
+struct SndHwParams_    { char opaque_; };   // snd_pcm_hw_params_t
+struct SndSwParams_    { char opaque_; };   // snd_pcm_sw_params_t
+struct SndCtl_         { char opaque_; };   // snd_ctl_t
+struct SndCtlCardInfo_ { char opaque_; };   // snd_ctl_card_info_t
+struct SndPcmInfo_     { char opaque_; };   // snd_pcm_info_t
+
+// snd_lib_error_handler_t (variadic in C; see audio_alsa_quiet_).
+typedef fn void(const char*, int, const char*, int, const char*) AlsaErrorHandler_;
+
+typedef fn int(SndPcm_**, const char*, int, int) AlsaPcmOpen_;
+typedef fn int(SndPcm_*) AlsaPcm1_;                                  // close/prepare/start/drop/drain
+typedef fn int(SndPcm_*, int) AlsaPcmNonblock_;
 typedef fn size_t() AlsaSizeof_;
-typedef fn int(void*, void*) AlsaHwAny_;                          // hw_params_any, hw_params, sw_params_current, sw_params
-typedef fn int(void*, void*, int) AlsaHwSetInt_;                  // set_access, test/set_format
-typedef fn int(void*, void*, unsigned int) AlsaHwSetUint_;        // set_channels, set_rate_resample
-typedef fn int(const void*, unsigned int*) AlsaHwGetUint_;        // get_channels_max/min
-typedef fn int(void*, void*, unsigned int, int) AlsaHwTestRate_;
-typedef fn int(void*, void*, unsigned int*, int*) AlsaHwSetUintNear_;   // set_rate_near, set_periods_near
-typedef fn int(void*, void*, size_t*, int*) AlsaHwSetFramesNear_;      // set_period_size_near
-typedef fn int(void*, void*, size_t*) AlsaHwSetBufferNear_;            // set_buffer_size_near
-typedef fn int(const void*, size_t*, int*) AlsaHwGetPeriod_;
-typedef fn int(const void*, size_t*) AlsaHwGetBuffer_;
-typedef fn int(const void*, unsigned int*, int*) AlsaHwGetRate_;
-typedef fn int(void*, void*, size_t) AlsaSwSetFrames_;                // set_start_threshold, set_avail_min
-typedef fn ssize_t(void*, const void*, size_t) AlsaWritei_;
-typedef fn ssize_t(void*, void*, size_t) AlsaReadi_;
-typedef fn ssize_t(void*, void**, size_t) AlsaXfern_;
-typedef fn int(void*, int, int) AlsaRecover_;
-typedef fn int(void*, void*) AlsaLink_;
+typedef fn int(SndPcm_*, SndHwParams_*) AlsaHwAny_;                  // hw_params_any, hw_params
+typedef fn int(SndPcm_*, SndSwParams_*) AlsaSwAny_;                  // sw_params_current, sw_params
+typedef fn int(SndPcm_*, SndHwParams_*, int) AlsaHwSetInt_;          // set_access, test/set_format
+typedef fn int(SndPcm_*, SndHwParams_*, unsigned int) AlsaHwSetUint_;   // set_channels, set_rate_resample
+typedef fn int(const SndHwParams_*, unsigned int*) AlsaHwGetUint_;   // get_channels_max/min
+typedef fn int(SndPcm_*, SndHwParams_*, unsigned int, int) AlsaHwTestRate_;
+typedef fn int(SndPcm_*, SndHwParams_*, unsigned int*, int*) AlsaHwSetUintNear_;   // set_rate_near, set_periods_near
+typedef fn int(SndPcm_*, SndHwParams_*, size_t*, int*) AlsaHwSetFramesNear_;      // set_period_size_near
+typedef fn int(SndPcm_*, SndHwParams_*, size_t*) AlsaHwSetBufferNear_;            // set_buffer_size_near
+typedef fn int(const SndHwParams_*, size_t*, int*) AlsaHwGetPeriod_;
+typedef fn int(const SndHwParams_*, size_t*) AlsaHwGetBuffer_;
+typedef fn int(const SndHwParams_*, unsigned int*, int*) AlsaHwGetRate_;
+typedef fn int(SndPcm_*, SndSwParams_*, size_t) AlsaSwSetFrames_;    // set_start_threshold, set_avail_min
+typedef fn ssize_t(SndPcm_*, const unsigned char*, size_t) AlsaWritei_;
+typedef fn ssize_t(SndPcm_*, unsigned char*, size_t) AlsaReadi_;
+typedef fn ssize_t(SndPcm_*, unsigned char**, size_t) AlsaXfern_;    // one pointer per channel plane
+typedef fn int(SndPcm_*, int, int) AlsaRecover_;
+typedef fn int(SndPcm_*, SndPcm_*) AlsaLink_;
 typedef fn const char*(int) AlsaStrerror_;
-typedef fn int(void*) AlsaSetHandler_;
+typedef fn int(AlsaErrorHandler_) AlsaSetHandler_;
 typedef fn int(int*) AlsaCardNext_;
-typedef fn int(void**, const char*, int) AlsaCtlOpen_;
-typedef fn int(void*) AlsaCtlClose_;
-typedef fn int(void*, void*) AlsaCtlInfo_;                        // ctl_card_info, ctl_pcm_info
-typedef fn const char*(const void*) AlsaGetName_;                 // card_info_get_name, pcm_info_get_name
-typedef fn int(void*, int*) AlsaCtlNextDev_;
-typedef fn void(void*, unsigned int) AlsaInfoSetUint_;            // pcm_info_set_device/subdevice
-typedef fn void(void*, int) AlsaInfoSetStream_;
+typedef fn int(SndCtl_**, const char*, int) AlsaCtlOpen_;
+typedef fn int(SndCtl_*) AlsaCtlClose_;
+typedef fn int(SndCtl_*, SndCtlCardInfo_*) AlsaCtlCardInfo_;
+typedef fn int(SndCtl_*, SndPcmInfo_*) AlsaCtlPcmInfo_;
+typedef fn const char*(const SndCtlCardInfo_*) AlsaCardGetName_;
+typedef fn const char*(const SndPcmInfo_*) AlsaPcmGetName_;
+typedef fn int(SndCtl_*, int*) AlsaCtlNextDev_;
+typedef fn void(SndPcmInfo_*, unsigned int) AlsaInfoSetUint_;        // pcm_info_set_device/subdevice
+typedef fn void(SndPcmInfo_*, int) AlsaInfoSetStream_;
 
 struct AlsaLib_ {
     int loaded;      // 0 not tried, 1 ok, -1 unavailable
@@ -90,8 +105,8 @@ struct AlsaLib_ {
     AlsaSizeof_ pcm_info_sizeof;
     AlsaHwAny_ hw_any;
     AlsaHwAny_ hw_params;
-    AlsaHwAny_ sw_current;
-    AlsaHwAny_ sw_params;
+    AlsaSwAny_ sw_current;
+    AlsaSwAny_ sw_params;
     AlsaHwSetInt_ hw_set_access;
     AlsaHwSetInt_ hw_test_access;
     AlsaHwSetInt_ hw_test_format;
@@ -121,14 +136,14 @@ struct AlsaLib_ {
     AlsaCardNext_ card_next;
     AlsaCtlOpen_ ctl_open;
     AlsaCtlClose_ ctl_close;
-    AlsaCtlInfo_ ctl_card_info;
-    AlsaGetName_ card_info_get_name;
+    AlsaCtlCardInfo_ ctl_card_info;
+    AlsaCardGetName_ card_info_get_name;
     AlsaCtlNextDev_ ctl_pcm_next_device;
-    AlsaCtlInfo_ ctl_pcm_info;
+    AlsaCtlPcmInfo_ ctl_pcm_info;
     AlsaInfoSetUint_ pcm_info_set_device;
     AlsaInfoSetUint_ pcm_info_set_subdevice;
     AlsaInfoSetStream_ pcm_info_set_stream;
-    AlsaGetName_ pcm_info_get_name;
+    AlsaPcmGetName_ pcm_info_get_name;
 };
 
 static struct AlsaLib_ g_alsa_;
@@ -138,16 +153,14 @@ static struct AlsaLib_ g_alsa_;
 // ignored, which every Linux ABI allows.)
 static void audio_alsa_quiet_(const char* file, int line, const char* function, int err, const char* fmt) { }
 
-static void* audio_alsa_sym_(?&void lib, const &char name, &int ok) {
-    ?&void p = audio_dlsym_(lib, name);
-    if (p.is_null()) *ok = 0;
-    unsafe { return (void*)p; }
+static fn void() audio_alsa_sym_(?&AudioLib_ lib, const &char name, &int ok) {
+    return audio_dlsym_or_(lib, name, ok);
 }
 
 static int audio_alsa_load_() {
     if (g_alsa_.loaded != 0) return g_alsa_.loaded > 0;
     g_alsa_.loaded = -1;
-    ?&void lib = audio_dlopen2_("libasound.so.2", "libasound.so");
+    ?&AudioLib_ lib = audio_dlopen2_("libasound.so.2", "libasound.so");
     if (lib.is_null()) return 0;
     int ok = 1;
     unsafe {
@@ -164,8 +177,8 @@ static int audio_alsa_load_() {
         g_alsa_.pcm_info_sizeof = (AlsaSizeof_)audio_alsa_sym_(lib, "snd_pcm_info_sizeof", &ok);
         g_alsa_.hw_any = (AlsaHwAny_)audio_alsa_sym_(lib, "snd_pcm_hw_params_any", &ok);
         g_alsa_.hw_params = (AlsaHwAny_)audio_alsa_sym_(lib, "snd_pcm_hw_params", &ok);
-        g_alsa_.sw_current = (AlsaHwAny_)audio_alsa_sym_(lib, "snd_pcm_sw_params_current", &ok);
-        g_alsa_.sw_params = (AlsaHwAny_)audio_alsa_sym_(lib, "snd_pcm_sw_params", &ok);
+        g_alsa_.sw_current = (AlsaSwAny_)audio_alsa_sym_(lib, "snd_pcm_sw_params_current", &ok);
+        g_alsa_.sw_params = (AlsaSwAny_)audio_alsa_sym_(lib, "snd_pcm_sw_params", &ok);
         g_alsa_.hw_set_access = (AlsaHwSetInt_)audio_alsa_sym_(lib, "snd_pcm_hw_params_set_access", &ok);
         g_alsa_.hw_test_access = (AlsaHwSetInt_)audio_alsa_sym_(lib, "snd_pcm_hw_params_test_access", &ok);
         g_alsa_.hw_test_format = (AlsaHwSetInt_)audio_alsa_sym_(lib, "snd_pcm_hw_params_test_format", &ok);
@@ -195,16 +208,16 @@ static int audio_alsa_load_() {
         g_alsa_.card_next = (AlsaCardNext_)audio_alsa_sym_(lib, "snd_card_next", &ok);
         g_alsa_.ctl_open = (AlsaCtlOpen_)audio_alsa_sym_(lib, "snd_ctl_open", &ok);
         g_alsa_.ctl_close = (AlsaCtlClose_)audio_alsa_sym_(lib, "snd_ctl_close", &ok);
-        g_alsa_.ctl_card_info = (AlsaCtlInfo_)audio_alsa_sym_(lib, "snd_ctl_card_info", &ok);
-        g_alsa_.card_info_get_name = (AlsaGetName_)audio_alsa_sym_(lib, "snd_ctl_card_info_get_name", &ok);
+        g_alsa_.ctl_card_info = (AlsaCtlCardInfo_)audio_alsa_sym_(lib, "snd_ctl_card_info", &ok);
+        g_alsa_.card_info_get_name = (AlsaCardGetName_)audio_alsa_sym_(lib, "snd_ctl_card_info_get_name", &ok);
         g_alsa_.ctl_pcm_next_device = (AlsaCtlNextDev_)audio_alsa_sym_(lib, "snd_ctl_pcm_next_device", &ok);
-        g_alsa_.ctl_pcm_info = (AlsaCtlInfo_)audio_alsa_sym_(lib, "snd_ctl_pcm_info", &ok);
+        g_alsa_.ctl_pcm_info = (AlsaCtlPcmInfo_)audio_alsa_sym_(lib, "snd_ctl_pcm_info", &ok);
         g_alsa_.pcm_info_set_device = (AlsaInfoSetUint_)audio_alsa_sym_(lib, "snd_pcm_info_set_device", &ok);
         g_alsa_.pcm_info_set_subdevice = (AlsaInfoSetUint_)audio_alsa_sym_(lib, "snd_pcm_info_set_subdevice", &ok);
         g_alsa_.pcm_info_set_stream = (AlsaInfoSetStream_)audio_alsa_sym_(lib, "snd_pcm_info_set_stream", &ok);
-        g_alsa_.pcm_info_get_name = (AlsaGetName_)audio_alsa_sym_(lib, "snd_pcm_info_get_name", &ok);
+        g_alsa_.pcm_info_get_name = (AlsaPcmGetName_)audio_alsa_sym_(lib, "snd_pcm_info_get_name", &ok);
         if (!ok) return 0;
-        g_alsa_.set_error_handler((void*)audio_alsa_quiet_);
+        g_alsa_.set_error_handler(audio_alsa_quiet_);
     }
     g_alsa_.loaded = 1;
     return 1;
@@ -237,16 +250,16 @@ static int audio_alsa_available_() { return audio_alsa_load_(); }
 // One direction of a device: max channels, formats, rates. 0 if it can't
 // be opened that way.
 static int audio_alsa_probe_dir_(const &char name, int stream, &AudioDeviceInfo info) {
-    void* pcm = (void*)0;
+    SndPcm_* pcm = (SndPcm_*)0;
     int rc = 0;
     unsafe { rc = g_alsa_.pcm_open(&pcm, name, stream, ALSA_NONBLOCK); }
     if (rc < 0) return 0;
     unsigned int maxch = 0U;
     unsafe {
-        void* hw = alloc_zeroed_raw_((unsigned long)g_alsa_.hw_sizeof());
-        if (hw == (void*)0) { g_alsa_.pcm_close(pcm); return 0; }
+        SndHwParams_* hw = (SndHwParams_*)alloc_zeroed_raw_((unsigned long)g_alsa_.hw_sizeof());
+        if (hw == (SndHwParams_*)0) { g_alsa_.pcm_close(pcm); return 0; }
         if (g_alsa_.hw_any(pcm, hw) >= 0) {
-            g_alsa_.hw_get_channels_max((const void*)hw, &maxch);
+            g_alsa_.hw_get_channels_max(hw, &maxch);
             if (maxch > 64U) maxch = 64U;      // "unbounded" plugins report a huge maximum
             unsigned int fmts[6];
             fmts[0] = AUDIO_FORMAT_I8; fmts[1] = AUDIO_FORMAT_I16; fmts[2] = AUDIO_FORMAT_I24;
@@ -259,7 +272,7 @@ static int audio_alsa_probe_dir_(const &char name, int stream, &AudioDeviceInfo 
                 if (g_alsa_.hw_test_rate(pcm, hw, r, 0) == 0) audio_device_add_rate_(info, r);
             }
         }
-        dealloc_raw_(hw);
+        dealloc(hw);
         g_alsa_.pcm_close(pcm);
     }
     if (stream == ALSA_STREAM_PLAYBACK) info.output_channels = (int)maxch;
@@ -298,22 +311,22 @@ static int audio_alsa_probe_(&AudioHost_ h) {
     audio_alsa_add_pcm_(h, "default", "Default ALSA Device", 1);
     int card = -1;
     unsafe {
-        void* cinfo = alloc_zeroed_raw_((unsigned long)g_alsa_.ctl_card_info_sizeof());
-        void* pinfo = alloc_zeroed_raw_((unsigned long)g_alsa_.pcm_info_sizeof());
-        if (cinfo == (void*)0 || pinfo == (void*)0) {
-            dealloc_raw_(cinfo); dealloc_raw_(pinfo);
+        SndCtlCardInfo_* cinfo = (SndCtlCardInfo_*)alloc_zeroed_raw_((unsigned long)g_alsa_.ctl_card_info_sizeof());
+        SndPcmInfo_* pinfo = (SndPcmInfo_*)alloc_zeroed_raw_((unsigned long)g_alsa_.pcm_info_sizeof());
+        if (cinfo == (SndCtlCardInfo_*)0 || pinfo == (SndPcmInfo_*)0) {
+            dealloc(cinfo); dealloc(pinfo);
             return audio_fail_(&h.error, AUDIO_ERR_NO_MEMORY, "alsa: out of memory");
         }
         while (g_alsa_.card_next(&card) == 0 && card >= 0) {
             char ctlName[32];
             audio_strcpy_(&ctlName[0], 32UL, "hw:");
             audio_strcat_int_(&ctlName[0], 32UL, (long long)card);
-            void* ctl = (void*)0;
+            SndCtl_* ctl = (SndCtl_*)0;
             if (g_alsa_.ctl_open(&ctl, (const char*)&ctlName[0], 0) < 0) continue;
             char cardName[80];
             audio_strcpy_(&cardName[0], 80UL, &ctlName[0]);
             if (g_alsa_.ctl_card_info(ctl, cinfo) == 0)
-                audio_strcpy_(&cardName[0], 80UL, (const ?&char)g_alsa_.card_info_get_name((const void*)cinfo));
+                audio_strcpy_(&cardName[0], 80UL, (const ?&char)g_alsa_.card_info_get_name(cinfo));
             int dev = -1;
             while (g_alsa_.ctl_pcm_next_device(ctl, &dev) == 0 && dev >= 0) {
                 char pcmName[40];
@@ -333,7 +346,7 @@ static int audio_alsa_probe_(&AudioHost_ h) {
                 if (got == 0) {
                     audio_strcat_(&display[0], (unsigned long)AUDIO_DEVICE_NAME_MAX, ": ");
                     audio_strcat_(&display[0], (unsigned long)AUDIO_DEVICE_NAME_MAX,
-                                  (const ?&char)g_alsa_.pcm_info_get_name((const void*)pinfo));
+                                  (const ?&char)g_alsa_.pcm_info_get_name(pinfo));
                 }
                 audio_strcat_(&display[0], (unsigned long)AUDIO_DEVICE_NAME_MAX, " (");
                 audio_strcat_(&display[0], (unsigned long)AUDIO_DEVICE_NAME_MAX, &pcmName[0]);
@@ -342,8 +355,8 @@ static int audio_alsa_probe_(&AudioHost_ h) {
             }
             g_alsa_.ctl_close(ctl);
         }
-        dealloc_raw_(cinfo);
-        dealloc_raw_(pinfo);
+        dealloc(cinfo);
+        dealloc(pinfo);
     }
     return AUDIO_OK;
 }
@@ -353,8 +366,8 @@ static void audio_alsa_host_close_(&AudioHost_ h) { }
 // ── streams ──────────────────────────────────────────────────────────────
 
 struct AlsaStream_ {
-    void* pcm[2];
-    void** chan_ptrs[2];      // non-interleaved access: one pointer per device channel
+    SndPcm_* pcm[2];
+    unsigned char** chan_ptrs[2];   // non-interleaved access: one pointer per device channel
     int linked;
     size_t period;
     size_t buffer;
@@ -367,7 +380,7 @@ static ?&AlsaStream_ audio_alsa_of_(&AudioStreamState_ st) {
 // Configures one PCM. Sets the stream's (be) fields for 'dir'.
 static int audio_alsa_setup_(&AudioStreamState_ st, &AlsaStream_ a, int dir, const &char name, int allowPlug) {
     int stream = dir == AUDIO_DIR_OUT ? ALSA_STREAM_PLAYBACK : ALSA_STREAM_CAPTURE;
-    void* pcm = (void*)0;
+    SndPcm_* pcm = (SndPcm_*)0;
     int rc = 0;
     unsafe { rc = g_alsa_.pcm_open(&pcm, name, stream, ALSA_NONBLOCK); }
     if (rc < 0) {
@@ -375,9 +388,9 @@ static int audio_alsa_setup_(&AudioStreamState_ st, &AlsaStream_ a, int dir, con
         return audio_alsa_fail_(&st.error, code, "alsa: snd_pcm_open", rc);
     }
     unsafe { g_alsa_.pcm_nonblock(pcm, 0); }
-    void* hw = (void*)0;
-    unsafe { hw = alloc_zeroed_raw_((unsigned long)g_alsa_.hw_sizeof()); }
-    if (hw == (void*)0) {
+    SndHwParams_* hw = (SndHwParams_*)0;
+    unsafe { hw = (SndHwParams_*)alloc_zeroed_raw_((unsigned long)g_alsa_.hw_sizeof()); }
+    if (hw == (SndHwParams_*)0) {
         unsafe { g_alsa_.pcm_close(pcm); }
         return audio_fail_(&st.error, AUDIO_ERR_NO_MEMORY, "alsa: out of memory");
     }
@@ -409,7 +422,7 @@ static int audio_alsa_setup_(&AudioStreamState_ st, &AlsaStream_ a, int dir, con
             st.device_format[dir] = chosen;
             unsigned int ch = (unsigned int)(st.user_channels[dir] + st.first_channel[dir]);
             unsigned int minch = 0U;
-            g_alsa_.hw_get_channels_min((const void*)hw, &minch);
+            g_alsa_.hw_get_channels_min(hw, &minch);
             if (ch < minch) ch = minch;      // e.g. a hw device that's always 2-channel
             if ((rc = g_alsa_.hw_set_channels(pcm, hw, ch)) < 0) {
                 result = audio_alsa_fail_(&st.error, AUDIO_ERR_INVALID_PARAM, "alsa: channel count not supported", rc);
@@ -439,8 +452,8 @@ static int audio_alsa_setup_(&AudioStreamState_ st, &AlsaStream_ a, int dir, con
             size_t got = (size_t)0;
             size_t buf = (size_t)0;
             sub = 0;
-            g_alsa_.hw_get_period_size((const void*)hw, &got, &sub);
-            g_alsa_.hw_get_buffer_size((const void*)hw, &buf);
+            g_alsa_.hw_get_period_size(hw, &got, &sub);
+            g_alsa_.hw_get_buffer_size(hw, &buf);
             if (dir == AUDIO_DIR_IN && st.mode_out && got != a.period) {
                 result = audio_fail_(&st.error, AUDIO_ERR_INVALID_PARAM, "alsa: duplex devices disagree on the period size");
                 break;
@@ -452,19 +465,19 @@ static int audio_alsa_setup_(&AudioStreamState_ st, &AlsaStream_ a, int dir, con
             st.latency[dir] = (long)buf;
             break;
         }
-        dealloc_raw_(hw);
+        dealloc(hw);
     }
     if (result == AUDIO_OK) {
         // Software params: playback starts once a full buffer is queued,
         // wake-ups once a period is free.
         unsafe {
-            void* sw = alloc_zeroed_raw_((unsigned long)g_alsa_.sw_sizeof());
-            if (sw != (void*)0) {
+            SndSwParams_* sw = (SndSwParams_*)alloc_zeroed_raw_((unsigned long)g_alsa_.sw_sizeof());
+            if (sw != (SndSwParams_*)0) {
                 g_alsa_.sw_current(pcm, sw);
                 g_alsa_.sw_set_start_threshold(pcm, sw, dir == AUDIO_DIR_OUT ? a.buffer : (size_t)1);
                 g_alsa_.sw_set_avail_min(pcm, sw, a.period);
                 g_alsa_.sw_params(pcm, sw);
-                dealloc_raw_(sw);
+                dealloc(sw);
             }
         }
         a.pcm[dir] = pcm;
@@ -486,10 +499,10 @@ static int audio_alsa_setup_(&AudioStreamState_ st, &AlsaStream_ a, int dir, con
 static void audio_alsa_release_(&AlsaStream_ a) {
     unsafe {
         for (int d = 0; d < 2; d = d + 1) {
-            if (a.pcm[d] != (void*)0) g_alsa_.pcm_close(a.pcm[d]);
-            a.pcm[d] = (void*)0;
-            dealloc_raw_((void*)a.chan_ptrs[d]);
-            a.chan_ptrs[d] = (void**)0;
+            if (a.pcm[d] != (SndPcm_*)0) g_alsa_.pcm_close(a.pcm[d]);
+            a.pcm[d] = (SndPcm_*)0;
+            dealloc(a.chan_ptrs[d]);
+            a.chan_ptrs[d] = (unsigned char**)0;
         }
     }
 }
@@ -514,14 +527,14 @@ static int audio_alsa_open_(&AudioHost_ h, &AudioStreamState_ st) {
             }
             if (rc != AUDIO_OK) {
                 audio_alsa_release_(a);
-                unsafe { dealloc_raw_((void*)a); }
+                unsafe { dealloc((?&heap AlsaStream_)a); }
                 return rc;
             }
             st.max_frames = st.buffer_frames;
             // Duplex: start/stop the two PCMs together when ALSA can.
             unsafe {
                 if (st.mode_out && st.mode_in && g_alsa_.link(a.pcm[0], a.pcm[1]) == 0) a.linked = 1;
-                st.backend = (void*)a;
+                st.backend = (?&heap AudioStreamImpl_)a;
             }
             return AUDIO_OK;
         }
@@ -534,14 +547,14 @@ static int audio_alsa_open_(&AudioHost_ h, &AudioStreamState_ st) {
 static int audio_alsa_chan_ptrs_(&AudioStreamState_ st, &AlsaStream_ a) {
     for (int d = 0; d < 2; d = d + 1) {
         int on = d == AUDIO_DIR_OUT ? st.mode_out : st.mode_in;
-        if (!on || st.device_interleaved[d] || a.chan_ptrs[d] != (void**)0) continue;
+        if (!on || st.device_interleaved[d] || a.chan_ptrs[d] != (unsigned char**)0) continue;
         unsafe {
             unsigned long n = (unsigned long)st.device_channels[d];
-            a.chan_ptrs[d] = (void**)alloc_zeroed_raw_(n * sizeof(void*));
-            if (a.chan_ptrs[d] == (void**)0) return audio_fail_(&st.error, AUDIO_ERR_NO_MEMORY, "alsa: out of memory");
+            a.chan_ptrs[d] = (unsigned char**)alloc_zeroed_raw_(checked_mul_size(n, sizeof(unsigned char*)));
+            if (a.chan_ptrs[d] == (unsigned char**)0) return audio_fail_(&st.error, AUDIO_ERR_NO_MEMORY, "alsa: out of memory");
             unsigned long stride = (unsigned long)st.max_frames * (unsigned long)audio_format_bytes(st.device_format[d]);
-            unsigned char* base = (unsigned char*)st.device_buf[d];
-            for (unsigned long c = 0UL; c < n; c = c + 1UL) a.chan_ptrs[d][c] = (void*)(base + c * stride);
+            unsigned char* base = (unsigned char*)st.device_buf[d].ptr;
+            for (unsigned long c = 0UL; c < n; c = c + 1UL) a.chan_ptrs[d][c] = base + c * stride;
         }
     }
     return AUDIO_OK;
@@ -557,15 +570,15 @@ static int audio_alsa_write_(&AudioStreamState_ st, &AlsaStream_ a, unsigned lon
         ssize_t r = (ssize_t)0;
         unsafe {
             if (st.device_interleaved[AUDIO_DIR_OUT]) {
-                const unsigned char* p = (const unsigned char*)st.device_buf[AUDIO_DIR_OUT];
-                r = g_alsa_.writei(a.pcm[AUDIO_DIR_OUT], (const void*)(p + done * fb), (size_t)(frames - done));
+                const unsigned char* p = (const unsigned char*)st.device_buf[AUDIO_DIR_OUT].ptr;
+                r = g_alsa_.writei(a.pcm[AUDIO_DIR_OUT], p + done * fb, (size_t)(frames - done));
             } else {
                 // Offsets into each channel plane.
-                void* ptrs[64];
+                unsigned char* ptrs[64];
                 int n = st.device_channels[AUDIO_DIR_OUT];
                 if (n > 64) n = 64;
                 for (int c = 0; c < n; c = c + 1)
-                    ptrs[c] = (void*)((unsigned char*)a.chan_ptrs[AUDIO_DIR_OUT][c] + done * sb);
+                    ptrs[c] = a.chan_ptrs[AUDIO_DIR_OUT][c] + done * sb;
                 r = g_alsa_.writen(a.pcm[AUDIO_DIR_OUT], &ptrs[0], (size_t)(frames - done));
             }
         }
@@ -594,14 +607,14 @@ static int audio_alsa_read_(&AudioStreamState_ st, &AlsaStream_ a, unsigned long
         ssize_t r = (ssize_t)0;
         unsafe {
             if (st.device_interleaved[AUDIO_DIR_IN]) {
-                unsigned char* p = (unsigned char*)st.device_buf[AUDIO_DIR_IN];
-                r = g_alsa_.readi(a.pcm[AUDIO_DIR_IN], (void*)(p + done * fb), (size_t)(frames - done));
+                unsigned char* p = (unsigned char*)st.device_buf[AUDIO_DIR_IN].ptr;
+                r = g_alsa_.readi(a.pcm[AUDIO_DIR_IN], p + done * fb, (size_t)(frames - done));
             } else {
-                void* ptrs[64];
+                unsigned char* ptrs[64];
                 int n = st.device_channels[AUDIO_DIR_IN];
                 if (n > 64) n = 64;
                 for (int c = 0; c < n; c = c + 1)
-                    ptrs[c] = (void*)((unsigned char*)a.chan_ptrs[AUDIO_DIR_IN][c] + done * sb);
+                    ptrs[c] = a.chan_ptrs[AUDIO_DIR_IN][c] + done * sb;
                 r = g_alsa_.readn(a.pcm[AUDIO_DIR_IN], &ptrs[0], (size_t)(frames - done));
             }
         }
@@ -658,7 +671,7 @@ static int audio_alsa_start_(&AudioStreamState_ st) {
             if (rc != AUDIO_OK) return rc;
             unsafe {
                 for (int d = 0; d < 2; d = d + 1) {
-                    if (a.pcm[d] == (void*)0) continue;
+                    if (a.pcm[d] == (SndPcm_*)0) continue;
                     if (d == AUDIO_DIR_IN && a.linked) continue;   // prepared with its link partner
                     int e = g_alsa_.pcm_prepare(a.pcm[d]);
                     if (e < 0) return audio_alsa_fail_(&st.error, AUDIO_ERR_SYSTEM, "alsa: snd_pcm_prepare", e);
@@ -698,11 +711,11 @@ static void audio_alsa_close_(&AudioStreamState_ st) {
     match (audio_alsa_of_(st)) {
         case some(a): {
             audio_alsa_release_(a);
-            unsafe { dealloc_raw_((void*)a); }
+            unsafe { dealloc((?&heap AlsaStream_)a); }
         }
         case null: {}
     }
-    unsafe { st.backend = (void*)0; }
+    unsafe { st.backend = null; }
 }
 
 static struct AudioBackendVt_ g_audio_alsa_vt_;

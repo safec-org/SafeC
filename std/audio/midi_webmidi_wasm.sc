@@ -95,11 +95,11 @@ static int midi_webmidi_client_open_(&MidiPortState_ st) {
                     if (p.scratch == (unsigned char*)0) ok = 0;
                 }
                 if (ok) {
-                    st.backend = (void*)p;
+                    st.backend = (?&heap MidiPortImpl_)p;
                     g_midi_web_priv_[handle] = (struct MidiWebPort_*)p;
                     g_midi_web_ports_[handle] = (struct MidiPortState_*)st;
                 } else {
-                    dealloc_raw_((void*)p);
+                    dealloc(p);
                 }
             }
             if (ok) return AUDIO_OK;
@@ -168,9 +168,9 @@ static void midi_webmidi_client_close_(&MidiPortState_ st) {
             unsafe {
                 g_midi_web_ports_[p.handle] = (struct MidiPortState_*)0;
                 g_midi_web_priv_[p.handle] = (struct MidiWebPort_*)0;
-                dealloc_raw_((void*)p.scratch);
-                dealloc_raw_((void*)p);
-                st.backend = (void*)0;
+                dealloc(p.scratch);
+                dealloc(p);
+                st.backend = null;
             }
         }
         case null: {}

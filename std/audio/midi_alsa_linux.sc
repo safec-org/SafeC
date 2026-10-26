@@ -230,7 +230,7 @@ static int midi_alsa_client_open_(&MidiPortState_ st) {
                                   st.is_input ? ASEQ_NONBLOCK : 0);
             }
             if (rc < 0) {
-                unsafe { dealloc_raw_((void*)c); }
+                unsafe { dealloc(c); }
                 return audio_fail_(&st.error, AUDIO_ERR_UNAVAILABLE, "alsa: no MIDI sequencer (/dev/snd/seq)");
             }
             unsafe {
@@ -244,12 +244,12 @@ static int midi_alsa_client_open_(&MidiPortState_ st) {
                 }
                 if (c.coder == (void*)0 || (st.is_input && c.decode_buf == (unsigned char*)0)) {
                     if (c.coder != (void*)0) g_aseq_.mev_free(c.coder);
-                    dealloc_raw_((void*)c.decode_buf);
+                    dealloc(c.decode_buf);
                     g_aseq_.close(c.seq);
-                    dealloc_raw_((void*)c);
+                    dealloc(c);
                     return audio_fail_(&st.error, AUDIO_ERR_NO_MEMORY, "alsa: out of memory");
                 }
-                st.backend = (void*)c;
+                st.backend = (?&heap MidiPortImpl_)c;
             }
             return AUDIO_OK;
         }
@@ -462,7 +462,7 @@ static int midi_alsa_send_(&MidiPortState_ st, const &unsigned char msg, unsigne
                 unsigned long done = 0UL;
                 while (done < len) {
                     struct AlsaSeqEvent_ ev;
-                    safe_memset_raw_((void*)&ev, 0, sizeof(struct AlsaSeqEvent_));
+                    safe_memset_obj(&ev, 0);
                     long used = g_aseq_.mev_encode(c.coder, (const unsigned char*)msg + done, (long)(len - done), &ev);
                     if (used <= 0L) return audio_fail_(&st.error, AUDIO_ERR_INVALID_PARAM, "alsa: could not encode the message");
                     done = done + (unsigned long)used;
@@ -489,9 +489,9 @@ static void midi_alsa_client_close_(&MidiPortState_ st) {
             unsafe {
                 if (c.coder != (void*)0) g_aseq_.mev_free(c.coder);
                 g_aseq_.close(c.seq);
-                dealloc_raw_((void*)c.decode_buf);
-                dealloc_raw_((void*)c);
-                st.backend = (void*)0;
+                dealloc(c.decode_buf);
+                dealloc(c);
+                st.backend = null;
             }
         }
         case null: {}

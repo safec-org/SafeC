@@ -11,9 +11,20 @@
 
 namespace std {
 
+// A backend's private state, opaque here: each backend keeps its own struct
+// (AlsaSeqClient_, CoreMidi_, WinMidi_, ...) and converts its handle to and
+// from this in its client_open()/client_close() and its one accessor.
+struct MidiPortImpl_ { char opaque_; };
+
+// The callback slot (null = the queue) and its context, as loaded and
+// stored atomically: the receiving thread reads them while the owner
+// changes them.
+typedef ?fn void(&MidiEvent, ?&Erased) MidiCallbackSlot_;
+typedef ?&Erased MidiUserSlot_;
+
 struct MidiPortState_ {
     int api;
-    void* vt;                         // the MidiBackendVt_
+    ?&static struct MidiBackendVt_ vt;   // the backend
     int is_input;
     char client_name[MIDI_CLIENT_NAME_MAX];
     int port_open;
@@ -24,8 +35,8 @@ struct MidiPortState_ {
     unsigned long ring_cap;           // bytes (power of two)
     unsigned long ring_head;          // (rt) producer's write offset, monotonic
     unsigned long ring_tail;          // consumer's read offset, monotonic
-    void* callback;                   // (rt) MidiCallbackRaw_, null = queue
-    void* user;                       // (rt)
+    MidiCallbackSlot_ callback;       // (rt) null = queue
+    MidiUserSlot_ user;               // (rt)
     int ignore;                       // (rt) bit 1 sysex, 2 timing, 4 sensing
     long long t0_ns;                  // when the port opened
     double last_time;                 // (rt, producer only) previous message's time
@@ -34,7 +45,7 @@ struct MidiPortState_ {
     struct MidiParser parser;         // for byte-stream backends (producer only)
     unsigned char* sysex_buf;         // the parser's buffer (MIDI_MAX_SYSEX)
 
-    void* backend;                    // backend-private
+    ?&heap MidiPortImpl_ backend;     // backend-private
 };
 
 struct MidiBackendVt_ {

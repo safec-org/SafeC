@@ -87,7 +87,7 @@ struct WPropVariant_ {
     unsigned short r1;
     unsigned short r2;
     unsigned short r3;
-    void*          p;
+    unsigned short* p;            // pwszVal (the VT_LPWSTR member of the union)
     unsigned long long pad;
 };
 
@@ -95,13 +95,21 @@ static_assert(sizeof(struct WGuid_) == 16, "GUID is 16 bytes");
 static_assert(sizeof(struct WFormat_) == 40, "WAVEFORMATEXTENSIBLE is 40 bytes");
 static_assert(sizeof(struct WPropVariant_) == 24, "PROPVARIANT is 24 bytes on 64-bit Windows");
 
-extern int   CoInitializeEx(void* reserved, unsigned int coinit);
-extern int   CoCreateInstance(const WGuid_* clsid, void* outer, unsigned int ctx, const WGuid_* iid, void** out);
-extern void  CoTaskMemFree(void* p);
-extern int   PropVariantClear(void* pv);
-extern void* CreateEventA(void* attrs, int manualReset, int initialState, const char* name);
-extern unsigned int WaitForSingleObject(void* h, unsigned int ms);
-extern int   CloseHandle(void* h);
+// A COM interface pointer: an object whose first field is its method
+// table (IUnknown's three methods, then the interface's, in order).
+typedef fn void() WMethod_;
+struct WCom_ { const WMethod_* vtbl; };
+// A kernel object HANDLE (an event), and SECURITY_ATTRIBUTES (never passed).
+struct WHandle_ { char opaque_; };
+struct WSecurityAttrs_ { char opaque_; };
+
+extern int   CoInitializeEx(const unsigned char* reserved, unsigned int coinit);
+extern int   CoCreateInstance(const WGuid_* clsid, WCom_* outer, unsigned int ctx, const WGuid_* iid, WCom_** out);
+extern void  CoTaskMemFree(unsigned char* p);       // what COM allocated (an id string, a format)
+extern int   PropVariantClear(WPropVariant_* pv);
+extern WHandle_* CreateEventA(WSecurityAttrs_* attrs, int manualReset, int initialState, const char* name);
+extern unsigned int WaitForSingleObject(WHandle_* h, unsigned int ms);
+extern int   CloseHandle(WHandle_* h);
 extern int   WideCharToMultiByte(unsigned int cp, unsigned int flags, const unsigned short* w, int wlen,
                                  char* out, int outlen, const char* defChar, int* usedDef);
 extern int   MultiByteToWideChar(unsigned int cp, unsigned int flags, const char* s, int slen,
@@ -158,48 +166,46 @@ static struct WPropKey_ w_pkey_friendly_name_() {
     return k;
 }
 
-static void* w_method_(void* obj, int index) {
-    unsafe {
-        void** vtbl = *(void***)obj;
-        return vtbl[index];
-    }
+// Method 'index' of a COM object's table (the caller casts it to its signature).
+static WMethod_ w_method_(WCom_* obj, int index) {
+    unsafe { return obj->vtbl[index]; }
 }
 
-typedef fn unsigned int(void*) WRelease_;                                   // IUnknown::Release (2)
+typedef fn unsigned int(WCom_*) WRelease_;                                   // IUnknown::Release (2)
 // IMMDeviceEnumerator
-typedef fn int(void*, int, unsigned int, void**) WEnumEndpoints_;           // 3 EnumAudioEndpoints
-typedef fn int(void*, int, int, void**) WGetDefault_;                       // 4 GetDefaultAudioEndpoint
-typedef fn int(void*, const unsigned short*, void**) WGetDevice_;           // 5 GetDevice
+typedef fn int(WCom_*, int, unsigned int, WCom_**) WEnumEndpoints_;           // 3 EnumAudioEndpoints
+typedef fn int(WCom_*, int, int, WCom_**) WGetDefault_;                       // 4 GetDefaultAudioEndpoint
+typedef fn int(WCom_*, const unsigned short*, WCom_**) WGetDevice_;           // 5 GetDevice
 // IMMDeviceCollection
-typedef fn int(void*, unsigned int*) WCollCount_;                           // 3 GetCount
-typedef fn int(void*, unsigned int, void**) WCollItem_;                     // 4 Item
+typedef fn int(WCom_*, unsigned int*) WCollCount_;                           // 3 GetCount
+typedef fn int(WCom_*, unsigned int, WCom_**) WCollItem_;                     // 4 Item
 // IMMDevice
-typedef fn int(void*, const WGuid_*, unsigned int, void*, void**) WActivate_;   // 3 Activate
-typedef fn int(void*, unsigned int, void**) WOpenProps_;                    // 4 OpenPropertyStore
-typedef fn int(void*, unsigned short**) WGetId_;                            // 5 GetId
+typedef fn int(WCom_*, const WGuid_*, unsigned int, const WPropVariant_*, WCom_**) WActivate_;   // 3 Activate
+typedef fn int(WCom_*, unsigned int, WCom_**) WOpenProps_;                    // 4 OpenPropertyStore
+typedef fn int(WCom_*, unsigned short**) WGetId_;                            // 5 GetId
 // IPropertyStore
-typedef fn int(void*, const WPropKey_*, WPropVariant_*) WGetValue_;         // 5 GetValue
+typedef fn int(WCom_*, const WPropKey_*, WPropVariant_*) WGetValue_;         // 5 GetValue
 // IAudioClient
-typedef fn int(void*, int, unsigned int, long long, long long, const WFormat_*, const WGuid_*) WInitialize_;  // 3
-typedef fn int(void*, unsigned int*) WGetBufferSize_;                      // 4 GetBufferSize, 6 GetCurrentPadding
-typedef fn int(void*, long long*) WGetLatency_;                             // 5 GetStreamLatency
-typedef fn int(void*, int, const WFormat_*, void**) WIsSupported_;          // 7 IsFormatSupported
-typedef fn int(void*, void**) WGetMixFormat_;                               // 8 GetMixFormat
-typedef fn int(void*, long long*, long long*) WGetPeriod_;                  // 9 GetDevicePeriod
-typedef fn int(void*) WClientNoArg_;                                        // 10 Start, 11 Stop, 12 Reset
-typedef fn int(void*, void*) WSetEvent_;                                    // 13 SetEventHandle
-typedef fn int(void*, const WGuid_*, void**) WGetService_;                  // 14 GetService
+typedef fn int(WCom_*, int, unsigned int, long long, long long, const WFormat_*, const WGuid_*) WInitialize_;  // 3
+typedef fn int(WCom_*, unsigned int*) WGetBufferSize_;                      // 4 GetBufferSize, 6 GetCurrentPadding
+typedef fn int(WCom_*, long long*) WGetLatency_;                             // 5 GetStreamLatency
+typedef fn int(WCom_*, int, const WFormat_*, WFormat_**) WIsSupported_;          // 7 IsFormatSupported
+typedef fn int(WCom_*, WFormat_**) WGetMixFormat_;                               // 8 GetMixFormat
+typedef fn int(WCom_*, long long*, long long*) WGetPeriod_;                  // 9 GetDevicePeriod
+typedef fn int(WCom_*) WClientNoArg_;                                        // 10 Start, 11 Stop, 12 Reset
+typedef fn int(WCom_*, WHandle_*) WSetEvent_;                                    // 13 SetEventHandle
+typedef fn int(WCom_*, const WGuid_*, WCom_**) WGetService_;                  // 14 GetService
 // IAudioRenderClient
-typedef fn int(void*, unsigned int, unsigned char**) WRenderGet_;          // 3 GetBuffer
-typedef fn int(void*, unsigned int, unsigned int) WRenderRelease_;          // 4 ReleaseBuffer
+typedef fn int(WCom_*, unsigned int, unsigned char**) WRenderGet_;          // 3 GetBuffer
+typedef fn int(WCom_*, unsigned int, unsigned int) WRenderRelease_;          // 4 ReleaseBuffer
 // IAudioCaptureClient
-typedef fn int(void*, unsigned char**, unsigned int*, unsigned int*, unsigned long long*, unsigned long long*) WCaptureGet_; // 3
-typedef fn int(void*, unsigned int) WCaptureRelease_;                       // 4 ReleaseBuffer
-typedef fn int(void*, unsigned int*) WCaptureNext_;                         // 5 GetNextPacketSize
+typedef fn int(WCom_*, unsigned char**, unsigned int*, unsigned int*, unsigned long long*, unsigned long long*) WCaptureGet_; // 3
+typedef fn int(WCom_*, unsigned int) WCaptureRelease_;                       // 4 ReleaseBuffer
+typedef fn int(WCom_*, unsigned int*) WCaptureNext_;                         // 5 GetNextPacketSize
 
-static void w_release_(void* obj) {
+static void w_release_(WCom_* obj) {
     unsafe {
-        if (obj == (void*)0) return;
+        if (obj == (WCom_*)0) return;
         WRelease_ f = (WRelease_)w_method_(obj, 2);
         f(obj);
     }
@@ -207,17 +213,17 @@ static void w_release_(void* obj) {
 
 static int w_coinit_() {
     int hr = 0;
-    unsafe { hr = CoInitializeEx((void*)0, W_COINIT_MULTITHREADED); }
+    unsafe { hr = CoInitializeEx((const unsigned char*)0, W_COINIT_MULTITHREADED); }
     // S_OK, S_FALSE (already), RPC_E_CHANGED_MODE (an STA thread: still usable).
     return hr >= 0 || (unsigned int)hr == 0x80010106U;
 }
 
-static void* w_enumerator_(&int hrOut) {
-    void* en = (void*)0;
+static WCom_* w_enumerator_(&int hrOut) {
+    WCom_* en = (WCom_*)0;
     struct WGuid_ clsid = w_clsid_enumerator_();
     struct WGuid_ iid = w_iid_enumerator_();
-    unsafe { *hrOut = CoCreateInstance(&clsid, (void*)0, W_CLSCTX_ALL, &iid, &en); }
-    return *hrOut < 0 ? (void*)0 : en;
+    unsafe { *hrOut = CoCreateInstance(&clsid, (WCom_*)0, W_CLSCTX_ALL, &iid, &en); }
+    return *hrOut < 0 ? (WCom_*)0 : en;
 }
 
 // A wide string (UTF-16) to UTF-8 'out'.
@@ -230,11 +236,11 @@ static void w_to_utf8_(const unsigned short* w, &char out, unsigned long cap) {
     }
 }
 
-static int w_audio_client_(void* device, &void* out) {
+static int w_audio_client_(WCom_* device, &WCom_* out) {
     struct WGuid_ iid = w_iid_audio_client_();
     unsafe {
         WActivate_ act = (WActivate_)w_method_(device, 3);
-        return act(device, &iid, W_CLSCTX_ALL, (void*)0, (void**)out);
+        return act(device, &iid, W_CLSCTX_ALL, (const WPropVariant_*)0, (WCom_**)out);
     }
 }
 
@@ -259,7 +265,7 @@ static unsigned int w_format_of_(const WFormat_* f) {
 
 static struct WFormat_ w_make_format_(unsigned int format, int channels, unsigned int rate) {
     struct WFormat_ f;
-    unsafe { safe_memset_raw_((void*)&f, 0, sizeof(struct WFormat_)); }
+    unsafe { safe_memset_obj(&f, 0); }
     int bytes = audio_format_bytes(format);
     f.tag = (unsigned short)W_FORMAT_EXTENSIBLE;
     f.channels = (unsigned short)channels;
@@ -276,45 +282,45 @@ static struct WFormat_ w_make_format_(unsigned int format, int channels, unsigne
 
 static int audio_wasapi_available_() { return 1; }
 
-static void w_probe_flow_(&AudioHost_ h, void* en, int flow, &char defId) {
+static void w_probe_flow_(&AudioHost_ h, WCom_* en, int flow, &char defId) {
     unsafe {
-        void* coll = (void*)0;
+        WCom_* coll = (WCom_*)0;
         WEnumEndpoints_ enumEp = (WEnumEndpoints_)w_method_(en, 3);
-        if (enumEp(en, flow, W_DEVICE_STATE_ACTIVE, &coll) < 0 || coll == (void*)0) return;
+        if (enumEp(en, flow, W_DEVICE_STATE_ACTIVE, &coll) < 0 || coll == (WCom_*)0) return;
         unsigned int count = 0U;
         WCollCount_ getCount = (WCollCount_)w_method_(coll, 3);
         getCount(coll, &count);
         for (unsigned int i = 0U; i < count; i = i + 1U) {
-            void* dev = (void*)0;
+            WCom_* dev = (WCom_*)0;
             WCollItem_ item = (WCollItem_)w_method_(coll, 4);
-            if (item(coll, i, &dev) < 0 || dev == (void*)0) continue;
+            if (item(coll, i, &dev) < 0 || dev == (WCom_*)0) continue;
             char id[AUDIO_DEVICE_KEY_MAX];
             id[0] = (char)0;
             unsigned short* wid = (unsigned short*)0;
             WGetId_ getId = (WGetId_)w_method_(dev, 5);
             if (getId(dev, &wid) >= 0 && wid != (unsigned short*)0) {
                 w_to_utf8_((const unsigned short*)wid, &id[0], (unsigned long)AUDIO_DEVICE_KEY_MAX);
-                CoTaskMemFree((void*)wid);
+                CoTaskMemFree((unsigned char*)wid);
             }
             struct AudioDeviceInfo info = audio_device_info_blank_();
-            void* props = (void*)0;
+            WCom_* props = (WCom_*)0;
             WOpenProps_ openProps = (WOpenProps_)w_method_(dev, 4);
-            if (openProps(dev, W_STGM_READ, &props) >= 0 && props != (void*)0) {
+            if (openProps(dev, W_STGM_READ, &props) >= 0 && props != (WCom_*)0) {
                 struct WPropKey_ key = w_pkey_friendly_name_();
                 struct WPropVariant_ pv;
-                safe_memset_raw_((void*)&pv, 0, sizeof(struct WPropVariant_));
+                safe_memset_obj(&pv, 0);
                 WGetValue_ getValue = (WGetValue_)w_method_(props, 5);
                 if (getValue(props, &key, &pv) >= 0 && (int)pv.vt == W_VT_LPWSTR)
                     w_to_utf8_((const unsigned short*)pv.p, &info.name[0], (unsigned long)AUDIO_DEVICE_NAME_MAX);
-                PropVariantClear((void*)&pv);
+                PropVariantClear(&pv);
                 w_release_(props);
             }
             if (info.name[0] == (char)0) audio_strcpy_(&info.name[0], (unsigned long)AUDIO_DEVICE_NAME_MAX, "WASAPI endpoint");
-            void* client = (void*)0;
-            if (w_audio_client_(dev, &client) >= 0 && client != (void*)0) {
+            WCom_* client = (WCom_*)0;
+            if (w_audio_client_(dev, &client) >= 0 && client != (WCom_*)0) {
                 WFormat_* mix = (WFormat_*)0;
                 WGetMixFormat_ getMix = (WGetMixFormat_)w_method_(client, 8);
-                if (getMix(client, (void**)&mix) >= 0 && mix != (WFormat_*)0) {
+                if (getMix(client, &mix) >= 0 && mix != (WFormat_*)0) {
                     int ch = (int)mix->channels;
                     if (flow == W_E_RENDER) info.output_channels = ch; else info.input_channels = ch;
                     info.preferred_sample_rate = mix->rate;
@@ -326,15 +332,15 @@ static void w_probe_flow_(&AudioHost_ h, void* en, int flow, &char defId) {
                         unsigned int rate = audio_standard_rate_(r);
                         struct WFormat_ f32 = w_make_format_(AUDIO_FORMAT_F32, ch, rate);
                         struct WFormat_ i16 = w_make_format_(AUDIO_FORMAT_I16, ch, rate);
-                        if (isSup(client, W_SHAREMODE_EXCLUSIVE, &f32, (void**)0) == 0) {
+                        if (isSup(client, W_SHAREMODE_EXCLUSIVE, &f32, (WFormat_**)0) == 0) {
                             audio_device_add_rate_(&info, rate);
                             info.native_formats = info.native_formats | AUDIO_FORMAT_F32;
-                        } else if (isSup(client, W_SHAREMODE_EXCLUSIVE, &i16, (void**)0) == 0) {
+                        } else if (isSup(client, W_SHAREMODE_EXCLUSIVE, &i16, (WFormat_**)0) == 0) {
                             audio_device_add_rate_(&info, rate);
                             info.native_formats = info.native_formats | AUDIO_FORMAT_I16;
                         }
                     }
-                    CoTaskMemFree((void*)mix);
+                    CoTaskMemFree((unsigned char*)mix);
                 }
                 w_release_(client);
             }
@@ -355,17 +361,17 @@ static void w_probe_flow_(&AudioHost_ h, void* en, int flow, &char defId) {
     }
 }
 
-static void w_default_id_(void* en, int flow, &char out) {
+static void w_default_id_(WCom_* en, int flow, &char out) {
     unsafe {
         out[0] = (char)0;
-        void* dev = (void*)0;
+        WCom_* dev = (WCom_*)0;
         WGetDefault_ getDefault = (WGetDefault_)w_method_(en, 4);
-        if (getDefault(en, flow, W_E_CONSOLE, &dev) < 0 || dev == (void*)0) return;
+        if (getDefault(en, flow, W_E_CONSOLE, &dev) < 0 || dev == (WCom_*)0) return;
         unsigned short* wid = (unsigned short*)0;
         WGetId_ getId = (WGetId_)w_method_(dev, 5);
         if (getId(dev, &wid) >= 0 && wid != (unsigned short*)0) {
             w_to_utf8_((const unsigned short*)wid, out, (unsigned long)AUDIO_DEVICE_KEY_MAX);
-            CoTaskMemFree((void*)wid);
+            CoTaskMemFree((unsigned char*)wid);
         }
         w_release_(dev);
     }
@@ -374,8 +380,8 @@ static void w_default_id_(void* en, int flow, &char out) {
 static int audio_wasapi_probe_(&AudioHost_ h) {
     if (!w_coinit_()) return audio_fail_(&h.error, AUDIO_ERR_SYSTEM, "wasapi: CoInitializeEx failed");
     int hr = 0;
-    void* en = w_enumerator_(&hr);
-    if (en == (void*)0) return audio_fail_hex_(&h.error, AUDIO_ERR_UNAVAILABLE, "wasapi: no MMDeviceEnumerator", (unsigned int)hr);
+    WCom_* en = w_enumerator_(&hr);
+    if (en == (WCom_*)0) return audio_fail_hex_(&h.error, AUDIO_ERR_UNAVAILABLE, "wasapi: no MMDeviceEnumerator", (unsigned int)hr);
     char defOut[AUDIO_DEVICE_KEY_MAX];
     char defIn[AUDIO_DEVICE_KEY_MAX];
     w_default_id_(en, W_E_RENDER, &defOut[0]);
@@ -391,9 +397,9 @@ static void audio_wasapi_host_close_(&AudioHost_ h) { }
 // ── streams ──────────────────────────────────────────────────────────────
 
 struct WStream_ {
-    void* client[2];          // IAudioClient per direction
-    void* service[2];         // IAudioRenderClient / IAudioCaptureClient
-    void* event[2];
+    WCom_* client[2];         // IAudioClient per direction
+    WCom_* service[2];        // IAudioRenderClient / IAudioCaptureClient
+    WHandle_* event[2];
     unsigned int buffer[2];   // endpoint buffer frames
     int exclusive;
     // capture FIFO (device format frames), filled by the stream thread only
@@ -412,12 +418,12 @@ static void w_stream_release_(&WStream_ w) {
     for (int d = 0; d < 2; d = d + 1) {
         w_release_(w.service[d]);
         w_release_(w.client[d]);
-        unsafe { if (w.event[d] != (void*)0) CloseHandle(w.event[d]); }
-        w.service[d] = (void*)0;
-        w.client[d] = (void*)0;
-        w.event[d] = (void*)0;
+        unsafe { if (w.event[d] != (WHandle_*)0) CloseHandle(w.event[d]); }
+        w.service[d] = (WCom_*)0;
+        w.client[d] = (WCom_*)0;
+        w.event[d] = (WHandle_*)0;
     }
-    unsafe { dealloc_raw_((void*)w.fifo); }
+    unsafe { dealloc(w.fifo); }
     w.fifo = (unsigned char*)0;
 }
 
@@ -426,20 +432,20 @@ static long long w_hns_(unsigned int frames, unsigned int rate) {
 }
 
 // Opens the endpoint for one direction: format, Initialize, event, service.
-static int w_open_dir_(&AudioStreamState_ st, &WStream_ w, void* en, int d) {
+static int w_open_dir_(&AudioStreamState_ st, &WStream_ w, WCom_* en, int d) {
     char* key = (char*)0;
     unsafe { key = (char*)&st.device_key[d][0]; }
     unsigned short wid[AUDIO_DEVICE_KEY_MAX];
-    void* dev = (void*)0;
+    WCom_* dev = (WCom_*)0;
     int hr = 0;
     unsafe {
         if (MultiByteToWideChar(W_CP_UTF8, 0U, (const char*)key, -1, &wid[0], (int)AUDIO_DEVICE_KEY_MAX) <= 0)
             return audio_fail_(&st.error, AUDIO_ERR_INVALID_DEVICE, "wasapi: bad endpoint id");
         WGetDevice_ getDevice = (WGetDevice_)w_method_(en, 5);
         hr = getDevice(en, (const unsigned short*)&wid[0], &dev);
-        if (hr < 0 || dev == (void*)0) return audio_fail_hex_(&st.error, AUDIO_ERR_INVALID_DEVICE, "wasapi: endpoint gone", (unsigned int)hr);
+        if (hr < 0 || dev == (WCom_*)0) return audio_fail_hex_(&st.error, AUDIO_ERR_INVALID_DEVICE, "wasapi: endpoint gone", (unsigned int)hr);
     }
-    void* client = (void*)0;
+    WCom_* client = (WCom_*)0;
     hr = w_audio_client_(dev, &client);
     if (hr < 0) {
         w_release_(dev);
@@ -449,14 +455,14 @@ static int w_open_dir_(&AudioStreamState_ st, &WStream_ w, void* en, int d) {
     unsafe {
         WFormat_* mix = (WFormat_*)0;
         WGetMixFormat_ getMix = (WGetMixFormat_)w_method_(client, 8);
-        hr = getMix(client, (void**)&mix);
+        hr = getMix(client, &mix);
         if (hr < 0 || mix == (WFormat_*)0) {
             w_release_(client); w_release_(dev);
             return audio_fail_hex_(&st.error, AUDIO_ERR_SYSTEM, "wasapi: GetMixFormat", (unsigned int)hr);
         }
         int channels = (int)mix->channels;
         if (st.user_channels[d] + st.first_channel[d] > channels) {
-            CoTaskMemFree((void*)mix); w_release_(client); w_release_(dev);
+            CoTaskMemFree((unsigned char*)mix); w_release_(client); w_release_(dev);
             return audio_fail_(&st.error, AUDIO_ERR_INVALID_PARAM, "wasapi: the endpoint has too few channels");
         }
         long long defPeriod = 0LL;
@@ -479,7 +485,7 @@ static int w_open_dir_(&AudioStreamState_ st, &WStream_ w, void* en, int d) {
             unsigned int chosen = 0U;
             for (int i = 0; i < 5 && chosen == 0U; i = i + 1) {
                 fmt = w_make_format_(order[i], channels, st.sample_rate);
-                if (isSup(client, W_SHAREMODE_EXCLUSIVE, &fmt, (void**)0) == 0) chosen = order[i];
+                if (isSup(client, W_SHAREMODE_EXCLUSIVE, &fmt, (WFormat_**)0) == 0) chosen = order[i];
             }
             if (chosen == 0U) rc = audio_fail_(&st.error, AUDIO_ERR_UNSUPPORTED, "wasapi: no exclusive-mode format at this rate");
             else {
@@ -492,7 +498,7 @@ static int w_open_dir_(&AudioStreamState_ st, &WStream_ w, void* en, int d) {
                     WGetBufferSize_ getSize = (WGetBufferSize_)w_method_(client, 4);
                     getSize(client, &aligned);
                     w_release_(client);
-                    client = (void*)0;
+                    client = (WCom_*)0;
                     period = w_hns_(aligned, st.sample_rate);
                     hr = w_audio_client_(dev, &client);
                     if (hr >= 0) {
@@ -510,8 +516,8 @@ static int w_open_dir_(&AudioStreamState_ st, &WStream_ w, void* en, int d) {
             // Shared: the mix format; the engine resamples another rate.
             unsigned long fmtBytes = 18UL + (unsigned long)mix->cb_size;
             if (fmtBytes > sizeof(struct WFormat_)) fmtBytes = sizeof(struct WFormat_);
-            safe_memset_raw_((void*)&fmt, 0, sizeof(struct WFormat_));
-            safe_memcpy_raw_((void*)&fmt, (const void*)mix, fmtBytes);
+            safe_memset_obj(&fmt, 0);
+            safe_memcpy(((unsigned char*)&fmt)[0..fmtBytes], ((const unsigned char*)mix)[0..fmtBytes]);
             unsigned int flags = W_FLAG_EVENTCALLBACK;
             if (fmt.rate != st.sample_rate) {
                 fmt.rate = st.sample_rate;
@@ -527,7 +533,7 @@ static int w_open_dir_(&AudioStreamState_ st, &WStream_ w, void* en, int d) {
             if (rc == AUDIO_OK && st.device_format[d] == 0U)
                 rc = audio_fail_(&st.error, AUDIO_ERR_UNSUPPORTED, "wasapi: unsupported mix format");
         }
-        CoTaskMemFree((void*)mix);
+        CoTaskMemFree((unsigned char*)mix);
         w_release_(dev);
         if (rc != AUDIO_OK) { w_release_(client); return rc; }
         unsigned int bufFrames = 0U;
@@ -537,8 +543,8 @@ static int w_open_dir_(&AudioStreamState_ st, &WStream_ w, void* en, int d) {
         else if (frames > bufFrames / 2U) frames = bufFrames / 2U;
         w.buffer[d] = bufFrames;
         w.client[d] = client;
-        w.event[d] = CreateEventA((void*)0, 0, 0, (const char*)0);
-        if (w.event[d] == (void*)0) return audio_fail_(&st.error, AUDIO_ERR_SYSTEM, "wasapi: CreateEvent");
+        w.event[d] = CreateEventA((WSecurityAttrs_*)0, 0, 0, (const char*)0);
+        if (w.event[d] == (WHandle_*)0) return audio_fail_(&st.error, AUDIO_ERR_SYSTEM, "wasapi: CreateEvent");
         WSetEvent_ setEvent = (WSetEvent_)w_method_(client, 13);
         hr = setEvent(client, w.event[d]);
         if (hr < 0) return audio_fail_hex_(&st.error, AUDIO_ERR_SYSTEM, "wasapi: SetEventHandle", (unsigned int)hr);
@@ -567,8 +573,8 @@ static int audio_wasapi_open_(&AudioHost_ h, &AudioStreamState_ st) {
         return audio_fail_(&st.error, AUDIO_ERR_INVALID_DEVICE, "wasapi: input needs a capture endpoint");
     if (!w_coinit_()) return audio_fail_(&st.error, AUDIO_ERR_SYSTEM, "wasapi: CoInitializeEx failed");
     int hr = 0;
-    void* en = w_enumerator_(&hr);
-    if (en == (void*)0) return audio_fail_hex_(&st.error, AUDIO_ERR_UNAVAILABLE, "wasapi: no MMDeviceEnumerator", (unsigned int)hr);
+    WCom_* en = w_enumerator_(&hr);
+    if (en == (WCom_*)0) return audio_fail_hex_(&st.error, AUDIO_ERR_UNAVAILABLE, "wasapi: no MMDeviceEnumerator", (unsigned int)hr);
     ?&WStream_ wp = null;
     unsafe { wp = (?&WStream_)alloc_zeroed_raw_(sizeof(struct WStream_)); }
     match (wp) {
@@ -593,12 +599,12 @@ static int audio_wasapi_open_(&AudioHost_ h, &AudioStreamState_ st) {
             }
             if (rc != AUDIO_OK) {
                 w_stream_release_(w);
-                unsafe { dealloc_raw_((void*)w); }
+                unsafe { dealloc((?&heap WStream_)w); }
                 return rc;
             }
             st.max_frames = st.buffer_frames;
             if (st.buffer_count == 0U) st.buffer_count = 2U;
-            unsafe { st.backend = (void*)w; }
+            unsafe { st.backend = (?&heap AudioStreamImpl_)w; }
             return AUDIO_OK;
         }
     }
@@ -610,7 +616,7 @@ static void w_capture_drain_(&AudioStreamState_ st, &WStream_ w) {
     unsigned long fb = (unsigned long)st.device_channels[AUDIO_DIR_IN] *
                        (unsigned long)audio_format_bytes(st.device_format[AUDIO_DIR_IN]);
     unsafe {
-        void* cap = w.service[AUDIO_DIR_IN];
+        WCom_* cap = w.service[AUDIO_DIR_IN];
         WCaptureNext_ next = (WCaptureNext_)w_method_(cap, 5);
         WCaptureGet_ get = (WCaptureGet_)w_method_(cap, 3);
         WCaptureRelease_ rel = (WCaptureRelease_)w_method_(cap, 4);
@@ -643,7 +649,7 @@ static void w_capture_take_(&AudioStreamState_ st, &WStream_ w, unsigned int fra
     unsigned long fb = (unsigned long)st.device_channels[AUDIO_DIR_IN] *
                        (unsigned long)audio_format_bytes(st.device_format[AUDIO_DIR_IN]);
     unsafe {
-        unsigned char* dst = (unsigned char*)st.device_buf[AUDIO_DIR_IN];
+        unsigned char* dst = (unsigned char*)st.device_buf[AUDIO_DIR_IN].ptr;
         if (w.fifo_count < (unsigned long)frames) audio_stream_flag_status_(st, AUDIO_STATUS_INPUT_OVERFLOW);
         for (unsigned long f = 0UL; f < (unsigned long)frames; f = f + 1UL) {
             if (w.fifo_count > 0UL) {
@@ -662,13 +668,13 @@ static void w_capture_take_(&AudioStreamState_ st, &WStream_ w, unsigned int fra
 static int w_render_put_(&AudioStreamState_ st, &WStream_ w, unsigned int frames, int silent) {
     unsigned long bytes = (unsigned long)frames * audio_stream_device_frame_bytes_(st, AUDIO_DIR_OUT);
     unsafe {
-        void* rc = w.service[AUDIO_DIR_OUT];
+        WCom_* rc = w.service[AUDIO_DIR_OUT];
         WRenderGet_ get = (WRenderGet_)w_method_(rc, 3);
         WRenderRelease_ rel = (WRenderRelease_)w_method_(rc, 4);
         unsigned char* data = (unsigned char*)0;
         if (get(rc, frames, &data) < 0 || data == (unsigned char*)0) return -1;
         if (!silent) {
-            const unsigned char* src = (const unsigned char*)st.device_buf[AUDIO_DIR_OUT];
+            const unsigned char* src = (const unsigned char*)st.device_buf[AUDIO_DIR_OUT].ptr;
             for (unsigned long b = 0UL; b < bytes; b = b + 1UL) data[b] = src[b];
         }
         rel(rc, frames, silent ? W_BUFFERFLAGS_SILENT : 0U);
@@ -685,9 +691,9 @@ static unsigned int w_padding_(&WStream_ w) {
     return pad;
 }
 
-static void w_client_call_(void* client, int index) {
+static void w_client_call_(WCom_* client, int index) {
     unsafe {
-        if (client == (void*)0) return;
+        if (client == (WCom_*)0) return;
         WClientNoArg_ f = (WClientNoArg_)w_method_(client, index);
         f(client);
     }
@@ -711,7 +717,7 @@ static void w_thread_(&AudioStreamState_ st) {
     match (w_of_(st)) {
         case some(w): {
             int how = AUDIO_CB_CONTINUE;
-            void* wait = st.mode_out ? w.event[AUDIO_DIR_OUT] : w.event[AUDIO_DIR_IN];
+            WHandle_* wait = st.mode_out ? w.event[AUDIO_DIR_OUT] : w.event[AUDIO_DIR_IN];
             int primed = 0;
             while (1) {
                 how = audio_stream_stop_requested_(st);
@@ -774,7 +780,7 @@ static int audio_wasapi_start_(&AudioStreamState_ st) {
             if (rc != AUDIO_OK) return rc;
             unsafe {
                 for (int d = 0; d < 2; d = d + 1) {
-                    if (w.client[d] == (void*)0) continue;
+                    if (w.client[d] == (WCom_*)0) continue;
                     WClientNoArg_ start = (WClientNoArg_)w_method_(w.client[d], 10);
                     int hr = start(w.client[d]);
                     if (hr < 0) {
@@ -801,11 +807,11 @@ static void audio_wasapi_close_(&AudioStreamState_ st) {
     match (w_of_(st)) {
         case some(w): {
             w_stream_release_(w);
-            unsafe { dealloc_raw_((void*)w); }
+            unsafe { dealloc((?&heap WStream_)w); }
         }
         case null: {}
     }
-    unsafe { st.backend = (void*)0; }
+    unsafe { st.backend = null; }
 }
 
 static struct AudioBackendVt_ g_audio_wasapi_vt_;

@@ -7,6 +7,7 @@
 // <jack/midiport.h>; jack_nframes_t is uint32, size_t is pointer width.
 #pragma once
 #include <std/stddef.h>
+#include <std/erased.h>
 
 #define AUDIO_JACK_AUDIO_TYPE "32 bit float mono audio"
 #define AUDIO_JACK_MIDI_TYPE  "8 bit raw midi"
@@ -23,26 +24,40 @@ struct JackMidiEvent_ {
     unsigned char* buffer;
 };
 
-typedef fn void*(const char*, int, int*, ...) JackClientOpen_;
-typedef fn int(void*) JackClient1_;                                 // close, activate, deactivate
-typedef fn unsigned int(void*) JackClientU_;                        // get_sample_rate, get_buffer_size
-typedef fn void*(void*, const char*, const char*, unsigned long, unsigned long) JackPortRegister_;
-typedef fn int(void*, void*) JackPortUnregister_;
-typedef fn void*(void*, unsigned int) JackPortGetBuffer_;
-typedef fn const char*(const void*) JackPortName_;
-typedef fn int(void*, void*, void*) JackSetCallback_;               // set_process_callback, set_xrun_callback
-typedef fn void(void*, void*, void*) JackOnShutdown_;
-typedef fn const char**(void*, const char*, const char*, unsigned long) JackGetPorts_;
-typedef fn int(void*, const char*, const char*) JackConnect_;
-typedef fn void(void*) JackFree_;
-typedef fn void(void*, int, unsigned int*) JackLatencyRange_;
-typedef fn void(void*) JackSetMsgFn_;
-typedef fn unsigned int(void*) JackMidiCount_;
-typedef fn int(&JackMidiEvent_, void*, unsigned int) JackMidiGet_;
-typedef fn void(void*) JackMidiClear_;
-typedef fn int(void*, unsigned int, const unsigned char*, size_t) JackMidiWrite_;
-typedef fn unsigned int(const void*) JackFrameTime_;                // jack_last_frame_time, jack_frame_time
-typedef fn const char*(void*) JackClientName_;
+// jack_client_t, jack_port_t and a MIDI port buffer (opaque).
+struct JackClient_  { char opaque_; };
+struct JackPort_    { char opaque_; };
+struct JackMidiBuf_ { char opaque_; };
+
+// The callbacks a client registers, with the 'arg' it registered them with
+// (each backend's stream state, erased: see std/erased.h).
+typedef fn int(unsigned int, ?&Erased) JackProcessFn_;   // JackProcessCallback
+typedef fn int(?&Erased) JackXrunFn_;                    // JackXRunCallback
+typedef fn void(?&Erased) JackShutdownFn_;               // JackShutdownCallback
+typedef fn void(const char*) JackMsgFn_;                 // error/info message sink
+
+typedef fn JackClient_*(const char*, int, int*, ...) JackClientOpen_;
+typedef fn int(JackClient_*) JackClient1_;                          // close, activate, deactivate
+typedef fn unsigned int(JackClient_*) JackClientU_;                 // get_sample_rate, get_buffer_size
+typedef fn JackPort_*(JackClient_*, const char*, const char*, unsigned long, unsigned long) JackPortRegister_;
+typedef fn int(JackClient_*, JackPort_*) JackPortUnregister_;
+// jack_port_get_buffer: f32 samples for an audio port, a JackMidiBuf_ for a MIDI one.
+typedef fn unsigned char*(JackPort_*, unsigned int) JackPortGetBuffer_;
+typedef fn const char*(const JackPort_*) JackPortName_;
+typedef fn int(JackClient_*, JackProcessFn_, ?&Erased) JackSetProcess_;
+typedef fn int(JackClient_*, JackXrunFn_, ?&Erased) JackSetXrun_;
+typedef fn void(JackClient_*, JackShutdownFn_, ?&Erased) JackOnShutdown_;
+typedef fn const char**(JackClient_*, const char*, const char*, unsigned long) JackGetPorts_;
+typedef fn int(JackClient_*, const char*, const char*) JackConnect_;
+typedef fn void(const char**) JackFree_;                            // jack_free of a jack_get_ports list
+typedef fn void(JackPort_*, int, unsigned int*) JackLatencyRange_;
+typedef fn void(JackMsgFn_) JackSetMsgFn_;
+typedef fn unsigned int(JackMidiBuf_*) JackMidiCount_;
+typedef fn int(&JackMidiEvent_, JackMidiBuf_*, unsigned int) JackMidiGet_;
+typedef fn void(JackMidiBuf_*) JackMidiClear_;
+typedef fn int(JackMidiBuf_*, unsigned int, const unsigned char*, size_t) JackMidiWrite_;
+typedef fn unsigned int(const JackClient_*) JackFrameTime_;         // jack_last_frame_time, jack_frame_time
+typedef fn const char*(JackClient_*) JackClientName_;
 
 struct JackLib_ {
     int loaded;      // 0 not tried, 1 ok, -1 unavailable
@@ -56,8 +71,8 @@ struct JackLib_ {
     JackPortUnregister_ port_unregister;
     JackPortGetBuffer_ port_get_buffer;
     JackPortName_ port_name;
-    JackSetCallback_ set_process_callback;
-    JackSetCallback_ set_xrun_callback;
+    JackSetProcess_ set_process_callback;
+    JackSetXrun_ set_xrun_callback;
     JackOnShutdown_ on_shutdown;
     JackGetPorts_ get_ports;
     JackConnect_ connect;
@@ -81,6 +96,6 @@ extern struct JackLib_ g_std_audio_jack_;
 int audio_jack_load_();
 // jack_client_open(name, JackNoStartServer): a client, or null when the
 // server isn't running (or refused the name).
-void* audio_jack_client_open_(const &char name);
+JackClient_* audio_jack_client_open_(const &char name);
 
 } // namespace std

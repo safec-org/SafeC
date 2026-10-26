@@ -98,10 +98,10 @@ static int midi_coremidi_client_open_(&MidiPortState_ st) {
                 int e = MIDIClientCreate((const void*)name, (void*)0, (void*)0, &c.client);
                 if (name != (void*)0) CFRelease((const void*)name);
                 if (e != 0) {
-                    dealloc_raw_((void*)c);
+                    dealloc(c);
                     return audio_fail_code_(&st.error, AUDIO_ERR_UNAVAILABLE, "coremidi: MIDIClientCreate", (long long)e);
                 }
-                st.backend = (void*)c;
+                st.backend = (?&heap MidiPortImpl_)c;
             }
             return AUDIO_OK;
         }
@@ -228,7 +228,7 @@ static int midi_coremidi_send_(&MidiPortState_ st, const &unsigned char msg, uns
                                          : MIDISend(c.port, c.endpoint, (const void*)list);
                     if (e != 0) rc = audio_fail_code_(&st.error, AUDIO_ERR_SYSTEM, "coremidi: MIDISend", (long long)e);
                 }
-                if (list != (unsigned char*)&local[0]) dealloc_raw_((void*)list);
+                if (list != (unsigned char*)&local[0]) dealloc(list);
             }
             return rc;
         }
@@ -243,8 +243,8 @@ static void midi_coremidi_client_close_(&MidiPortState_ st) {
             midi_coremidi_close_port_(st);
             unsafe {
                 MIDIClientDispose(c.client);
-                dealloc_raw_((void*)c);
-                st.backend = (void*)0;
+                dealloc(c);
+                st.backend = null;
             }
         }
         case null: {}

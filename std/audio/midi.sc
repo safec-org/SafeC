@@ -38,32 +38,32 @@ int midi_api_by_name(const &char name) {
     return MIDI_API_UNSPECIFIED;
 }
 
-static int midi_backends_(&?&MidiBackendVt_ out, int cap) {
+static int midi_backends_(&?&static MidiBackendVt_ out, int cap) {
     int n = 0;
 #if defined(__APPLE__)
-    if (n < cap) { unsafe { out[n] = (?&MidiBackendVt_)midi_coremidi_backend_(); } n = n + 1; }
-    if (n < cap) { unsafe { out[n] = (?&MidiBackendVt_)midi_jack_backend_(); } n = n + 1; }
+    if (n < cap) { unsafe { out[n] = (?&static MidiBackendVt_)midi_coremidi_backend_(); } n = n + 1; }
+    if (n < cap) { unsafe { out[n] = (?&static MidiBackendVt_)midi_jack_backend_(); } n = n + 1; }
 #endif
 #if defined(__linux__)
-    if (n < cap) { unsafe { out[n] = (?&MidiBackendVt_)midi_alsa_backend_(); } n = n + 1; }
-    if (n < cap) { unsafe { out[n] = (?&MidiBackendVt_)midi_jack_backend_(); } n = n + 1; }
+    if (n < cap) { unsafe { out[n] = (?&static MidiBackendVt_)midi_alsa_backend_(); } n = n + 1; }
+    if (n < cap) { unsafe { out[n] = (?&static MidiBackendVt_)midi_jack_backend_(); } n = n + 1; }
 #endif
 #if defined(_WIN32)
-    if (n < cap) { unsafe { out[n] = (?&MidiBackendVt_)midi_winmm_backend_(); } n = n + 1; }
+    if (n < cap) { unsafe { out[n] = (?&static MidiBackendVt_)midi_winmm_backend_(); } n = n + 1; }
 #endif
 #if defined(__wasm__)
-    if (n < cap) { unsafe { out[n] = (?&MidiBackendVt_)midi_webmidi_backend_(); } n = n + 1; }
+    if (n < cap) { unsafe { out[n] = (?&static MidiBackendVt_)midi_webmidi_backend_(); } n = n + 1; }
 #endif
-    if (n < cap) { unsafe { out[n] = (?&MidiBackendVt_)midi_dummy_backend_(); } n = n + 1; }
+    if (n < cap) { unsafe { out[n] = (?&static MidiBackendVt_)midi_dummy_backend_(); } n = n + 1; }
     return n;
 }
 
-static ?&MidiBackendVt_ midi_backend_for_(int api) {
-    ?&MidiBackendVt_ list[MIDI_API_COUNT];
+static ?&static MidiBackendVt_ midi_backend_for_(int api) {
+    ?&static MidiBackendVt_ list[MIDI_API_COUNT];
     int n = midi_backends_(&list[0], MIDI_API_COUNT);
     for (int i = 0; i < n; i = i + 1) {
         match (list[i]) {
-            case some(vt): { if (vt.api == api) return (?&MidiBackendVt_)vt; }
+            case some(vt): { if (vt.api == api) return (?&static MidiBackendVt_)vt; }
             case null: {}
         }
     }
@@ -71,7 +71,7 @@ static ?&MidiBackendVt_ midi_backend_for_(int api) {
 }
 
 int midi_compiled_apis([]int out) {
-    ?&MidiBackendVt_ list[MIDI_API_COUNT];
+    ?&static MidiBackendVt_ list[MIDI_API_COUNT];
     int n = midi_backends_(&list[0], MIDI_API_COUNT);
     int k = 0;
     for (int i = 0; i < n && (unsigned long)k < out.len; i = i + 1) {
@@ -100,7 +100,7 @@ int midi_default_api() {
         }
         case null: {}
     }
-    ?&MidiBackendVt_ list[MIDI_API_COUNT];
+    ?&static MidiBackendVt_ list[MIDI_API_COUNT];
     int n = midi_backends_(&list[0], MIDI_API_COUNT);
     for (int i = 0; i < n; i = i + 1) {
         match (list[i]) {
@@ -453,19 +453,22 @@ void midi_in_deliver_(&MidiPortState_ st, const &unsigned char msg, unsigned lon
     if (delta < 0.0) delta = 0.0;
     st.last_time = t;
     st.have_last = 1;
-    void* cb = (void*)0;
-    unsafe { cb = atomic_load((_Atomic void**)&st.callback); }
-    if (cb != (void*)0) {
-        struct MidiEvent ev;
-        ev.timestamp = t;
-        ev.delta = delta;
-        unsafe {
-            ev.bytes = ((const unsigned char*)msg)[0..len];
-            ?&Erased user = (?&Erased)atomic_load((_Atomic void**)&st.user);
-            MidiCallbackRaw_ f = (MidiCallbackRaw_)cb;
+    MidiCallbackSlot_ cb = null;
+    unsafe { cb = atomic_load((MidiCallbackSlot_*)&st.callback); }
+    match (cb) {
+        case some(f): {
+            struct MidiEvent ev;
+            ev.timestamp = t;
+            ev.delta = delta;
+            ?&Erased user = null;
+            unsafe {
+                ev.bytes = ((const unsigned char*)msg)[0..len];
+                user = atomic_load((MidiUserSlot_*)&st.user);
+            }
             f(&ev, user);
+            return;
         }
-        return;
+        case null: {}
     }
     // The queue: [u32 len][f64 time][len bytes].
     if (st.ring_cap == 0UL) { midi_count_drop_(st); return; }
@@ -505,21 +508,21 @@ static ?&MidiPortState_ midi_state_of_(?&MidiPortState_ impl) {
     return impl;
 }
 
-static ?&MidiBackendVt_ midi_vt_of_(&MidiPortState_ st) {
-    unsafe { return (?&MidiBackendVt_)st.vt; }
+static ?&static MidiBackendVt_ midi_vt_of_(&MidiPortState_ st) {
+    return st.vt;
 }
 
 static void midi_state_free_(&MidiPortState_ st) {
     unsafe {
-        dealloc_raw_((void*)st.ring);
-        dealloc_raw_((void*)st.sysex_buf);
-        dealloc_raw_((void*)st);
+        dealloc(st.ring);
+        dealloc(st.sysex_buf);
+        dealloc((?&heap MidiPortState_)st);
     }
 }
 
 // Opens a client of one API; the state, or null with 'err' set.
 static ?&MidiPortState_ midi_client_open_(int api, int input, const &char name, unsigned long queue, &AudioError err) {
-    ?&MidiBackendVt_ vtp = midi_backend_for_(api);
+    ?&static MidiBackendVt_ vtp = midi_backend_for_(api);
     match (vtp) {
         case null: {
             *err = AudioError::make2(AUDIO_ERR_UNSUPPORTED, "midi: API not compiled in", midi_api_name(api));
@@ -532,7 +535,7 @@ static ?&MidiPortState_ midi_client_open_(int api, int input, const &char name, 
                 case null: {}
                 case some(st): {
                     st.api = api;
-                    unsafe { st.vt = (void*)vt; }
+                    st.vt = vt;
                     st.is_input = input;
                     audio_strcpy_(&st.client_name[0], (unsigned long)MIDI_CLIENT_NAME_MAX, name);
                     if (st.client_name[0] == (char)0)
@@ -589,7 +592,7 @@ static ?&MidiPortState_ midi_client_open_any_(int api, int input, const &char na
     ?&MidiPortState_ st = midi_client_open_(first, input, name, queue, err);
     if (!st.is_null()) return st;
     struct AudioError firstErr = *err;
-    ?&MidiBackendVt_ list[MIDI_API_COUNT];
+    ?&static MidiBackendVt_ list[MIDI_API_COUNT];
     int n = midi_backends_(&list[0], MIDI_API_COUNT);
     for (int i = 0; i < n; i = i + 1) {
         int a = 0;
@@ -751,9 +754,9 @@ void MidiIn::set_callback_raw_(MidiCallbackRaw_ callback, ?&Erased user) {
     match (midi_state_of_(self.impl)) {
         case some(st): {
             unsafe {
-                atomic_store((_Atomic void**)&st.callback, (void*)0);
-                atomic_store((_Atomic void**)&st.user, (void*)user);
-                atomic_store((_Atomic void**)&st.callback, (void*)callback);
+                atomic_store((MidiCallbackSlot_*)&st.callback, (MidiCallbackSlot_)null);
+                atomic_store((MidiUserSlot_*)&st.user, user);
+                atomic_store((MidiCallbackSlot_*)&st.callback, (MidiCallbackSlot_)callback);
             }
         }
         case null: {}
@@ -762,7 +765,7 @@ void MidiIn::set_callback_raw_(MidiCallbackRaw_ callback, ?&Erased user) {
 
 void MidiIn::cancel_callback() {
     match (midi_state_of_(self.impl)) {
-        case some(st): { unsafe { atomic_store((_Atomic void**)&st.callback, (void*)0); } }
+        case some(st): { unsafe { atomic_store((MidiCallbackSlot_*)&st.callback, (MidiCallbackSlot_)null); } }
         case null: {}
     }
 }

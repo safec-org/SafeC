@@ -16,6 +16,12 @@
 
 namespace std {
 
+// A backend's private state, opaque here: each backend keeps its own struct
+// (AlsaStream_, JackStream_, WStream_, ...) and converts its handle to and
+// from these in its open()/close() and its one accessor.
+struct AudioHostImpl_   { char opaque_; };
+struct AudioStreamImpl_ { char opaque_; };
+
 // A device a probe found: the public info plus what the backend needs to
 // open it again (an ALSA PCM name, a JACK client name, a Core Audio
 // AudioDeviceID, a WASAPI endpoint id).
@@ -43,7 +49,7 @@ struct AudioHost_ {
     unsigned int next_id;        // ids handed out so far
     unsigned int default_out;    // device ids, AUDIO_DEFAULT_DEVICE if none
     unsigned int default_in;
-    void* backend;               // backend-private, released by host_close
+    ?&heap AudioHostImpl_ backend;   // backend-private, released by host_close
     struct AudioError error;
 };
 
@@ -52,7 +58,7 @@ struct AudioHost_ {
 // touched on the real-time path, atomically.
 struct AudioStreamState_ {
     int api;
-    void* vt;                         // the AudioBackendVt_
+    ?&static struct AudioBackendVt_ vt;   // the backend
     int mode_out;                     // (req) output direction requested
     int mode_in;                      // (req) input direction requested
     unsigned int user_format;         // (req) AUDIO_FORMAT_*
@@ -77,8 +83,9 @@ struct AudioStreamState_ {
     long latency[2];                  // (be) frames
 
     int convert[2];                   // set after open: user != device layout
-    void* user_buf[2];                // what the callback sees
-    void* device_buf[2];              // what the backend reads/writes (== user_buf if !convert)
+    // Each max_frames long (heap; empty for an unused direction).
+    []unsigned char user_buf[2];      // what the callback sees
+    []unsigned char device_buf[2];    // what the backend reads/writes (the same memory as user_buf if !convert)
 
     AudioCallbackRaw_ callback;       // the user's fn int(&AudioIo, ?&T), erased
     ?&Erased user;
@@ -92,8 +99,8 @@ struct AudioStreamState_ {
     struct AudioError rt_error;       // written once by the stream thread before rt_error_set
     unsigned long long thread;        // a stream thread std started (ALSA, WASAPI, dummy)
     int thread_live;                  // it hasn't been joined yet
-    void* thread_body;                // fn void(&AudioStreamState_) it runs
-    void* backend;                    // backend-private
+    ?fn void(&struct AudioStreamState_) thread_body;   // what it runs
+    ?&heap AudioStreamImpl_ backend;  // backend-private
     struct AudioError error;          // control-thread errors (open/start/stop)
 };
 
