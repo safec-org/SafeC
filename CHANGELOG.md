@@ -38,6 +38,16 @@ release tags.
 - `safeguard --help` lists the `arm-81m` target alias (Armv8.1-M,
   Cortex-M55/M85) with the others; the smoke test now checks the help
   against `safec --list-targets`.
+- **`#include <math.h>` is the C library's header in a safeguard build:**
+  safeguard put std/ itself on SafeC's include path (`-I <std>`), so a bare
+  `<math.h>` (or `<time.h>`, `<stdint.h>`, `<ctype.h>`, ...) found std's
+  header instead and `sqrt` & co. were undeclared. std is now reached only
+  as `<std/...>` (its parent directory is on the path) — in builds, tests,
+  `check`, `lint`, `doc` and dependency builds, and for std's own units.
+  **Breaking** for code that included std headers without the prefix
+  (`#include <io.h>`, `"prelude.h"`): write `<std/io.h>`. The `safeguard
+  new` template says `<std/prelude.h>`; the smoke test builds a project
+  using both `<math.h>` and `<std/math.h>`.
 
 ### Changed — no `void*` anywhere in std
 

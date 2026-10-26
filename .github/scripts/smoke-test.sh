@@ -254,6 +254,38 @@ else
     cat /tmp/sg_rng.txt
 fi
 
+# std is on a safeguard build's include path only as <std/...> (its parent
+# directory): a bare <math.h> is the C library's header, not std/math.h,
+# which used to shadow it ('sqrt' undeclared). Both forms together here.
+case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*) ;;   # the C-header import is exercised on Linux/macOS
+    *)
+mkdir -p "$WORKDIR/ci_libm/src"
+printf '[package]\nname = "ci_libm"\nversion = "0.1.0"\n\n[build]\nedition = "2026"\n' > "$WORKDIR/ci_libm/Package.toml"
+cat > "$WORKDIR/ci_libm/src/main.sc" <<'EOF'
+#include <math.h>
+#include <std/math.h>
+extern int printf(const char* fmt, ...);
+int main() {
+    double a = sqrt(2.0);
+    double b = std::sqrt_d(16.0);
+    unsafe { printf("libm %.3f %.1f\n", a, b); }
+    return 0;
+}
+EOF
+LIBM_OUT=""
+if sg_in "$WORKDIR/ci_libm" /tmp/sg_libm.txt build; then
+    LIBM_OUT="$("$WORKDIR/ci_libm/build/ci_libm" 2>&1)"
+fi
+if [[ "$LIBM_OUT" == "libm 1.414 4.0" ]]; then
+    pass "<math.h> is the C library's in a safeguard build, <std/math.h> std's"
+else
+    fail "<math.h> / <std/math.h> in a safeguard build (output: '$LIBM_OUT')"
+    cat /tmp/sg_libm.txt
+fi
+    ;;
+esac
+
 # A library build exports its headers (include/ and src/'s .h files) into
 # build/include beside build/lib<name>.a, so build/ is a prebuilt dependency.
 mkdir -p "$WORKDIR/ci_lib/src" "$WORKDIR/ci_lib/include/ci_lib"

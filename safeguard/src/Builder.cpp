@@ -1151,10 +1151,10 @@ std::set<std::string> Builder::depStdRefs() const {
 std::vector<std::string> Builder::safecIncludeDirs() const {
     std::vector<std::string> incs, foreign;
     std::string stdDir = findStdDir();
-    if (!stdDir.empty()) {
-        incs.push_back(stdDir);
-        incs.push_back(fs::path(stdDir).parent_path().string());
-    }
+    // std's headers are reached as <std/...> through its parent directory
+    // only: std/ itself on the path would make <math.h>, <time.h>,
+    // <stdint.h> & co. mean std's headers instead of the C library's.
+    if (!stdDir.empty()) incs.push_back(fs::path(stdDir).parent_path().string());
     fs::path projInc = fs::path(root_) / "include";
     if (fs::exists(projInc)) incs.push_back(projInc.string());
     depIncludes(incs, foreign);
@@ -1457,10 +1457,10 @@ bool Builder::stdUnitObject(const StdIndex& idx, const std::string& unit, const 
     // pipeline). Both are tolerated identically: the file's functions
     // simply aren't available for this target; anything that actually
     // calls them gets a normal, clear "undefined symbol" at link time.
-    // The std .sc files include their own headers; pass the std dir's parent
-    // so that #include "std/io.h" resolves, and the std dir itself so that
-    // #include "io.h" (relative includes inside .sc files) resolves.
-    std::vector<std::string> incs = { stdDir, fs::path(stdDir).parent_path().string() };
+    // The std .sc files include their own headers as <std/...>: pass the std
+    // dir's parent (not std/ itself, which would shadow the C library's
+    // <math.h>, <time.h>, ...; a quoted include is found next to its file).
+    std::vector<std::string> incs = { fs::path(stdDir).parent_path().string() };
     std::string ll = compileSrc(safecBin, (fs::path(stdDir) / unit).string(), objDir.string(), incs,
                                 /*compatPreprocessor=*/true, /*suppressOutput=*/true, {}, stem);
     std::string o = ll.empty() ? "" : llToObj(ll, objDir.string(), /*suppressOutput=*/true, /*stdUnit=*/true);
@@ -2300,14 +2300,10 @@ bool Builder::fetchAndBuildDeps() {
         if (!fs::exists(libOut) || !fs::exists(fs::path(libOut).concat(".refs"))) {
             fs::path depSrc = fs::path(l.dir) / "src";
             std::vector<std::string> incs = l.safecIncludes;
-            // Also add std dir (SafeC-side only — see buildLib's
-            // foreignIncludeDirs doc comment for why this must not reach
-            // a real C/C++ compiler's search path).
+            // Also std, as <std/...> only (SafeC-side only — see
+            // buildLib's foreignIncludeDirs doc comment).
             std::string stdDir = findStdDir();
-            if (!stdDir.empty()) {
-                incs.push_back(stdDir);
-                incs.push_back(fs::path(stdDir).parent_path().string());
-            }
+            if (!stdDir.empty()) incs.push_back(fs::path(stdDir).parent_path().string());
             if (!buildLib(depSrc.string(), libOut.string(), incs,
                           /*compatPreprocessor=*/false, l.foreignIncludes)) {
                 std::cerr << "safeguard: failed to build dependency '"
@@ -2477,10 +2473,9 @@ bool Builder::build() {
 
     // 3. Determine include paths for user sources
     std::vector<std::string> userIncs;
-    if (!stdDir.empty()) {
-        userIncs.push_back(stdDir);
-        userIncs.push_back(fs::path(stdDir).parent_path().string());
-    }
+    // std as <std/...> only (see safecIncludeDirs): a bare <math.h> is the
+    // C library's.
+    if (!stdDir.empty()) userIncs.push_back(fs::path(stdDir).parent_path().string());
     // Each dependency's include/ (and a source package's src/) — added
     // below together with the foreign list.
 
@@ -2659,10 +2654,9 @@ bool Builder::check() {
     // part of a full build that actually takes real time.
     std::string stdDir = findStdDir();
     std::vector<std::string> userIncs;
-    if (!stdDir.empty()) {
-        userIncs.push_back(stdDir);
-        userIncs.push_back(fs::path(stdDir).parent_path().string());
-    }
+    // std as <std/...> only (see safecIncludeDirs): a bare <math.h> is the
+    // C library's.
+    if (!stdDir.empty()) userIncs.push_back(fs::path(stdDir).parent_path().string());
     std::vector<std::string> foreignIncs;
     fs::path projInc = fs::path(root_) / "include";
     if (fs::exists(projInc)) {
@@ -2749,10 +2743,9 @@ bool Builder::test() {
     std::string stdDir = findStdDir();
 
     std::vector<std::string> userIncs;
-    if (!stdDir.empty()) {
-        userIncs.push_back(stdDir);
-        userIncs.push_back(fs::path(stdDir).parent_path().string());
-    }
+    // std as <std/...> only (see safecIncludeDirs): a bare <math.h> is the
+    // C library's.
+    if (!stdDir.empty()) userIncs.push_back(fs::path(stdDir).parent_path().string());
     // C/C++/ObjC tests get the project's include/ and the dependencies'
     // headers, never std/ (see build()'s foreignIncs).
     std::vector<std::string> depForeignIncs;

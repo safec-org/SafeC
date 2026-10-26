@@ -557,15 +557,11 @@ std::set<std::string> stdRootsOf(const StdIndex& idx, const std::vector<std::str
             std::vector<fs::path> cands;
             if (!inc.angled) cands.push_back(f.parent_path() / inc.name);
             for (auto& d : includeDirs) cands.push_back(fs::path(d) / inc.name);
-            bool found = false;
             for (auto& c : cands) {
-                if (fs::is_regular_file(c, ec) && !underStd(c)) { work.push_back(c); found = true; break; }
+                if (fs::is_regular_file(c, ec) && !underStd(c)) { work.push_back(c); break; }
             }
-            // std/ itself is on SafeC's include path: <io.h> is std/io.h.
-            if (!found) {
-                r = idx.resolve("std/" + inc.name);
-                if (!r.empty()) roots.insert(r);
-            }
+            // A bare <io.h> is not std's: std/ itself is not on the include
+            // path (only its parent, for <std/...>), so it is a system header.
         }
     }
     return roots;

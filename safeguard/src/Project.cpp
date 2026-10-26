@@ -89,7 +89,7 @@ edition = "2026"
 static const char kMainScTemplate[] =
 R"(// {{NAME}} — entry point
 // Uncomment to use the SafeC standard library:
-// #include "prelude.h"
+// #include <std/prelude.h>
 
 extern int printf(const char* fmt, ...);
 
