@@ -83,7 +83,7 @@ T ThreadPool::block_on(F fut) {
         case none: { }
     }
     panic_at("ThreadPool::block_on: the task was aborted", "pool.h", 0);
-    unsafe { return *(T*)(void*)&t.out[0]; }   // unreachable: panic_at doesn't return
+    unsafe { return *(T*)(unsigned char*)&t.out[0]; }   // unreachable: panic_at doesn't return
 }
 
 } // namespace std

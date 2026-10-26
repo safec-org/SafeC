@@ -7,8 +7,8 @@ namespace std {
 
 extern int    printf(const char* fmt, ...);
 extern int    strcmp(const char* a, const char* b);
-extern void*  memset(void* p, int v, size_t n);
-extern void*  memcpy(void* d, const void* s, size_t n);
+extern unsigned char*  memset(unsigned char* p, int v, size_t n);
+extern unsigned char*  memcpy(unsigned char* d, const unsigned char* s, size_t n);
 extern void   exit(int code);
 extern size_t strlen(const char* s);
 

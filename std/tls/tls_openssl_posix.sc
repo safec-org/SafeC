@@ -42,40 +42,40 @@
 
 namespace std {
 
-extern void* dlopen(const char* name, int flags);
-extern void* dlsym(void* lib, const char* name);
+extern unsigned char* dlopen(const char* name, int flags);
+extern unsigned char* dlsym(unsigned char* lib, const char* name);
 
-typedef fn int(unsigned long long, const void*) OsslInit_;
-typedef fn void*() OsslMethod_;
-typedef fn void*(void*) OsslPtr1_;               // SSL_CTX_new, SSL_new, SSL_CTX_get_cert_store, BIO_new, SSL_get0_param, ...
-typedef fn void(void*) OsslFree_;                // SSL_CTX_free, SSL_free, X509_free, EVP_PKEY_free, BIO_free
-typedef fn int(void*) OsslInt1_;                 // SSL_do_handshake, SSL_shutdown, SSL_version, set_default_verify_paths
-typedef fn int(void*, const char*, const char*) OsslLoadLoc_;
-typedef fn void(void*, int, void*) OsslSetVerify_;
-typedef fn long(void*, int, long, void*) OsslCtrl_;
-typedef fn int(void*, const unsigned char*, unsigned int) OsslSetAlpn_;
-typedef fn void(void*, void*, void*) OsslSetAlpnCb_;
+typedef fn int(unsigned long long, const unsigned char*) OsslInit_;
+typedef fn unsigned char*() OsslMethod_;
+typedef fn unsigned char*(unsigned char*) OsslPtr1_;               // SSL_CTX_new, SSL_new, SSL_CTX_get_cert_store, BIO_new, SSL_get0_param, ...
+typedef fn void(unsigned char*) OsslFree_;                // SSL_CTX_free, SSL_free, X509_free, EVP_PKEY_free, BIO_free
+typedef fn int(unsigned char*) OsslInt1_;                 // SSL_do_handshake, SSL_shutdown, SSL_version, set_default_verify_paths
+typedef fn int(unsigned char*, const char*, const char*) OsslLoadLoc_;
+typedef fn void(unsigned char*, int, unsigned char*) OsslSetVerify_;
+typedef fn long(unsigned char*, int, long, unsigned char*) OsslCtrl_;
+typedef fn int(unsigned char*, const unsigned char*, unsigned int) OsslSetAlpn_;
+typedef fn void(unsigned char*, unsigned char*, unsigned char*) OsslSetAlpnCb_;
 typedef fn int(unsigned char**, unsigned char*, const unsigned char*, unsigned int, const unsigned char*, unsigned int) OsslSelectProto_;
-typedef fn int(void*, void*) OsslUse_;           // SSL_CTX_use_certificate/PrivateKey, X509_STORE_add_cert, SSL_use_*
-typedef fn void(void*) OsslVoid1_;
-typedef fn int(void*, int) OsslGetError_;
-typedef fn int(void*, void*, int) OsslRW_;       // SSL_read, SSL_write, BIO_read, BIO_write (const void* for writes)
-typedef fn void(void*, void*, void*) OsslSetBio_;
-typedef fn int(void*, const char*) OsslSet1Host_;
-typedef fn void*(const void*) OsslCipher_;
-typedef fn const char*(const void*) OsslCipherName_;
-typedef fn void(const void*, const unsigned char**, unsigned int*) OsslAlpnSelected_;
-typedef fn long(const void*) OsslVerifyResult_;
+typedef fn int(unsigned char*, unsigned char*) OsslUse_;           // SSL_CTX_use_certificate/PrivateKey, X509_STORE_add_cert, SSL_use_*
+typedef fn void(unsigned char*) OsslVoid1_;
+typedef fn int(unsigned char*, int) OsslGetError_;
+typedef fn int(unsigned char*, unsigned char*, int) OsslRW_;       // SSL_read, SSL_write, BIO_read, BIO_write (const void* for writes)
+typedef fn void(unsigned char*, unsigned char*, unsigned char*) OsslSetBio_;
+typedef fn int(unsigned char*, const char*) OsslSet1Host_;
+typedef fn unsigned char*(const unsigned char*) OsslCipher_;
+typedef fn const char*(const unsigned char*) OsslCipherName_;
+typedef fn void(const unsigned char*, const unsigned char**, unsigned int*) OsslAlpnSelected_;
+typedef fn long(const unsigned char*) OsslVerifyResult_;
 typedef fn unsigned long() OsslErrGet_;
 typedef fn void(unsigned long, char*, size_t) OsslErrString_;
 typedef fn void() OsslErrClear_;
 typedef fn const char*(long) OsslVerifyString_;
-typedef fn void*(const void*, int) OsslBioMemBuf_;
-typedef fn void*(void*, void*, void*, void*) OsslPemRead_;
-typedef fn int(void*, unsigned char**) OsslI2d_;
-typedef fn size_t(void*) OsslPending_;
-typedef fn long(void*, int, long, void*) OsslBioCtrl_;
-typedef fn void(void*, unsigned int) OsslHostFlags_;
+typedef fn unsigned char*(const unsigned char*, int) OsslBioMemBuf_;
+typedef fn unsigned char*(unsigned char*, unsigned char*, unsigned char*, unsigned char*) OsslPemRead_;
+typedef fn int(unsigned char*, unsigned char**) OsslI2d_;
+typedef fn size_t(unsigned char*) OsslPending_;
+typedef fn long(unsigned char*, int, long, unsigned char*) OsslBioCtrl_;
+typedef fn void(unsigned char*, unsigned int) OsslHostFlags_;
 
 struct OsslLib_ {
     int loaded;     // 0 not tried, 1 ok, -1 unavailable
@@ -144,37 +144,37 @@ struct OsslLib_ {
 
 static struct OsslLib_ g_ossl_;
 static struct Spinlock g_ossl_lock_;
-static void* g_ossl_client_ctx_ = (void*)0;   // the shared system-roots client context
+static unsigned char* g_ossl_client_ctx_ = (unsigned char*)0;   // the shared system-roots client context
 
-static void* ossl_sym_(void* lib, const &char name, &int ok) {
-    void* p = (void*)0;
+static unsigned char* ossl_sym_(unsigned char* lib, const &char name, &int ok) {
+    unsigned char* p = (unsigned char*)0;
     unsafe { p = dlsym(lib, (const char*)name); }
-    if (p == (void*)0) { *ok = 0; }
+    if (p == (unsigned char*)0) { *ok = 0; }
     return p;
 }
 
-static void* ossl_sym_opt_(void* lib, const &char name) {
+static unsigned char* ossl_sym_opt_(unsigned char* lib, const &char name) {
     unsafe { return dlsym(lib, (const char*)name); }
 }
 
-static void* ossl_open_(const &char name) {
+static unsigned char* ossl_open_(const &char name) {
     unsafe { return dlopen((const char*)name, OSSL_RTLD_NOW_); }
 }
 
-static int ossl_load_libs_(&void* ssl, &void* crypto) {
+static int ossl_load_libs_(&unsigned char* ssl, &unsigned char* crypto) {
     unsafe {
         // pairs: libssl, libcrypto
-        if ((*ssl = ossl_open_("libssl.so.3")) != (void*)0) { *crypto = ossl_open_("libcrypto.so.3"); }
-        else if ((*ssl = ossl_open_("libssl.so.1.1")) != (void*)0) { *crypto = ossl_open_("libcrypto.so.1.1"); }
-        else if ((*ssl = ossl_open_("libssl.so.30")) != (void*)0) { *crypto = ossl_open_("libcrypto.so.30"); }
-        else if ((*ssl = ossl_open_("libssl.so.111")) != (void*)0) { *crypto = ossl_open_("libcrypto.so.111"); }
+        if ((*ssl = ossl_open_("libssl.so.3")) != (unsigned char*)0) { *crypto = ossl_open_("libcrypto.so.3"); }
+        else if ((*ssl = ossl_open_("libssl.so.1.1")) != (unsigned char*)0) { *crypto = ossl_open_("libcrypto.so.1.1"); }
+        else if ((*ssl = ossl_open_("libssl.so.30")) != (unsigned char*)0) { *crypto = ossl_open_("libcrypto.so.30"); }
+        else if ((*ssl = ossl_open_("libssl.so.111")) != (unsigned char*)0) { *crypto = ossl_open_("libcrypto.so.111"); }
 #if defined(__APPLE__)
-        else if ((*ssl = ossl_open_("/opt/homebrew/opt/openssl@3/lib/libssl.3.dylib")) != (void*)0) { *crypto = ossl_open_("/opt/homebrew/opt/openssl@3/lib/libcrypto.3.dylib"); }
-        else if ((*ssl = ossl_open_("/usr/local/opt/openssl@3/lib/libssl.3.dylib")) != (void*)0) { *crypto = ossl_open_("/usr/local/opt/openssl@3/lib/libcrypto.3.dylib"); }
-        else if ((*ssl = ossl_open_("libssl.3.dylib")) != (void*)0) { *crypto = ossl_open_("libcrypto.3.dylib"); }
+        else if ((*ssl = ossl_open_("/opt/homebrew/opt/openssl@3/lib/libssl.3.dylib")) != (unsigned char*)0) { *crypto = ossl_open_("/opt/homebrew/opt/openssl@3/lib/libcrypto.3.dylib"); }
+        else if ((*ssl = ossl_open_("/usr/local/opt/openssl@3/lib/libssl.3.dylib")) != (unsigned char*)0) { *crypto = ossl_open_("/usr/local/opt/openssl@3/lib/libcrypto.3.dylib"); }
+        else if ((*ssl = ossl_open_("libssl.3.dylib")) != (unsigned char*)0) { *crypto = ossl_open_("libcrypto.3.dylib"); }
 #endif
-        else if ((*ssl = ossl_open_("libssl.so")) != (void*)0) { *crypto = ossl_open_("libcrypto.so"); }
-        return *ssl != (void*)0 && *crypto != (void*)0;
+        else if ((*ssl = ossl_open_("libssl.so")) != (unsigned char*)0) { *crypto = ossl_open_("libcrypto.so"); }
+        return *ssl != (unsigned char*)0 && *crypto != (unsigned char*)0;
     }
 }
 
@@ -186,8 +186,8 @@ static int ossl_load_() {
         return r;
     }
     g_ossl_.loaded = -1;
-    void* ls = (void*)0;
-    void* lc = (void*)0;
+    unsigned char* ls = (unsigned char*)0;
+    unsigned char* lc = (unsigned char*)0;
     if (!ossl_load_libs_(&ls, &lc)) { g_ossl_lock_.unlock(); return 0; }
     int ok = 1;
     unsafe {
@@ -229,9 +229,9 @@ static int ossl_load_() {
         g_ossl_.ssl_alpn_selected = (OsslAlpnSelected_)ossl_sym_(ls, "SSL_get0_alpn_selected", &ok);
         g_ossl_.ssl_verify_result = (OsslVerifyResult_)ossl_sym_(ls, "SSL_get_verify_result", &ok);
         g_ossl_.ssl_set_bio = (OsslSetBio_)ossl_sym_(ls, "SSL_set_bio", &ok);
-        void* peer = ossl_sym_opt_(ls, "SSL_get1_peer_certificate");     // 3.x
-        g_ossl_.v3 = peer != (void*)0;
-        if (peer == (void*)0) { peer = ossl_sym_(ls, "SSL_get_peer_certificate", &ok); }   // 1.1
+        unsigned char* peer = ossl_sym_opt_(ls, "SSL_get1_peer_certificate");     // 3.x
+        g_ossl_.v3 = peer != (unsigned char*)0;
+        if (peer == (unsigned char*)0) { peer = ossl_sym_(ls, "SSL_get_peer_certificate", &ok); }   // 1.1
         g_ossl_.ssl_peer_cert = (OsslPtr1_)peer;
         g_ossl_.err_get = (OsslErrGet_)ossl_sym_(lc, "ERR_get_error", &ok);
         g_ossl_.err_string = (OsslErrString_)ossl_sym_(lc, "ERR_error_string_n", &ok);
@@ -254,7 +254,7 @@ static int ossl_load_() {
         g_ossl_.param_set_ip = (OsslSet1Host_)ossl_sym_(lc, "X509_VERIFY_PARAM_set1_ip_asc", &ok);
         g_ossl_.param_set_hostflags = (OsslHostFlags_)ossl_sym_(lc, "X509_VERIFY_PARAM_set_hostflags", &ok);
         if (ok) {
-            if (g_ossl_.init_ssl(0ULL, (const void*)0) != 1) { ok = 0; }
+            if (g_ossl_.init_ssl(0ULL, (const unsigned char*)0) != 1) { ok = 0; }
         }
     }
     if (ok) { g_ossl_.loaded = 1; }
@@ -300,10 +300,10 @@ static int ossl_verify_code_(long v) {
 // ── per-stream state ──────────────────────────────────────────────────────────
 
 struct OsslConn_ {
-    void* ssl;
-    void* ctx;          // owned context (null: the shared one)
-    void* rbio;         // network -> OpenSSL (owned by ssl)
-    void* wbio;         // OpenSSL -> network
+    unsigned char* ssl;
+    unsigned char* ctx;          // owned context (null: the shared one)
+    unsigned char* rbio;         // network -> OpenSSL (owned by ssl)
+    unsigned char* wbio;         // OpenSSL -> network
     int   eof;
     unsigned char out[16384 + 512];
     unsigned long out_pos;
@@ -312,7 +312,7 @@ struct OsslConn_ {
 };
 
 struct OsslAcc_ {
-    void* ctx;
+    unsigned char* ctx;
     struct Vec<unsigned char> alpn;   // wire list for the selection callback
 };
 
@@ -333,7 +333,7 @@ static int ossl_flush_(&TlsStream s, struct OsslConn_* c) {
                 continue;
             }
             if (g_ossl_.bio_pending(c->wbio) == (size_t)0) { return 0; }
-            int k = g_ossl_.bio_read(c->wbio, (void*)&c->out[0], (int)sizeof(c->out));
+            int k = g_ossl_.bio_read(c->wbio, (unsigned char*)&c->out[0], (int)sizeof(c->out));
             if (k <= 0) { return 0; }
             c->out_pos = 0UL;
             c->out_len = (unsigned long)k;
@@ -351,10 +351,10 @@ static int ossl_fill_(&TlsStream s, struct OsslConn_* c) {
         if (n < 0LL) { return -1; }
         if (n == 0LL) {
             c->eof = 1;
-            g_ossl_.bio_ctrl(c->rbio, OSSL_C_SET_BUF_MEM_EOF_RETURN_, 0L, (void*)0);
+            g_ossl_.bio_ctrl(c->rbio, OSSL_C_SET_BUF_MEM_EOF_RETURN_, 0L, (unsigned char*)0);
             return 0;
         }
-        g_ossl_.bio_write(c->rbio, (void*)&c->in[0], (int)n);
+        g_ossl_.bio_write(c->rbio, (unsigned char*)&c->in[0], (int)n);
     }
     return 1;
 }
@@ -371,8 +371,8 @@ static long long ossl_call_(&TlsStream s, int op, ?&unsigned char rbuf, const ?&
             int r = 0;
             int ask = n > 0x40000000UL ? 0x40000000 : (int)n;
             if (op == 0) { r = g_ossl_.ssl_do_handshake(c->ssl); }
-            else if (op == 1) { r = g_ossl_.ssl_read(c->ssl, (void*)rbuf, ask); }
-            else if (op == 2) { r = g_ossl_.ssl_write(c->ssl, (void*)wbuf, ask); }
+            else if (op == 1) { r = g_ossl_.ssl_read(c->ssl, (unsigned char*)rbuf, ask); }
+            else if (op == 2) { r = g_ossl_.ssl_write(c->ssl, (unsigned char*)wbuf, ask); }
             else { r = g_ossl_.ssl_shutdown(c->ssl); }
             int f2 = ossl_flush_(s, c);
             if (f2 < 0 && f2 != TLS_WANT_WRITE) { return (long long)tls_fail_(&s.err, TLS_ERR_IO, "TLS: socket write failed"); }
@@ -397,7 +397,7 @@ static long long ossl_call_(&TlsStream s, int op, ?&unsigned char rbuf, const ?&
             }
             if (op == 1 && c->eof && e == OSSL_ERROR_SYSCALL_) { return 0LL; }   // EOF without close_notify
             if (op == 0) {
-                long v = g_ossl_.ssl_verify_result((const void*)c->ssl);
+                long v = g_ossl_.ssl_verify_result((const unsigned char*)c->ssl);
                 if (v != 0L) {
                     g_ossl_.err_clear();
                     const char* vs = g_ossl_.verify_string(v);
@@ -418,25 +418,25 @@ static long long ossl_call_(&TlsStream s, int op, ?&unsigned char rbuf, const ?&
 
 // ── contexts ──────────────────────────────────────────────────────────────────
 
-static void ossl_set_versions_(void* ctx, int min_version, int max_version) {
+static void ossl_set_versions_(unsigned char* ctx, int min_version, int max_version) {
     unsafe {
-        g_ossl_.ctx_ctrl(ctx, OSSL_CTRL_SET_MIN_PROTO_, (long)min_version, (void*)0);
-        g_ossl_.ctx_ctrl(ctx, OSSL_CTRL_SET_MAX_PROTO_, (long)max_version, (void*)0);
+        g_ossl_.ctx_ctrl(ctx, OSSL_CTRL_SET_MIN_PROTO_, (long)min_version, (unsigned char*)0);
+        g_ossl_.ctx_ctrl(ctx, OSSL_CTRL_SET_MAX_PROTO_, (long)max_version, (unsigned char*)0);
         // SSL_MODE_ENABLE_PARTIAL_WRITE | SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER | SSL_MODE_AUTO_RETRY
-        g_ossl_.ctx_ctrl(ctx, OSSL_CTRL_MODE_, 7L, (void*)0);
+        g_ossl_.ctx_ctrl(ctx, OSSL_CTRL_MODE_, 7L, (unsigned char*)0);
     }
 }
 
 // Adds every certificate of a PEM text to the context's trust store.
-static int ossl_add_ca_pem_(void* ctx, const &char pem) {
+static int ossl_add_ca_pem_(unsigned char* ctx, const &char pem) {
     int n = 0;
     unsafe {
-        void* store = g_ossl_.ctx_get_store(ctx);
-        void* bio = g_ossl_.bio_mem_buf((const void*)pem, -1);
-        if (bio == (void*)0) { return 0; }
+        unsigned char* store = g_ossl_.ctx_get_store(ctx);
+        unsigned char* bio = g_ossl_.bio_mem_buf((const unsigned char*)pem, -1);
+        if (bio == (unsigned char*)0) { return 0; }
         while (1) {
-            void* x = g_ossl_.pem_read_x509(bio, (void*)0, (void*)0, (void*)0);
-            if (x == (void*)0) { break; }
+            unsigned char* x = g_ossl_.pem_read_x509(bio, (unsigned char*)0, (unsigned char*)0, (unsigned char*)0);
+            if (x == (unsigned char*)0) { break; }
             if (g_ossl_.store_add_cert(store, x) == 1) { n = n + 1; }
             g_ossl_.x509_free(x);
         }
@@ -449,7 +449,7 @@ static int ossl_add_ca_pem_(void* ctx, const &char pem) {
 // The system roots: OpenSSL's defaults, then the distribution bundles
 // (OpenSSL builds that don't look there, e.g. a statically configured
 // OPENSSLDIR) when the defaults hold nothing usable.
-static void ossl_system_roots_(void* ctx) {
+static void ossl_system_roots_(unsigned char* ctx) {
     unsafe {
         g_ossl_.ctx_default_paths(ctx);
         const char* paths[6];
@@ -472,30 +472,30 @@ static void ossl_system_roots_(void* ctx) {
 }
 
 // The shared client context with the system roots (created once).
-static void* ossl_shared_client_ctx_() {
+static unsigned char* ossl_shared_client_ctx_() {
     g_ossl_lock_.lock();
-    if (g_ossl_client_ctx_ == (void*)0) {
+    if (g_ossl_client_ctx_ == (unsigned char*)0) {
         unsafe {
-            void* ctx = g_ossl_.ctx_new(g_ossl_.client_method());
-            if (ctx != (void*)0) {
+            unsigned char* ctx = g_ossl_.ctx_new(g_ossl_.client_method());
+            if (ctx != (unsigned char*)0) {
                 ossl_set_versions_(ctx, TLS_VERSION_1_2, TLS_VERSION_1_3);
                 ossl_system_roots_(ctx);
                 g_ossl_client_ctx_ = ctx;
             }
         }
     }
-    void* r = g_ossl_client_ctx_;
+    unsigned char* r = g_ossl_client_ctx_;
     g_ossl_lock_.unlock();
     return r;
 }
 
 // Loads a PEM certificate chain + key into an SSL (client) or SSL_CTX (server).
-static int ossl_use_cert_key_(void* target, int is_ctx, const &char cert_pem, const &char key_pem, &TlsError e) {
+static int ossl_use_cert_key_(unsigned char* target, int is_ctx, const &char cert_pem, const &char key_pem, &TlsError e) {
     unsafe {
-        void* bio = g_ossl_.bio_mem_buf((const void*)cert_pem, -1);
-        if (bio == (void*)0) { return tls_fail_(e, TLS_ERR_NO_MEMORY, "out of memory"); }
-        void* leaf = g_ossl_.pem_read_x509(bio, (void*)0, (void*)0, (void*)0);
-        if (leaf == (void*)0) {
+        unsigned char* bio = g_ossl_.bio_mem_buf((const unsigned char*)cert_pem, -1);
+        if (bio == (unsigned char*)0) { return tls_fail_(e, TLS_ERR_NO_MEMORY, "out of memory"); }
+        unsigned char* leaf = g_ossl_.pem_read_x509(bio, (unsigned char*)0, (unsigned char*)0, (unsigned char*)0);
+        if (leaf == (unsigned char*)0) {
             g_ossl_.bio_free(bio);
             return ossl_fail_(e, TLS_ERR_CONFIG, "cannot read the certificate PEM");
         }
@@ -503,8 +503,8 @@ static int ossl_use_cert_key_(void* target, int is_ctx, const &char cert_pem, co
         g_ossl_.x509_free(leaf);
         if (ok != 1) { g_ossl_.bio_free(bio); return ossl_fail_(e, TLS_ERR_CONFIG, "certificate rejected"); }
         while (1) {
-            void* x = g_ossl_.pem_read_x509(bio, (void*)0, (void*)0, (void*)0);
-            if (x == (void*)0) { break; }
+            unsigned char* x = g_ossl_.pem_read_x509(bio, (unsigned char*)0, (unsigned char*)0, (unsigned char*)0);
+            if (x == (unsigned char*)0) { break; }
             if (is_ctx) {
                 // the context owns x from here
                 if (g_ossl_.ctx_ctrl(target, OSSL_CTRL_EXTRA_CHAIN_CERT_, 0L, x) != 1L) { g_ossl_.x509_free(x); }
@@ -516,11 +516,11 @@ static int ossl_use_cert_key_(void* target, int is_ctx, const &char cert_pem, co
         }
         g_ossl_.bio_free(bio);
         g_ossl_.err_clear();
-        void* kb = g_ossl_.bio_mem_buf((const void*)key_pem, -1);
-        if (kb == (void*)0) { return tls_fail_(e, TLS_ERR_NO_MEMORY, "out of memory"); }
-        void* key = g_ossl_.pem_read_key(kb, (void*)0, (void*)0, (void*)0);
+        unsigned char* kb = g_ossl_.bio_mem_buf((const unsigned char*)key_pem, -1);
+        if (kb == (unsigned char*)0) { return tls_fail_(e, TLS_ERR_NO_MEMORY, "out of memory"); }
+        unsigned char* key = g_ossl_.pem_read_key(kb, (unsigned char*)0, (unsigned char*)0, (unsigned char*)0);
         g_ossl_.bio_free(kb);
-        if (key == (void*)0) { return ossl_fail_(e, TLS_ERR_CONFIG, "cannot read the private key PEM"); }
+        if (key == (unsigned char*)0) { return ossl_fail_(e, TLS_ERR_CONFIG, "cannot read the private key PEM"); }
         ok = is_ctx ? g_ossl_.ctx_use_key(target, key) : g_ossl_.ssl_use_key(target, key);
         g_ossl_.pkey_free(key);
         if (ok != 1) { return ossl_fail_(e, TLS_ERR_CONFIG, "private key rejected (does it match the certificate?)"); }
@@ -531,14 +531,14 @@ static int ossl_use_cert_key_(void* target, int is_ctx, const &char cert_pem, co
     return 0;
 }
 
-static int ossl_new_conn_(&TlsStream s, void* ctx, void* owned) {
-    void* mem = alloc_zeroed_raw_(sizeof(struct OsslConn_));
-    if (mem == (void*)0) { return tls_fail_(&s.err, TLS_ERR_NO_MEMORY, "out of memory"); }
+static int ossl_new_conn_(&TlsStream s, unsigned char* ctx, unsigned char* owned) {
+    unsigned char* mem = alloc_zeroed_raw_(sizeof(struct OsslConn_));
+    if (mem == (unsigned char*)0) { return tls_fail_(&s.err, TLS_ERR_NO_MEMORY, "out of memory"); }
     unsafe {
         struct OsslConn_* c = (struct OsslConn_*)mem;
         c->ctx = owned;
         c->ssl = g_ossl_.ssl_new(ctx);
-        if (c->ssl == (void*)0) {
+        if (c->ssl == (unsigned char*)0) {
             dealloc_raw_(mem);
             return ossl_fail_(&s.err, TLS_ERR_INTERNAL, "SSL_new failed");
         }
@@ -552,13 +552,13 @@ static int ossl_new_conn_(&TlsStream s, void* ctx, void* owned) {
 
 int tls_openssl_client_(&TlsStream s, const &char name, const &TlsConfig cfg) {
     if (!ossl_load_()) { tls_fail_(&s.err, TLS_ERR_UNAVAILABLE, "OpenSSL (libssl) not found"); return TLS_ERR_UNAVAILABLE; }
-    void* ctx = (void*)0;
-    void* owned = (void*)0;
+    unsigned char* ctx = (unsigned char*)0;
+    unsigned char* owned = (unsigned char*)0;
     int custom = !cfg.ca_pem.is_empty() || !cfg.ca_file.is_empty() || !cfg.use_system_roots;
     unsafe {
         if (custom) {
             owned = g_ossl_.ctx_new(g_ossl_.client_method());
-            if (owned == (void*)0) { ossl_fail_(&s.err, TLS_ERR_INTERNAL, "SSL_CTX_new failed"); return TLS_ERR_INTERNAL; }
+            if (owned == (unsigned char*)0) { ossl_fail_(&s.err, TLS_ERR_INTERNAL, "SSL_CTX_new failed"); return TLS_ERR_INTERNAL; }
             ossl_set_versions_(owned, TLS_VERSION_1_2, TLS_VERSION_1_3);
             if (cfg.use_system_roots) { ossl_system_roots_(owned); }
             if (!cfg.ca_pem.is_empty() && ossl_add_ca_pem_(owned, cfg.ca_pem.as_ptr()) == 0) {
@@ -574,24 +574,24 @@ int tls_openssl_client_(&TlsStream s, const &char name, const &TlsConfig cfg) {
             ctx = owned;
         } else {
             ctx = ossl_shared_client_ctx_();
-            if (ctx == (void*)0) { ossl_fail_(&s.err, TLS_ERR_INTERNAL, "SSL_CTX_new failed"); return TLS_ERR_INTERNAL; }
+            if (ctx == (unsigned char*)0) { ossl_fail_(&s.err, TLS_ERR_INTERNAL, "SSL_CTX_new failed"); return TLS_ERR_INTERNAL; }
         }
     }
     if (ossl_new_conn_(s, ctx, owned) != 0) {
-        unsafe { if (owned != (void*)0) { g_ossl_.ctx_free(owned); } }
+        unsafe { if (owned != (unsigned char*)0) { g_ossl_.ctx_free(owned); } }
         return s.err.code;
     }
     struct OsslConn_* c = ossl_of_(s);
     unsafe {
-        void* ssl = c->ssl;
-        g_ossl_.ssl_ctrl(ssl, OSSL_CTRL_SET_MIN_PROTO_, (long)cfg.min_version, (void*)0);
-        g_ossl_.ssl_ctrl(ssl, OSSL_CTRL_SET_MAX_PROTO_, (long)cfg.max_version, (void*)0);
+        unsigned char* ssl = c->ssl;
+        g_ossl_.ssl_ctrl(ssl, OSSL_CTRL_SET_MIN_PROTO_, (long)cfg.min_version, (unsigned char*)0);
+        g_ossl_.ssl_ctrl(ssl, OSSL_CTRL_SET_MAX_PROTO_, (long)cfg.max_version, (unsigned char*)0);
         int ip = tls_name_is_ip_(name);
         if (!ip && str_len(name) > 0UL) {
-            g_ossl_.ssl_ctrl(ssl, OSSL_CTRL_SET_TLSEXT_HOSTNAME_, 0L, (void*)name);
+            g_ossl_.ssl_ctrl(ssl, OSSL_CTRL_SET_TLSEXT_HOSTNAME_, 0L, (unsigned char*)name);
         }
         if (cfg.verify_peer) {
-            g_ossl_.ssl_set_verify(ssl, OSSL_VERIFY_PEER_, (void*)0);
+            g_ossl_.ssl_set_verify(ssl, OSSL_VERIFY_PEER_, (unsigned char*)0);
             if (cfg.verify_hostname) {
                 if (ip) {
                     g_ossl_.param_set_ip(g_ossl_.ssl_get0_param(ssl), (const char*)name);
@@ -601,7 +601,7 @@ int tls_openssl_client_(&TlsStream s, const &char name, const &TlsConfig cfg) {
                 }
             }
         } else {
-            g_ossl_.ssl_set_verify(ssl, OSSL_VERIFY_NONE_, (void*)0);
+            g_ossl_.ssl_set_verify(ssl, OSSL_VERIFY_NONE_, (unsigned char*)0);
         }
         if (!cfg.alpn.is_empty()) {
             struct Vec<unsigned char> w = tls_alpn_wire_(cfg.alpn.as_ptr());
@@ -625,21 +625,21 @@ static void ossl_fill_info_(&TlsStream s, struct OsslConn_* c) {
     unsafe {
         int v = g_ossl_.ssl_version(c->ssl);
         s.version_ = v;
-        const void* ci = (const void*)g_ossl_.ssl_get_cipher((const void*)c->ssl);
-        if (ci != (const void*)0) {
+        const unsigned char* ci = (const unsigned char*)g_ossl_.ssl_get_cipher((const unsigned char*)c->ssl);
+        if (ci != (const unsigned char*)0) {
             const char* nm = (const char*)0;
-            if ((void*)g_ossl_.cipher_std_name != (void*)0) { nm = g_ossl_.cipher_std_name(ci); }
+            if ((unsigned char*)g_ossl_.cipher_std_name != (unsigned char*)0) { nm = g_ossl_.cipher_std_name(ci); }
             if (nm == (const char*)0) { nm = g_ossl_.cipher_name(ci); }
             tls_copy_cstr_(&s.cipher_[0], 64UL, (const ?&char)nm);
         }
         const unsigned char* ap = (const unsigned char*)0;
         unsigned int al = 0U;
-        g_ossl_.ssl_alpn_selected((const void*)c->ssl, &ap, &al);
+        g_ossl_.ssl_alpn_selected((const unsigned char*)c->ssl, &ap, &al);
         unsigned int i = 0U;
         while (i < al && i < 63U) { s.alpn_[i] = (char)ap[i]; i = i + 1U; }
         s.alpn_[i] = (char)0;
-        void* x = g_ossl_.ssl_peer_cert(c->ssl);
-        if (x != (void*)0) {
+        unsigned char* x = g_ossl_.ssl_peer_cert(c->ssl);
+        if (x != (unsigned char*)0) {
             int len = g_ossl_.i2d_x509(x, (unsigned char**)0);
             if (len > 0) {
                 s.peer_der_.free();
@@ -681,8 +681,8 @@ void tls_openssl_free_(&TlsStream s) {
     struct OsslConn_* c = ossl_of_(s);
     if (c == (struct OsslConn_*)0) { return; }
     unsafe {
-        if (c->ssl != (void*)0) { g_ossl_.ssl_free(c->ssl); }   // frees the BIOs too
-        if (c->ctx != (void*)0) { g_ossl_.ctx_free(c->ctx); }
+        if (c->ssl != (unsigned char*)0) { g_ossl_.ssl_free(c->ssl); }   // frees the BIOs too
+        if (c->ctx != (unsigned char*)0) { g_ossl_.ctx_free(c->ctx); }
         dealloc(c);
     }
     s.impl_ = null;
@@ -692,8 +692,8 @@ void tls_openssl_free_(&TlsStream s) {
 
 // SSL_CTX_set_alpn_select_cb's callback: the server's preference among the
 // client's offers (SSL_select_next_proto), no ALPN when nothing matches.
-static int ossl_alpn_select_(void* ssl, unsigned char** out, unsigned char* outlen,
-                             const unsigned char* in, unsigned int inlen, void* arg) {
+static int ossl_alpn_select_(unsigned char* ssl, unsigned char** out, unsigned char* outlen,
+                             const unsigned char* in, unsigned int inlen, unsigned char* arg) {
     unsafe {
         struct OsslAcc_* a = (struct OsslAcc_*)arg;
         if (a->alpn.len == 0UL) { return 3; }
@@ -704,13 +704,13 @@ static int ossl_alpn_select_(void* ssl, unsigned char** out, unsigned char* outl
 
 int tls_openssl_acceptor_(&TlsAcceptor a, const &TlsServerConfig cfg, &TlsError e) {
     if (!ossl_load_()) { tls_fail_(e, TLS_ERR_UNAVAILABLE, "OpenSSL (libssl) not found"); return TLS_ERR_UNAVAILABLE; }
-    void* mem = alloc_zeroed_raw_(sizeof(struct OsslAcc_));
-    if (mem == (void*)0) { tls_fail_(e, TLS_ERR_NO_MEMORY, "out of memory"); return TLS_ERR_NO_MEMORY; }
+    unsigned char* mem = alloc_zeroed_raw_(sizeof(struct OsslAcc_));
+    if (mem == (unsigned char*)0) { tls_fail_(e, TLS_ERR_NO_MEMORY, "out of memory"); return TLS_ERR_NO_MEMORY; }
     unsafe {
         struct OsslAcc_* acc = (struct OsslAcc_*)mem;
         acc->alpn = Vec::new();
-        void* ctx = g_ossl_.ctx_new(g_ossl_.server_method());
-        if (ctx == (void*)0) { dealloc_raw_(mem); ossl_fail_(e, TLS_ERR_INTERNAL, "SSL_CTX_new failed"); return TLS_ERR_INTERNAL; }
+        unsigned char* ctx = g_ossl_.ctx_new(g_ossl_.server_method());
+        if (ctx == (unsigned char*)0) { dealloc_raw_(mem); ossl_fail_(e, TLS_ERR_INTERNAL, "SSL_CTX_new failed"); return TLS_ERR_INTERNAL; }
         acc->ctx = ctx;
         ossl_set_versions_(ctx, cfg.min_version, cfg.max_version);
         if (ossl_use_cert_key_(ctx, 1, cfg.cert_pem.as_ptr(), cfg.key_pem.as_ptr(), e) != 0) {
@@ -721,7 +721,7 @@ int tls_openssl_acceptor_(&TlsAcceptor a, const &TlsServerConfig cfg, &TlsError 
         if (!cfg.alpn.is_empty()) {
             acc->alpn.free();
             acc->alpn = tls_alpn_wire_(cfg.alpn.as_ptr());
-            g_ossl_.ctx_set_alpn_cb(ctx, (void*)ossl_alpn_select_, mem);
+            g_ossl_.ctx_set_alpn_cb(ctx, (unsigned char*)ossl_alpn_select_, mem);
         }
         if (cfg.verify_client != 0) {
             if (ossl_add_ca_pem_(ctx, cfg.client_ca_pem.as_ptr()) == 0) {
@@ -733,7 +733,7 @@ int tls_openssl_acceptor_(&TlsAcceptor a, const &TlsServerConfig cfg, &TlsError 
             }
             int mode = OSSL_VERIFY_PEER_;
             if (cfg.verify_client == 2) { mode = mode | OSSL_VERIFY_FAIL_NO_CERT_; }
-            g_ossl_.ctx_set_verify(ctx, mode, (void*)0);
+            g_ossl_.ctx_set_verify(ctx, mode, (unsigned char*)0);
         }
     }
     unsafe { a.impl_ = (?&heap TlsImpl_)mem; }
@@ -743,7 +743,7 @@ int tls_openssl_acceptor_(&TlsAcceptor a, const &TlsServerConfig cfg, &TlsError 
 int tls_openssl_accept_(&TlsStream s, const &TlsAcceptor a) {
     unsafe {
         struct OsslAcc_* acc = (struct OsslAcc_*)a.impl_;
-        if (ossl_new_conn_(s, acc->ctx, (void*)0) != 0) { return s.err.code; }
+        if (ossl_new_conn_(s, acc->ctx, (unsigned char*)0) != 0) { return s.err.code; }
         g_ossl_.ssl_set_accept(ossl_of_(s)->ssl);
     }
     return TLS_OK;

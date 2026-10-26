@@ -6,7 +6,7 @@
 
 namespace std {
 
-extern void* memcpy(void* d, const void* s, size_t n);
+extern unsigned char* memcpy(unsigned char* d, const unsigned char* s, size_t n);
 
 // ── AES S-box and inverse S-box ───────────────────────────────────────────────
 
@@ -293,7 +293,7 @@ void AesCtx::decrypt_block([]unsigned char block_s) {
 }
 
 inline void AesCtx::set_iv_n_(const &unsigned char iv) {
-    unsafe { memcpy((void*)self.iv, (const void*)iv, (unsigned long)AES_BLOCK_SIZE); }
+    unsafe { memcpy((unsigned char*)self.iv, (const unsigned char*)iv, (unsigned long)AES_BLOCK_SIZE); }
 }
 
 inline void AesCtx::set_iv([]const unsigned char iv_s) {
@@ -305,8 +305,8 @@ inline void AesCtx::destroy() { self.drop(); }
 
 inline void AesCtx::drop() {
     unsafe {
-        mem_zero_secure_raw_((void*)self.ks, (unsigned long)AES_KS_WORDS * (unsigned long)sizeof(unsigned int));
-        mem_zero_secure_raw_((void*)self.iv, (unsigned long)AES_BLOCK_SIZE);
+        mem_zero_secure_raw_((unsigned char*)self.ks, (unsigned long)AES_KS_WORDS * (unsigned long)sizeof(unsigned int));
+        mem_zero_secure_raw_((unsigned char*)self.iv, (unsigned long)AES_BLOCK_SIZE);
     }
     self.rounds = 0;
 }
@@ -323,7 +323,7 @@ inline void AesCtx::cbc_encrypt_n_(&unsigned char data, unsigned long len) {
                 k = k + 1;
             }
             self.encrypt_block_n_((&unsigned char)blk);
-            memcpy((void*)self.iv, (const void*)blk, (unsigned long)AES_BLOCK_SIZE);
+            memcpy((unsigned char*)self.iv, (const unsigned char*)blk, (unsigned long)AES_BLOCK_SIZE);
         }
         b = b + (unsigned long)1;
     }
@@ -342,14 +342,14 @@ inline void AesCtx::cbc_decrypt_n_(&unsigned char data, unsigned long len) {
         unsafe {
             unsigned char* blk = (unsigned char*)data + b * (unsigned long)AES_BLOCK_SIZE;
             unsigned char prev[16];
-            memcpy((void*)prev, (const void*)blk, (unsigned long)AES_BLOCK_SIZE);
+            memcpy((unsigned char*)prev, (const unsigned char*)blk, (unsigned long)AES_BLOCK_SIZE);
             self.decrypt_block_n_((&unsigned char)blk);
             int k = 0;
             while (k < AES_BLOCK_SIZE) {
                 blk[k] = blk[k] ^ self.iv[k];
                 k = k + 1;
             }
-            memcpy((void*)self.iv, (const void*)prev, (unsigned long)AES_BLOCK_SIZE);
+            memcpy((unsigned char*)self.iv, (const unsigned char*)prev, (unsigned long)AES_BLOCK_SIZE);
         }
         b = b + (unsigned long)1;
     }
@@ -427,7 +427,7 @@ static void gcm_ghash_(unsigned long long* y, unsigned long long hh, unsigned lo
 static void gcm_ctr_(&AesCtx ctx, const unsigned char* j0, unsigned char* data, unsigned long len) {
     unsafe {
         unsigned char ctr[16];
-        memcpy((void*)ctr, (const void*)j0, 16UL);
+        memcpy((unsigned char*)ctr, (const unsigned char*)j0, 16UL);
         unsigned long off = 0UL;
         while (off < len) {
             unsigned int c = ((unsigned int)ctr[12] << 24) | ((unsigned int)ctr[13] << 16)
@@ -436,7 +436,7 @@ static void gcm_ctr_(&AesCtx ctx, const unsigned char* j0, unsigned char* data, 
             ctr[12] = (unsigned char)(c >> 24); ctr[13] = (unsigned char)(c >> 16);
             ctr[14] = (unsigned char)(c >> 8);  ctr[15] = (unsigned char)c;
             unsigned char ks[16];
-            memcpy((void*)ks, (const void*)ctr, 16UL);
+            memcpy((unsigned char*)ks, (const unsigned char*)ctr, 16UL);
             ctx.encrypt_block_n_((&unsigned char)&ks[0]);
             unsigned long k = 0UL;
             while (k < 16UL && off + k < len) { data[off + k] = data[off + k] ^ ks[k]; k = k + 1UL; }
@@ -447,7 +447,7 @@ static void gcm_ctr_(&AesCtx ctx, const unsigned char* j0, unsigned char* data, 
 
 static void gcm_j0_(const unsigned char* iv, unsigned char* j0) {
     unsafe {
-        memcpy((void*)j0, (const void*)iv, 12UL);
+        memcpy((unsigned char*)j0, (const unsigned char*)iv, 12UL);
         j0[12] = (unsigned char)0; j0[13] = (unsigned char)0; j0[14] = (unsigned char)0; j0[15] = (unsigned char)1;
     }
 }
@@ -477,7 +477,7 @@ static void gcm_tag_(&AesCtx ctx, const unsigned char* iv, const unsigned char* 
         gcm_store64_(tag + 8, y[1]);
         i = 0;
         while (i < 16) { tag[i] = tag[i] ^ j0[i]; i = i + 1; }
-        mem_zero_secure_raw_((void*)h, 16UL);
+        mem_zero_secure_raw_((unsigned char*)h, 16UL);
     }
 }
 

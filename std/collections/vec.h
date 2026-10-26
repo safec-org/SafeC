@@ -113,7 +113,7 @@ int Vec::reserve(unsigned long new_cap) {
     if (new_cap <= self.cap) return 1;
     unsigned long bytes = checked_mul_size(new_cap, sizeof(T));
     ?&heap T grown = null;
-    unsafe { grown = (?&heap T)realloc_buf_raw_((void*)self.data, bytes); }
+    unsafe { grown = (?&heap T)realloc_buf_raw_((unsigned char*)self.data, bytes); }
     if (grown.is_null()) return 0;
     self.data = grown;
     self.cap = new_cap;
@@ -130,7 +130,7 @@ void Vec::shrink() {
         return;
     }
     ?&heap T smaller = null;
-    unsafe { smaller = (?&heap T)realloc_buf_raw_((void*)self.data, self.len * sizeof(T)); }
+    unsafe { smaller = (?&heap T)realloc_buf_raw_((unsigned char*)self.data, self.len * sizeof(T)); }
     if (smaller.is_null()) return;   // keep the larger buffer
     self.data = smaller;
     self.cap = self.len;
@@ -193,7 +193,7 @@ int Vec::push(T value) {
     if (self.len == self.cap) {
         unsigned long next = self.cap < 4UL ? 4UL : self.cap * 2UL;
         ?&heap T grown = null;
-        unsafe { grown = (?&heap T)realloc_array_raw_((void*)self.data, next, sizeof(T)); }
+        unsafe { grown = (?&heap T)realloc_array_raw_((unsigned char*)self.data, next, sizeof(T)); }
         if (grown.is_null()) { drop(value); return 0; }
         self.data = grown;
         self.cap = next;
@@ -216,7 +216,7 @@ int Vec::insert(unsigned long idx, T value) {
     if (self.len == self.cap) {
         unsigned long next = self.cap < 4UL ? 4UL : self.cap * 2UL;
         ?&heap T grown = null;
-        unsafe { grown = (?&heap T)realloc_array_raw_((void*)self.data, next, sizeof(T)); }
+        unsafe { grown = (?&heap T)realloc_array_raw_((unsigned char*)self.data, next, sizeof(T)); }
         if (grown.is_null()) { drop(value); return 0; }
         self.data = grown;
         self.cap = next;

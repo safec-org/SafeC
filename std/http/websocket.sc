@@ -194,7 +194,7 @@ long long WsSource_::read([]unsigned char out_s) {
         unsigned long left = c.earlyLen - c.earlyPos;
         unsigned long k = n < left ? n : left;
         match (c.early) {
-            case some(b): { unsafe { safe_memcpy_raw_((void*)out, (const void*)&b[c.earlyPos], k); } }
+            case some(b): { unsafe { safe_memcpy_raw_((unsigned char*)out, (const unsigned char*)&b[c.earlyPos], k); } }
             case null: { return -1LL; }
         }
         c.earlyPos = c.earlyPos + k;
@@ -492,7 +492,7 @@ int WsConn::recv_message(&WsMessage out, unsigned long max_len) {
         unsafe {
             payload = (unsigned char*)alloc_raw_(acc.length());
             if (payload == (unsigned char*)0) { acc.free(); return 0; }
-            safe_memcpy_raw_((void*)payload, (const void*)acc.as_ptr(), acc.length());
+            safe_memcpy_raw_((unsigned char*)payload, (const unsigned char*)acc.as_ptr(), acc.length());
         }
     }
     unsafe {
@@ -554,7 +554,7 @@ struct WsConn WsConn::accept_upgrade(const &HttpRequest req, &HttpConn conn, ?&i
         ?&heap unsigned char buf = (?&heap unsigned char)alloc_raw_(early.length());
         match (buf) {
             case some(b): {
-                unsafe { safe_memcpy_raw_((void*)b, (const void*)early.as_ptr(), early.length()); }
+                unsafe { safe_memcpy_raw_((unsigned char*)b, (const unsigned char*)early.as_ptr(), early.length()); }
                 c.early = b;
                 c.earlyLen = early.length();
             }

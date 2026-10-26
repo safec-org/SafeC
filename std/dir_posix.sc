@@ -51,9 +51,9 @@
 
 namespace std {
 
-extern void* opendir(const char* path);
-extern void* readdir(void* dirp);
-extern int   closedir(void* dirp);
+extern unsigned char* opendir(const char* path);
+extern unsigned char* readdir(unsigned char* dirp);
+extern int   closedir(unsigned char* dirp);
 extern int   mkdir(const char* path, unsigned int mode);
 extern int   rmdir(const char* path);
 extern int   unlink(const char* path);
@@ -70,32 +70,32 @@ extern long  syscall(long number, ...);
 #define SAFEC_STATX_BASIC_STATS   0x7ff
 #else
 #ifdef __APPLE__
-extern int   lstat(const char* path, void* buf);
+extern int   lstat(const char* path, unsigned char* buf);
 #endif
 #endif
 
 // What a Dir handle points at.
 struct DirPosix_ {
-    void* dirp;
+    unsigned char* dirp;
     struct String path;   // for entries whose d_type is DT_UNKNOWN
 };
 
 ?&Dir Dir::open(const &char path) {
-    void* d;
+    unsigned char* d;
     unsafe { d = opendir(path); }
-    if (d == (void*)0) { return (?&Dir)null; }
+    if (d == (unsigned char*)0) { return (?&Dir)null; }
     struct DirPosix_* h;
     unsafe {
         h = (struct DirPosix_*)alloc_raw_((unsigned long)sizeof(struct DirPosix_));
         h->dirp = d;
         h->path = String::from(path);
-        return (?&Dir)(void*)h;
+        return (?&Dir)(unsigned char*)h;
     }
 }
 
 int Dir::next(&DirEntry out) {
     unsafe {
-        struct DirPosix_* h = (struct DirPosix_*)(void*)self;
+        struct DirPosix_* h = (struct DirPosix_*)(unsigned char*)self;
         for (;;) {
             unsigned char* ent = (unsigned char*)readdir(h->dirp);
             if (ent == (unsigned char*)0) { return 0; }
@@ -128,7 +128,7 @@ void Dir::close() { self.drop(); }
 
 void Dir::drop() {
     unsafe {
-        struct DirPosix_* h = (struct DirPosix_*)(void*)self;
+        struct DirPosix_* h = (struct DirPosix_*)(unsigned char*)self;
         closedir(h->dirp);
         h->path.free();
         dealloc(h);
@@ -182,7 +182,7 @@ int file_stat(const &char path, &FileStat out) {
 #ifdef __linux__
     long rc;
     unsafe { rc = syscall(SAFEC_SYS_STATX, SAFEC_AT_FDCWD, path, SAFEC_AT_SYMLINK_NOFOLLOW,
-                          SAFEC_STATX_BASIC_STATS, (void*)&buf[0]); }
+                          SAFEC_STATX_BASIC_STATS, (unsigned char*)&buf[0]); }
     if (rc == 0L) {
         out.kind = dir_kind_from_mode_((unsigned int)dir_le_(&buf[0], 28UL, 2UL));
         out.size = (long long)dir_le_(&buf[0], 40UL, 8UL);
@@ -194,7 +194,7 @@ int file_stat(const &char path, &FileStat out) {
 #else
 #ifdef __APPLE__
     int rc;
-    unsafe { rc = lstat(path, (void*)&buf[0]); }
+    unsafe { rc = lstat(path, (unsigned char*)&buf[0]); }
     if (rc != 0) { return 0; }
 #ifdef __aarch64__
     out.kind = dir_kind_from_mode_((unsigned int)dir_le_(&buf[0], 4UL, 2UL));

@@ -22,19 +22,19 @@
 // same link would duplicate-symbol on malloc/free/etc.
 #include <std/stddef.h>
 
-void* malloc(size_t size);
-void  free(void* ptr);
-void* calloc(size_t count, size_t size);
-void* realloc(void* ptr, size_t new_size);
-void* memcpy(void* dst, const void* src, size_t n);
-void* memmove(void* dst, const void* src, size_t n);
-void* memset(void* ptr, int val, size_t n);
-int   memcmp(const void* a, const void* b, size_t n);
-void* memchr(const void* s, int c, size_t n);
+unsigned char* malloc(size_t size);
+void  free(unsigned char* ptr);
+unsigned char* calloc(size_t count, size_t size);
+unsigned char* realloc(unsigned char* ptr, size_t new_size);
+unsigned char* memcpy(unsigned char* dst, const unsigned char* src, size_t n);
+unsigned char* memmove(unsigned char* dst, const unsigned char* src, size_t n);
+unsigned char* memset(unsigned char* ptr, int val, size_t n);
+int   memcmp(const unsigned char* a, const unsigned char* b, size_t n);
+unsigned char* memchr(const unsigned char* s, int c, size_t n);
 // Payload bytes usable in a malloc'd block (0 for any other pointer).
-size_t malloc_usable_size(void* ptr);
+size_t malloc_usable_size(unsigned char* ptr);
 // Alignments above 8 over-allocate; such a block is never freed.
-int   posix_memalign(void** memptr, size_t alignment, size_t size);
+int   posix_memalign(unsigned char** memptr, size_t alignment, size_t size);
 
 size_t strlen(const char* s);
 int    strcmp(const char* a, const char* b);
@@ -58,7 +58,7 @@ long long          atoll(const char* s);
 double             strtod(const char* s, char** end);
 
 // Heapsort (not stable), the same contract as C's qsort.
-void qsort(void* base, size_t n, size_t size, void* cmp);
+void qsort(unsigned char* base, size_t n, size_t size, unsigned char* cmp);
 
 // compiler-rt: 128-bit multiply and shifts (result through 'ret' = lo, hi).
 void __multi3(unsigned long long* ret, unsigned long long alo, unsigned long long ahi,
@@ -72,5 +72,5 @@ void __ashrti3(unsigned long long* ret, unsigned long long lo, unsigned long lon
 // va_arg to decode a varargs list with). snprintf isn't provided: std's
 // float formatting (fmt_float / String::push_float) needs a host on wasm.
 void abort();
-int  fprintf(void* stream, const char* fmt, ...);
+int  fprintf(unsigned char* stream, const char* fmt, ...);
 int  printf(const char* fmt, ...);

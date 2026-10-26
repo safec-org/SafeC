@@ -783,12 +783,12 @@ static void fft_pass_(FFT_R* d, const FFT_R* t, unsigned long len, unsigned long
 // the references would break every macOS program that reaches fft.sc.
 #if FFT_HAS_THREADS && !defined(_WIN32) && !defined(__APPLE__)
 #define FFT_VENDOR 1
-extern long FFT_DFTI_CREATE(void** desc, int domain, long length) __attribute__((weak));
-extern long DftiSetValue(void* desc, int param, ...) __attribute__((weak));
-extern long DftiCommitDescriptor(void* desc) __attribute__((weak));
-extern long DftiComputeForward(void* desc, void* x, ...) __attribute__((weak));
-extern long DftiComputeBackward(void* desc, void* x, ...) __attribute__((weak));
-extern long DftiFreeDescriptor(void** desc) __attribute__((weak));
+extern long FFT_DFTI_CREATE(unsigned char** desc, int domain, long length) __attribute__((weak));
+extern long DftiSetValue(unsigned char* desc, int param, ...) __attribute__((weak));
+extern long DftiCommitDescriptor(unsigned char* desc) __attribute__((weak));
+extern long DftiComputeForward(unsigned char* desc, unsigned char* x, ...) __attribute__((weak));
+extern long DftiComputeBackward(unsigned char* desc, unsigned char* x, ...) __attribute__((weak));
+extern long DftiFreeDescriptor(unsigned char** desc) __attribute__((weak));
 #else
 #define FFT_VENDOR 0
 #endif
@@ -818,9 +818,9 @@ static long long g_fftv_desc[FFT_PLANS];
 static int fft_vendor_linked_() {
 #if FFT_VENDOR
     unsafe {
-        return (void*)FFT_DFTI_CREATE != (void*)0 && (void*)DftiSetValue != (void*)0 &&
-               (void*)DftiCommitDescriptor != (void*)0 && (void*)DftiComputeForward != (void*)0 &&
-               (void*)DftiComputeBackward != (void*)0 && (void*)DftiFreeDescriptor != (void*)0;
+        return (unsigned char*)FFT_DFTI_CREATE != (unsigned char*)0 && (unsigned char*)DftiSetValue != (unsigned char*)0 &&
+               (unsigned char*)DftiCommitDescriptor != (unsigned char*)0 && (unsigned char*)DftiComputeForward != (unsigned char*)0 &&
+               (unsigned char*)DftiComputeBackward != (unsigned char*)0 && (unsigned char*)DftiFreeDescriptor != (unsigned char*)0;
     }
 #else
     return 0;
@@ -829,11 +829,11 @@ static int fft_vendor_linked_() {
 
 
 #if FFT_VENDOR
-static void* fft_vendor_make_(int kind, unsigned long n) {
-    void* d = (void*)0;
+static unsigned char* fft_vendor_make_(int kind, unsigned long n) {
+    unsigned char* d = (unsigned char*)0;
     unsafe {
         if (FFT_DFTI_CREATE(&d, kind == FFT_KIND_R2C ? DFTI_REAL_ : DFTI_COMPLEX_, (long)n) != 0L)
-            return (void*)0;
+            return (unsigned char*)0;
         long ok = DftiSetValue(d, DFTI_THREAD_LIMIT_, 1L);
         if (kind == FFT_KIND_R2C) {
             ok = ok | DftiSetValue(d, DFTI_PLACEMENT_, (long)DFTI_NOT_INPLACE_);
@@ -845,7 +845,7 @@ static void* fft_vendor_make_(int kind, unsigned long n) {
         }
         if (ok != 0L || DftiCommitDescriptor(d) != 0L) {
             DftiFreeDescriptor(&d);
-            return (void*)0;
+            return (unsigned char*)0;
         }
     }
     return d;
@@ -854,26 +854,26 @@ static void* fft_vendor_make_(int kind, unsigned long n) {
 
 // Cached committed descriptor for (kind, n), made on first use; null if
 // unavailable (or the cache is full).
-static void* fft_vendor_desc_(int kind, unsigned long n) {
+static unsigned char* fft_vendor_desc_(int kind, unsigned long n) {
 #if FFT_VENDOR
-    if (n > 2147483647UL) return (void*)0;
+    if (n > 2147483647UL) return (unsigned char*)0;
     int c = atomic_load_int(&g_fftv_count);
     int i = 0;
     while (i < c) {
-        if (g_fftv_kind[i] == kind && g_fftv_n[i] == n) { unsafe { return (void*)g_fftv_desc[i]; } }
+        if (g_fftv_kind[i] == kind && g_fftv_n[i] == n) { unsafe { return (unsigned char*)g_fftv_desc[i]; } }
         i = i + 1;
     }
     while (atomic_exchange_int(&g_fftv_lock, 1) != 0) { thread_yield(); }
-    void* d = (void*)0;
+    unsigned char* d = (unsigned char*)0;
     c = atomic_load_int(&g_fftv_count);
     i = 0;
     while (i < c) {
-        if (g_fftv_kind[i] == kind && g_fftv_n[i] == n) { unsafe { d = (void*)g_fftv_desc[i]; } }
+        if (g_fftv_kind[i] == kind && g_fftv_n[i] == n) { unsafe { d = (unsigned char*)g_fftv_desc[i]; } }
         i = i + 1;
     }
-    if (d == (void*)0 && c < FFT_PLANS) {
+    if (d == (unsigned char*)0 && c < FFT_PLANS) {
         d = fft_vendor_make_(kind, n);
-        if (d != (void*)0) {
+        if (d != (unsigned char*)0) {
             g_fftv_kind[c] = kind;
             g_fftv_n[c] = n;
             unsafe { g_fftv_desc[c] = (long long)d; }
@@ -883,7 +883,7 @@ static void* fft_vendor_desc_(int kind, unsigned long n) {
     atomic_store_int(&g_fftv_lock, 0);
     return d;
 #else
-    return (void*)0;
+    return (unsigned char*)0;
 #endif
 }
 
@@ -892,10 +892,10 @@ static void* fft_vendor_desc_(int kind, unsigned long n) {
 static int fft_vendor_c2c_(FFT_R* d, unsigned long n, int inv) {
 #if FFT_VENDOR
     if (!fft_vendor_linked_()) return 0;
-    void* desc = fft_vendor_desc_(FFT_KIND_C2C, n);
-    if (desc == (void*)0) return 0;
+    unsigned char* desc = fft_vendor_desc_(FFT_KIND_C2C, n);
+    if (desc == (unsigned char*)0) return 0;
     unsafe {
-        long r = inv ? DftiComputeBackward(desc, (void*)d) : DftiComputeForward(desc, (void*)d);
+        long r = inv ? DftiComputeBackward(desc, (unsigned char*)d) : DftiComputeForward(desc, (unsigned char*)d);
         if (r != 0L) return 0;
         if (FFT_SINGLE != 0 && inv) {
             FFT_R sc = (FFT_R)(1.0 / (double)n);
@@ -913,10 +913,10 @@ static int fft_vendor_c2c_(FFT_R* d, unsigned long n, int inv) {
 static int fft_vendor_r2c_(const FFT_R* in, FFT_R* out, unsigned long n, int full) {
 #if FFT_VENDOR
     if (!fft_vendor_linked_() || n < 2UL) return 0;
-    void* desc = fft_vendor_desc_(FFT_KIND_R2C, n);
-    if (desc == (void*)0) return 0;
+    unsigned char* desc = fft_vendor_desc_(FFT_KIND_R2C, n);
+    if (desc == (unsigned char*)0) return 0;
     unsafe {
-        if (DftiComputeForward(desc, (void*)in, (void*)out) != 0L) return 0;   // bins 0 .. n/2
+        if (DftiComputeForward(desc, (unsigned char*)in, (unsigned char*)out) != 0L) return 0;   // bins 0 .. n/2
         unsigned long k = 1UL;
         while (full && k < n / 2UL) {
             out[2UL * (n - k)] = out[2UL * k];

@@ -1,6 +1,7 @@
 // SafeC Standard Library — TLS: configuration, backend selection and the
 // TlsStream / TlsAcceptor front end (see tls.h; backends in tls_*.sc).
 #pragma once
+#include <std/stderr_compat.h>
 #include <std/stddef.h>
 #include <std/tls/tls.h>
 #include <std/tls/tls_backend.h>
@@ -15,18 +16,18 @@
 namespace std {
 
 extern char* getenv(const char* name);
-extern void* fopen(const char* path, const char* mode);
-extern unsigned long fread(void* buf, unsigned long size, unsigned long n, void* f);
-extern int fclose(void* f);
+extern CFile_* fopen(const char* path, const char* mode);
+extern unsigned long fread(unsigned char* buf, unsigned long size, unsigned long n, CFile_* f);
+extern int fclose(CFile_* f);
 
 #ifdef _WIN32
-extern int recv(unsigned long long fd, void* buf, int count, int flags);
-extern int send(unsigned long long fd, const void* buf, int count, int flags);
+extern int recv(unsigned long long fd, unsigned char* buf, int count, int flags);
+extern int send(unsigned long long fd, const unsigned char* buf, int count, int flags);
 extern int closesocket(unsigned long long fd);
 static int tls_sock_close_(int fd) { unsafe { return closesocket((unsigned long long)fd); } }
 #else
-extern ssize_t recv(int fd, void* buf, size_t count, int flags);
-extern ssize_t send(int fd, const void* buf, size_t count, int flags);
+extern ssize_t recv(int fd, unsigned char* buf, size_t count, int flags);
+extern ssize_t send(int fd, const unsigned char* buf, size_t count, int flags);
 extern int close(int fd);
 static int tls_sock_close_(int fd) { unsafe { return close(fd); } }
 #endif
@@ -112,9 +113,9 @@ long long tls_sock_recv_(int fd, &unsigned char buf, unsigned long n) {
         long long r = 0LL;
         unsafe {
 #ifdef _WIN32
-            r = (long long)recv((unsigned long long)fd, (void*)buf, (int)n, 0);
+            r = (long long)recv((unsigned long long)fd, (unsigned char*)buf, (int)n, 0);
 #else
-            r = (long long)recv(fd, (void*)buf, n, 0);
+            r = (long long)recv(fd, (unsigned char*)buf, n, 0);
 #endif
         }
         if (r >= 0LL) { return r; }
@@ -132,9 +133,9 @@ long long tls_sock_send_(int fd, const &unsigned char buf, unsigned long n) {
         long long r = 0LL;
         unsafe {
 #ifdef _WIN32
-            r = (long long)send((unsigned long long)fd, (const void*)buf, (int)n, 0);
+            r = (long long)send((unsigned long long)fd, (const unsigned char*)buf, (int)n, 0);
 #else
-            r = (long long)send(fd, (const void*)buf, n, TLS_MSG_NOSIGNAL_);
+            r = (long long)send(fd, (const unsigned char*)buf, n, TLS_MSG_NOSIGNAL_);
 #endif
         }
         if (r >= 0LL) { return r; }
@@ -170,11 +171,11 @@ int tls_name_is_ip_(const &char name) {
 
 int tls_read_file_(const &char path, &String out) {
     unsafe {
-        void* f = fopen((const char*)path, "rb");
-        if (f == (void*)0) { return 0; }
+        CFile_* f = fopen((const char*)path, "rb");
+        if (f == (CFile_*)0) { return 0; }
         unsigned char chunk[4096];
         while (1) {
-            unsigned long n = fread((void*)&chunk[0], 1UL, 4096UL, f);
+            unsigned long n = fread((unsigned char*)&chunk[0], 1UL, 4096UL, f);
             if (n == 0UL) { break; }
             out.push_n_((const &char)(const char*)&chunk[0], n);
         }
@@ -268,7 +269,7 @@ int tls_pem_private_key_(const &char text, &Vec<unsigned char> der, &int kind) {
             found = 1;
         }
     }
-    unsafe { mem_zero_secure_raw_((void*)body.as_ptr(), body.length()); }
+    unsafe { mem_zero_secure_raw_((unsigned char*)body.as_ptr(), body.length()); }
     lab.free();
     body.free();
     return found;
@@ -369,7 +370,7 @@ void TlsConfig::drop() {
     self.server_name.free();
     self.alpn.free();
     self.cert_pem.free();
-    unsafe { mem_zero_secure_raw_((void*)self.key_pem.as_ptr(), self.key_pem.length()); }
+    unsafe { mem_zero_secure_raw_((unsigned char*)self.key_pem.as_ptr(), self.key_pem.length()); }
     self.key_pem.free();
 }
 
@@ -400,7 +401,7 @@ void TlsServerConfig::free() { self.drop(); }
 
 void TlsServerConfig::drop() {
     self.cert_pem.free();
-    unsafe { mem_zero_secure_raw_((void*)self.key_pem.as_ptr(), self.key_pem.length()); }
+    unsafe { mem_zero_secure_raw_((unsigned char*)self.key_pem.as_ptr(), self.key_pem.length()); }
     self.key_pem.free();
     self.alpn.free();
     self.client_ca_pem.free();

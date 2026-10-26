@@ -12,16 +12,16 @@
 
 namespace std {
 
-extern int   pipe(void* pipefd);       // int pipefd[2]
-extern ssize_t  read(int fd, void* buf, size_t count);
-extern ssize_t  write(int fd, const void* buf, size_t count);
+extern int   pipe(unsigned char* pipefd);       // int pipefd[2]
+extern ssize_t  read(int fd, unsigned char* buf, size_t count);
+extern ssize_t  write(int fd, const unsigned char* buf, size_t count);
 extern int   close(int fd);
 extern int   fcntl(int fd, int cmd, ...);   // variadic: arm64 Apple passes the 3rd arg on the stack
 
 inline int Pipe::init() {
     int fds[2];
     int rc;
-    unsafe { rc = pipe((void*)&fds[0]); }
+    unsafe { rc = pipe((unsigned char*)&fds[0]); }
     if (rc != 0) {
         return -1;
     }
@@ -37,7 +37,7 @@ inline long long Pipe::read([]unsigned char buf_s) {
     &unsigned char buf;
     unsafe { buf = (&unsigned char)buf_s.ptr; }
     long n;
-    unsafe { n = read((int)self.read_fd, (void*)buf, count); }
+    unsafe { n = read((int)self.read_fd, (unsigned char*)buf, count); }
     return (long long)n;
 }
 
@@ -46,7 +46,7 @@ inline long long Pipe::write([]const unsigned char buf_s) {
     const &unsigned char buf;
     unsafe { buf = (const &unsigned char)buf_s.ptr; }
     long n;
-    unsafe { n = write((int)self.write_fd, (const void*)buf, count); }
+    unsafe { n = write((int)self.write_fd, (const unsigned char*)buf, count); }
     return (long long)n;
 }
 

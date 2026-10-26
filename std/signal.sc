@@ -4,7 +4,7 @@
 
 namespace std {
 
-extern void* signal(int sig, void* handler);
+extern unsigned char* signal(int sig, unsigned char* handler);
 extern int   raise(int sig);
 extern int   kill(int pid, int sig);
 extern int   pause();
@@ -12,17 +12,17 @@ extern int   pause();
 // SIG_DFL = 0, SIG_IGN = 1 on POSIX
 inline int signal_handle(int sig, fn void(int) handler) {
     unsafe {
-        void* prev = signal(sig, (void*)handler);
-        return prev == (void*)-1 ? -1 : 0;   // SIG_ERR
+        unsigned char* prev = signal(sig, (unsigned char*)handler);
+        return prev == (unsigned char*)-1 ? -1 : 0;   // SIG_ERR
     }
 }
 
 inline void signal_default(int sig) {
-    unsafe { signal(sig, (void*)0); }
+    unsafe { signal(sig, (unsigned char*)0); }
 }
 
 inline void signal_ignore(int sig) {
-    unsafe { signal(sig, (void*)1); }
+    unsafe { signal(sig, (unsigned char*)1); }
 }
 
 int signal_raise(int sig)        { unsafe { return raise(sig); } }

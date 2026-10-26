@@ -5,16 +5,16 @@
 namespace std {
 
 extern void abort();
-extern int fprintf(void* stream, const char* fmt, ...);
-#define NULL ((void*)0)
+extern int fprintf(CFile_* stream, const char* fmt, ...);
+#define NULL ((unsigned char*)0)
 
 // Stored as a raw pointer, not 'PanicHandler' directly: a '&static fn(...)'
 // reference is non-nullable, but "no handler installed" needs a null
 // sentinel — cast back to 'PanicHandler' at the call site instead.
-static void* current_handler_ = NULL;
+static unsigned char* current_handler_ = NULL;
 
 inline void panic_set_handler(PanicHandler handler) {
-    unsafe { current_handler_ = (void*)handler; }
+    unsafe { current_handler_ = (unsigned char*)handler; }
 }
 
 inline noreturn void panic_at(const &char msg, const &char file, int line) {

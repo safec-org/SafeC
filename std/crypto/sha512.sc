@@ -6,7 +6,7 @@
 
 namespace std {
 
-extern void* memset(void* p, int v, size_t n);
+extern unsigned char* memset(unsigned char* p, int v, size_t n);
 
 // ── SHA-512 constants ─────────────────────────────────────────────────────────
 
@@ -106,7 +106,7 @@ inline struct Sha512Ctx Sha512Ctx::new() {
     while (i < 8) { ctx.h[i] = sha512_H0_[i]; i = i + 1; }
     ctx.total_bytes = (unsigned long long)0;
     ctx.is384       = 0;
-    unsafe { memset((void*)ctx.buf, 0, (unsigned long)SHA512_BLOCK_SIZE); }
+    unsafe { memset((unsigned char*)ctx.buf, 0, (unsigned long)SHA512_BLOCK_SIZE); }
     return ctx;
 }
 

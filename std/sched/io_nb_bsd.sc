@@ -27,10 +27,10 @@ struct SockAddrIn {
 
 extern int open(const char* path, int flags, int mode);
 extern int socket(int domain, int type, int protocol);
-extern int bind(int fd, const void* addr, unsigned int addrlen);
+extern int bind(int fd, const unsigned char* addr, unsigned int addrlen);
 extern int listen(int fd, int backlog);
-extern int accept(int fd, void* addr, void* addrlen);
-extern int connect(int fd, const void* addr, unsigned int addrlen);
+extern int accept(int fd, unsigned char* addr, unsigned char* addrlen);
+extern int connect(int fd, const unsigned char* addr, unsigned int addrlen);
 // Real libc fcntl is 'int fcntl(int fd, int cmd, ...)' — genuinely
 // variadic, not (fd, cmd, arg). Declaring it with a fixed third 'int arg'
 // parameter instead of '...' is a real ABI mismatch on arm64/AAPCS64
@@ -46,7 +46,7 @@ extern int connect(int fd, const void* addr, unsigned int addrlen);
 // variadic-position arguments the way AAPCS64 does — but this was never
 // something to rely on either way.
 extern int fcntl(int fd, int cmd, ...);
-extern int setsockopt(int fd, int level, int optname, const void* optval, unsigned int optlen);
+extern int setsockopt(int fd, int level, int optname, const unsigned char* optval, unsigned int optlen);
 
 #define SCHED_SOL_SOCKET    0xffff
 #define SCHED_SO_REUSEADDR  0x0004
@@ -62,7 +62,7 @@ extern int setsockopt(int fd, int level, int optname, const void* optval, unsign
 static void sched_no_sigpipe_(int fd) {
     unsafe {
         int on = 1;
-        setsockopt(fd, SCHED_SOL_SOCKET, SCHED_SO_NOSIGPIPE, (const void*)&on, 4U);
+        setsockopt(fd, SCHED_SOL_SOCKET, SCHED_SO_NOSIGPIPE, (const unsigned char*)&on, 4U);
     }
 }
 #define SCHED_IPPROTO_TCP   6
@@ -74,8 +74,8 @@ static void sched_no_sigpipe_(int fd) {
 #define SCHED_EINTR         4
 #define SCHED_EINPROGRESS   36
 
-extern int poll(void* fds, unsigned int nfds, int timeout);
-extern int getsockopt(int fd, int level, int optname, void* optval, void* optlen);
+extern int poll(unsigned char* fds, unsigned int nfds, int timeout);
+extern int getsockopt(int fd, int level, int optname, unsigned char* optval, unsigned char* optlen);
 extern int close(int fd);
 
 struct SchedPollFd {
@@ -165,7 +165,7 @@ inline int tcp_listen_nb(unsigned short port) {
     unsafe {
         int reuseOpt = 1;
         setsockopt(fd, SCHED_SOL_SOCKET, SCHED_SO_REUSEADDR,
-                   (const void*)&reuseOpt, 4U);
+                   (const unsigned char*)&reuseOpt, 4U);
     }
 
     struct SockAddrIn addr;
@@ -176,7 +176,7 @@ inline int tcp_listen_nb(unsigned short port) {
     addr.sin_zero   = 0UL;
 
     int rc;
-    unsafe { rc = bind(fd, (const void*)&addr, 16U); }
+    unsafe { rc = bind(fd, (const unsigned char*)&addr, 16U); }
     if (rc != 0) {
         return -1;
     }
@@ -198,7 +198,7 @@ inline int tcp_listen_nb(unsigned short port) {
 
 inline int tcp_accept_nb(int listenfd) {
     int fd;
-    unsafe { fd = accept(listenfd, (void*)0, (void*)0); }
+    unsafe { fd = accept(listenfd, (unsigned char*)0, (unsigned char*)0); }
     if (fd < 0) {
         return -1;
     }
@@ -215,7 +215,7 @@ inline int tcp_accept_nb(int listenfd) {
     unsafe {
         int nodelayOpt = 1;
         setsockopt(fd, SCHED_IPPROTO_TCP, SCHED_TCP_NODELAY,
-                   (const void*)&nodelayOpt, 4U);
+                   (const unsigned char*)&nodelayOpt, 4U);
     }
     sched_no_sigpipe_(fd);
     return fd;
@@ -246,7 +246,7 @@ static int sched_connect_begin_(unsigned int addr_network_order, unsigned short 
     addr.sin_zero   = 0UL;
 
     int rc;
-    unsafe { rc = connect(fd, (const void*)&addr, 16U); }
+    unsafe { rc = connect(fd, (const unsigned char*)&addr, 16U); }
     int e = (rc == 0) ? 0 : errno_get();
     unsafe { *err_out = e; }
     return fd;
@@ -282,13 +282,13 @@ static int sched_wait_connected_(int fd, int timeout_ms) {
         pfd.events = (short)SCHED_POLLOUT;
         pfd.revents = (short)0;
         int n;
-        unsafe { n = poll((void*)&pfd, 1U, wait_ms); }
+        unsafe { n = poll((unsigned char*)&pfd, 1U, wait_ms); }
         if (n > 0) {
             int soerr = 0;
             unsigned int len = 4U;
             int grc;
             unsafe { grc = getsockopt(fd, SCHED_SOL_SOCKET, SCHED_SO_ERROR,
-                                      (void*)&soerr, (void*)&len); }
+                                      (unsigned char*)&soerr, (unsigned char*)&len); }
             return (grc != 0) ? errno_get() : soerr;
         }
         if (n == 0) {
@@ -340,8 +340,8 @@ inline int sock_set_io_timeout(int fd, int timeout_ms) {
     int rc1;
     int rc2;
     unsafe {
-        rc1 = setsockopt(fd, SCHED_SOL_SOCKET, SCHED_SO_RCVTIMEO, (const void*)&tv, 16U);
-        rc2 = setsockopt(fd, SCHED_SOL_SOCKET, SCHED_SO_SNDTIMEO, (const void*)&tv, 16U);
+        rc1 = setsockopt(fd, SCHED_SOL_SOCKET, SCHED_SO_RCVTIMEO, (const unsigned char*)&tv, 16U);
+        rc2 = setsockopt(fd, SCHED_SOL_SOCKET, SCHED_SO_SNDTIMEO, (const unsigned char*)&tv, 16U);
     }
     return (rc1 == 0 && rc2 == 0) ? 0 : -1;
 }

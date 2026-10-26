@@ -34,7 +34,7 @@
 
 namespace std {
 // The compiler's spawn hands over an untyped C function and argument.
-static int bare_spawn_(&TaskScheduler s, void* func, void* arg) {
+static int bare_spawn_(&TaskScheduler s, unsigned char* func, unsigned char* arg) {
     unsafe { return s.spawn_raw_((fn int(?&Erased, int))func, (?&Erased)arg); }
 }
 } // namespace std
@@ -42,7 +42,7 @@ static int bare_spawn_(&TaskScheduler s, void* func, void* arg) {
 static struct TaskScheduler __safec_bare_sched_;
 static int __safec_bare_sched_ready_ = 0;
 
-long long __safec_thread_create(void* func, void* arg) {
+long long __safec_thread_create(unsigned char* func, unsigned char* arg) {
     if (__safec_bare_sched_ready_ == 0) {
         __safec_bare_sched_ = std::TaskScheduler::new();
         __safec_bare_sched_ready_ = 1;

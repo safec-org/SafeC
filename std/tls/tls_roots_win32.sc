@@ -14,20 +14,20 @@ struct TlsWinCertCtx_ {
     unsigned int   encoding;
     unsigned char* data;
     unsigned int   len;
-    void*          info;
-    void*          store;
+    unsigned char*          info;
+    unsigned char*          store;
 };
 
-extern void* CertOpenSystemStoreA(void* prov, const char* name);
-extern void* CertEnumCertificatesInStore(void* store, void* prev);
-extern int   CertCloseStore(void* store, unsigned int flags);
+extern unsigned char* CertOpenSystemStoreA(unsigned char* prov, const char* name);
+extern unsigned char* CertEnumCertificatesInStore(unsigned char* store, unsigned char* prev);
+extern int   CertCloseStore(unsigned char* store, unsigned int flags);
 
 void tls_system_roots_(&TlsTrust_ out) {
     unsafe {
-        void* store = CertOpenSystemStoreA((void*)0, "ROOT");
-        if (store == (void*)0) { return; }
-        void* ctx = CertEnumCertificatesInStore(store, (void*)0);
-        while (ctx != (void*)0) {
+        unsigned char* store = CertOpenSystemStoreA((unsigned char*)0, "ROOT");
+        if (store == (unsigned char*)0) { return; }
+        unsigned char* ctx = CertEnumCertificatesInStore(store, (unsigned char*)0);
+        while (ctx != (unsigned char*)0) {
             struct TlsWinCertCtx_* c = (struct TlsWinCertCtx_*)ctx;
             if (c->data != (unsigned char*)0 && c->len > 0U) {
                 tls_trust_add_der_(out, (const &unsigned char)c->data, (unsigned long)c->len);

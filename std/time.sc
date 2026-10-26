@@ -6,8 +6,8 @@
 namespace std {
 
 extern long long time(long long* t);
-extern size_t strftime(char* s, size_t max, const char* format, const void* tm);
-extern long long mktime(void* tm);
+extern size_t strftime(char* s, size_t max, const char* format, const unsigned char* tm);
+extern long long mktime(unsigned char* tm);
 
 // gmtime_r/localtime_r/strptime are POSIX, not in any C standard --
 // Windows/MSVC's UCRT doesn't export them (same class of link failure as
@@ -50,19 +50,19 @@ inline int time_parse(const &char s, const &char fmt, &TimeFields tm) {
     return 0; // not implemented on Windows -- see comment above
 }
 #else
-extern void* gmtime_r(const long long* t, void* tm);
-extern void* localtime_r(const long long* t, void* tm);
-extern char* strptime(const char* s, const char* format, void* tm);
+extern unsigned char* gmtime_r(const long long* t, unsigned char* tm);
+extern unsigned char* localtime_r(const long long* t, unsigned char* tm);
+extern char* strptime(const char* s, const char* format, unsigned char* tm);
 
 inline struct TimeFields time_gmtime(long long t) {
     int tm_buf[14];   // 56 bytes: covers struct tm on all platforms
-    unsafe { gmtime_r((const long long*)&t, (void*)tm_buf); }
+    unsafe { gmtime_r((const long long*)&t, (unsigned char*)tm_buf); }
     return time_from_tm_(&tm_buf[0]);
 }
 
 inline struct TimeFields time_localtime(long long t) {
     int tm_buf[14];
-    unsafe { localtime_r((const long long*)&t, (void*)tm_buf); }
+    unsafe { localtime_r((const long long*)&t, (unsigned char*)tm_buf); }
     return time_from_tm_(&tm_buf[0]);
 }
 
@@ -72,7 +72,7 @@ inline int time_parse(const &char s, const &char fmt, &TimeFields tm) {
     while (i < 14) { tm_buf[i] = 0; i = i + 1; }
     tm_buf[8] = -1;
     char* end;
-    unsafe { end = strptime(s, fmt, (void*)tm_buf); }
+    unsafe { end = strptime(s, fmt, (unsigned char*)tm_buf); }
     if (end == (char*)0) return 0;
     *tm = time_from_tm_(&tm_buf[0]);
     return 1;
@@ -89,13 +89,13 @@ inline unsigned long time_format([]char buf, const &char fmt, const &TimeFields 
     if (buf.len == 0UL) { return 0UL; }
     int tm_buf[14];
     time_to_tm_(tm, &tm_buf[0]);
-    unsafe { return strftime((char*)buf.ptr, buf.len, fmt, (const void*)tm_buf); }
+    unsafe { return strftime((char*)buf.ptr, buf.len, fmt, (const unsigned char*)tm_buf); }
 }
 
 inline long long time_mktime(const &TimeFields tm) {
     int tm_buf[14];
     time_to_tm_(tm, &tm_buf[0]);
-    unsafe { return mktime((void*)tm_buf); }
+    unsafe { return mktime((unsigned char*)tm_buf); }
 }
 
 inline double time_diff(long long end, long long start) {
@@ -162,12 +162,12 @@ struct SafecTimespec_ {
     SAFEC_TS_FIELD_ tv_sec;
     SAFEC_TS_FIELD_ tv_nsec;
 };
-extern int clock_gettime(int clk, void* ts);
+extern int clock_gettime(int clk, unsigned char* ts);
 
 inline long long time_wall_ns() {
     unsafe {
         struct SafecTimespec_ ts;
-        if (clock_gettime(0, (void*)&ts) != 0) return -1LL;
+        if (clock_gettime(0, (unsigned char*)&ts) != 0) return -1LL;
         return (long long)ts.tv_sec * 1000000000LL + (long long)ts.tv_nsec;
     }
 }
@@ -202,7 +202,7 @@ inline long long time_mono_ns() {
 inline long long time_mono_ns() {
     unsafe {
         struct SafecTimespec_ ts;
-        if (clock_gettime(SAFEC_CLOCK_MONOTONIC_, (void*)&ts) != 0) return -1LL;
+        if (clock_gettime(SAFEC_CLOCK_MONOTONIC_, (unsigned char*)&ts) != 0) return -1LL;
         return (long long)ts.tv_sec * 1000000000LL + (long long)ts.tv_nsec;
     }
 }
@@ -212,15 +212,15 @@ inline long long time_mono_ns() {
 // not epoch-relative here) are the Win32 equivalent of
 // CLOCK_PROCESS_CPUTIME_ID -- total CPU time this process has consumed.
 #ifdef _WIN32
-extern void* GetCurrentProcess();
-extern int   GetProcessTimes(void* h, long long* creation, long long* exitT,
+extern unsigned char* GetCurrentProcess();
+extern int   GetProcessTimes(unsigned char* h, long long* creation, long long* exitT,
                               long long* kernel, long long* user);
 
 inline long long time_cpu_ns() {
     unsafe {
         long long creation = 0LL; long long exitT = 0LL;
         long long kernel = 0LL; long long user = 0LL;
-        void* h = GetCurrentProcess();
+        unsigned char* h = GetCurrentProcess();
         if (GetProcessTimes(h, &creation, &exitT, &kernel, &user) == 0) return -1LL;
         return (kernel + user) * 100LL;
     }
@@ -229,7 +229,7 @@ inline long long time_cpu_ns() {
 inline long long time_cpu_ns() {
     unsafe {
         struct SafecTimespec_ ts;
-        if (clock_gettime(SAFEC_CLOCK_CPUTIME_, (void*)&ts) != 0) return -1LL;
+        if (clock_gettime(SAFEC_CLOCK_CPUTIME_, (unsigned char*)&ts) != 0) return -1LL;
         return (long long)ts.tv_sec * 1000000000LL + (long long)ts.tv_nsec;
     }
 }
@@ -258,14 +258,14 @@ inline void time_sleep_ns(long long ns) {
     }
 }
 #else
-extern int nanosleep(void* req, void* rem);
+extern int nanosleep(unsigned char* req, unsigned char* rem);
 
 inline void time_sleep_ns(long long ns) {
     unsafe {
         struct SafecTimespec_ ts;
         ts.tv_sec = (SAFEC_TS_FIELD_)(ns / 1000000000LL);
         ts.tv_nsec = (SAFEC_TS_FIELD_)(ns % 1000000000LL);
-        nanosleep((void*)&ts, (void*)0);
+        nanosleep((unsigned char*)&ts, (unsigned char*)0);
     }
 }
 #endif

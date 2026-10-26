@@ -7,27 +7,27 @@
 
 namespace std {
 
-extern void* memcpy(void* d, const void* s, size_t n);
+extern unsigned char* memcpy(unsigned char* d, const unsigned char* s, size_t n);
 // Hosted-mode seeding from /dev/urandom. Declared here at file scope: this
 // parser only accepts 'extern' declarations at top level, not nested inside
 // a function body.
-extern void* fopen(const char* path, const char* mode);
-extern size_t fread(void* buf, size_t size, size_t n, void* f);
-extern int fclose(void* f);
+extern CFile_* fopen(const char* path, const char* mode);
+extern size_t fread(unsigned char* buf, size_t size, size_t n, CFile_* f);
+extern int fclose(CFile_* f);
 // Same rationale as mem.sc/pool.sc/slab.sc/tlsf.sc for not using
 // panic.h/panic_at here (no forced --compat-preprocessor link dependency
 // for every RNG user).
 extern void  abort();
-extern int   fprintf(void* stream, const char* fmt, ...);
+extern int   fprintf(CFile_* stream, const char* fmt, ...);
 // The OS's own CSPRNG, the first seed source tried (see RngCtx::init).
 #if defined(_WIN32)
 // bcrypt.dll: NTSTATUS BCryptGenRandom(BCRYPT_ALG_HANDLE, PUCHAR, ULONG, ULONG);
 // a null algorithm with BCRYPT_USE_SYSTEM_PREFERRED_RNG (2) needs no handle.
-extern int BCryptGenRandom(void* alg, unsigned char* buf, unsigned int len, unsigned int flags);
+extern int BCryptGenRandom(unsigned char* alg, unsigned char* buf, unsigned int len, unsigned int flags);
 #elif defined(__APPLE__)
-extern int getentropy(void* buf, size_t len);              // libSystem, at most 256 bytes
+extern int getentropy(unsigned char* buf, size_t len);              // libSystem, at most 256 bytes
 #elif defined(__linux__)
-extern long getrandom(void* buf, size_t len, unsigned int flags);   // glibc 2.25+, musl
+extern long getrandom(unsigned char* buf, size_t len, unsigned int flags);   // glibc 2.25+, musl
 #endif
 
 static void rng_abort_(const char* msg) {
@@ -133,11 +133,11 @@ int RngCtx::init() {
         unsigned char os_seed[32];
         int os_ok = 0;
 #if defined(_WIN32)
-        if (BCryptGenRandom((void*)0, (unsigned char*)os_seed, (unsigned int)32, (unsigned int)2) == 0) { os_ok = 1; }
+        if (BCryptGenRandom((unsigned char*)0, (unsigned char*)os_seed, (unsigned int)32, (unsigned int)2) == 0) { os_ok = 1; }
 #elif defined(__APPLE__)
-        if (getentropy((void*)os_seed, (size_t)32) == 0) { os_ok = 1; }
+        if (getentropy((unsigned char*)os_seed, (size_t)32) == 0) { os_ok = 1; }
 #else
-        if (getrandom((void*)os_seed, (size_t)32, (unsigned int)0) == (long)32) { os_ok = 1; }
+        if (getrandom((unsigned char*)os_seed, (size_t)32, (unsigned int)0) == (long)32) { os_ok = 1; }
 #endif
         if (os_ok != 0) {
             self.init_seed(os_seed);
@@ -184,10 +184,10 @@ int RngCtx::init() {
 #ifndef __SAFEC_FREESTANDING__
     // Hosted: seed from /dev/urandom
     unsafe {
-        void* f = fopen("/dev/urandom", "rb");
-        if (f != (void*)0) {
+        CFile_* f = fopen("/dev/urandom", "rb");
+        if (f != (CFile_*)0) {
             unsigned char seed[32];
-            unsigned long got = fread((void*)seed, (unsigned long)1, (unsigned long)32, f);
+            unsigned long got = fread((unsigned char*)seed, (unsigned long)1, (unsigned long)32, f);
             fclose(f);
             if (got == (unsigned long)32) {      // a short read would seed from stack garbage
                 self.init_seed(seed);

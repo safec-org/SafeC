@@ -259,7 +259,7 @@ void AsyncTask::drop() {
     // dropping it (its future may borrow locals that are going away) would
     // leave the executor polling freed memory. Finish, or abort() and run
     // the executor until it is done, first.
-    if (self.hdr.exec_ != (void*)0 && (async_load_(&self.hdr.state) & ASYNC_TASK_DONE) == 0)
+    if (self.hdr.exec_ != (unsigned char*)0 && (async_load_(&self.hdr.state) & ASYNC_TASK_DONE) == 0)
         panic_at("AsyncTask dropped while its executor may still poll it", "std/async/executor.h", 0);
     self.fut.drop();                 // idempotent: a finished future drops nothing
     self.hdr.joiner.drop();

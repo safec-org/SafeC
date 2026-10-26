@@ -4,16 +4,16 @@
 
 namespace std {
 
-extern int fprintf(void* stream, const char* fmt, ...);
-#define NULL ((void*)0)
+extern int fprintf(CFile_* stream, const char* fmt, ...);
+#define NULL ((unsigned char*)0)
 
 // Stored as a raw pointer (not 'LogBackend' directly): a '&static fn(...)'
 // reference is non-nullable, but "no custom backend installed" needs a null
 // sentinel here. Cast back to 'LogBackend' at the call site instead.
-static void* backend_ = NULL;
+static unsigned char* backend_ = NULL;
 
 inline void log_set_backend(LogBackend backend) {
-    unsafe { backend_ = (void*)backend; }
+    unsafe { backend_ = (unsigned char*)backend; }
 }
 
 void log_write(int level, const &char tag, const &char msg,

@@ -80,7 +80,7 @@ long long BufReader::read([]unsigned char out_s) {
     }
     unsigned long m = self.len - self.pos;
     if (m > n) { m = n; }
-    unsafe { safe_memcpy_raw_((void*)out, (const void*)&self.buf[self.pos], m); }
+    unsafe { safe_memcpy_raw_((unsigned char*)out, (const unsigned char*)&self.buf[self.pos], m); }
     self.pos = self.pos + m;
     return (long long)m;
 }
@@ -178,7 +178,7 @@ long long BufWriter::write([]const unsigned char data_s) {
             return write_all(self.inner, data_s) ? (long long)n : -1LL;
         }
     }
-    unsafe { safe_memcpy_raw_((void*)&self.buf[self.len], (const void*)data, n); }
+    unsafe { safe_memcpy_raw_((unsigned char*)&self.buf[self.len], (const unsigned char*)data, n); }
     self.len = self.len + n;
     return (long long)n;
 }
