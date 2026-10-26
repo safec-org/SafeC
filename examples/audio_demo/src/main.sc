@@ -88,7 +88,7 @@ static void print_formats(unsigned int f) {
 static void list_audio(int api) {
     struct Result<Audio, AudioError> r = std::Audio::open(api);
     match (r.get_err()) {
-        case some(e): { printf("  %s: %s\n", std::audio_api_display_name(api), e.message); return; }
+        case some(e): { printf("  %s: %s\n", std::audio_api_display_name(api), e.message); r.drop(); return; }
         case null: {}
     }
     struct Audio a = r.unwrap_or(std::Audio::closed());
@@ -109,7 +109,7 @@ static void list_audio(int api) {
 static void list_midi(int api) {
     struct Result<MidiIn, AudioError> ri = std::MidiIn::open(api, "audio_demo", 0UL);
     match (ri.get_err()) {
-        case some(e): { printf("  %s: %s\n", std::midi_api_display_name(api), e.message); return; }
+        case some(e): { printf("  %s: %s\n", std::midi_api_display_name(api), e.message); ri.drop(); return; }
         case null: {}
     }
     struct MidiIn in = ri.unwrap_or(std::MidiIn::closed());
@@ -188,7 +188,7 @@ int render_tone(&AudioIo io, ?&Tone tp) {
 
 static int cmd_sine(&Args a) {
     struct Result<Audio, AudioError> r = std::Audio::open(audio_api_of(a));
-    match (r.get_err()) { case some(e): { printf("audio_demo: %s\n", e.message); return 1; } case null: {} }
+    match (r.get_err()) { case some(e): { printf("audio_demo: %s\n", e.message); r.drop(); return 1; } case null: {} }
     struct Audio audio = r.unwrap_or(std::Audio::closed());
     unsigned int dev = a.device != AUDIO_DEFAULT_DEVICE ? a.device : audio.default_output_device();
     struct AudioDeviceInfo info = audio.device_by_id(dev).unwrap_or(std::AudioDeviceInfo::none());
@@ -214,7 +214,7 @@ static int cmd_sine(&Args a) {
     struct Result<AudioStream, AudioError> sr =
         audio.open_stream((?&AudioStreamParams)&out, null, AUDIO_FORMAT_F32, rate, &frames, render_tone,
                           (?&Tone)&tone, (?&AudioStreamOptions)&opts);
-    match (sr.get_err()) { case some(e): { printf("audio_demo: %s\n", e.message); audio.close(); return 1; } case null: {} }
+    match (sr.get_err()) { case some(e): { printf("audio_demo: %s\n", e.message); sr.drop(); audio.close(); return 1; } case null: {} }
     struct AudioStream s = sr.unwrap_or(std::AudioStream::closed());
     printf("playing %.0f Hz on '%s' (%s): %d ch, %u Hz, %u frames/callback, latency %ld frames\n", a.freq, info.name,
            std::audio_api_display_name(audio.api()), channels, s.sample_rate(), frames, s.latency());
@@ -252,7 +252,7 @@ static unsigned char g_buf[65536];
 
 static int cmd_midi(&Args a) {
     struct Result<MidiIn, AudioError> r = std::MidiIn::open(midi_api_of(a), "audio_demo", 0UL);
-    match (r.get_err()) { case some(e): { printf("audio_demo: %s\n", e.message); return 1; } case null: {} }
+    match (r.get_err()) { case some(e): { printf("audio_demo: %s\n", e.message); r.drop(); return 1; } case null: {} }
     struct MidiIn in = r.unwrap_or(std::MidiIn::closed());
     struct AudioError e = std::AudioError::none();
     if (a.virtual_port || in.port_count() == 0U) {

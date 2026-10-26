@@ -61,6 +61,7 @@ int main() {
         case null: {
             // No display to open a window on (a headless CI runner, say).
             unsafe { printf("gui_hello: no window (no display?)\n"); }
+            app.free();
             return 0;
         }
         case some(win): {

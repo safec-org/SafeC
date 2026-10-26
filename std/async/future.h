@@ -302,6 +302,16 @@ struct YieldNow {
     void drop();
 };
 
+// If 'p' is Ready, moves its value into the slot *dst (whose old contents
+// are not dropped: an empty slot) and returns 1; else drops 'p', returns 0.
+// For a combinator storing a child's output.
+generic<T>
+int poll_take_into_(struct Poll<T> p, &T dst) {
+    if (p.ready_ == 0) { p.drop(); return 0; }
+    *dst = p.unwrap();
+    return 1;
+}
+
 generic<T> struct Poll<T> Poll::ready(T v) { struct Poll<T> p; p.ready_ = 1; p.value = v; return p; }
 generic<T> struct Poll<T> Poll::pending() { struct Poll<T> p; p.ready_ = 0; return p; }
 generic<T> int Poll::is_ready() const { return self.ready_; }

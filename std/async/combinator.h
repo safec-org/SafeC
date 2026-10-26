@@ -34,13 +34,14 @@ struct Both {
 };
 
 // Which future a Select2 picked, and its output (Rust's Either; the other
-// field is unset).
+// field is unset). It owns that output when its type owns something.
 generic<TA, TB>
 struct Either {
     int which;     // 1: 'left' holds the first future's output, 2: 'right' the second's
     TA  left;
     TB  right;
     int is_left() const;
+    void drop() if (needs_drop(TA) || needs_drop(TB));
 };
 
 // One output of a SelectAny, and whose it is.
@@ -57,10 +58,11 @@ struct Join2 {
     B   b;
     TA  ra[1];
     TB  rb[1];
-    int done_a;
+    int done_a;     // 1: ra holds a's output
     int done_b;
+    int delivered;  // the outputs moved out in the Ready Both
     struct Poll<struct Both<TA, TB>> poll(&Context cx);
-    void drop();
+    void drop();    // and outputs nobody received
 };
 
 // Three at once. Output: Both<TA, Both<TB, TC>> -- (a, (b, c)).
@@ -72,9 +74,10 @@ struct Join3 {
     TA  ra[1];
     TB  rb[1];
     TC  rc[1];
-    int done;     // bit 0: a, 1: b, 2: c
+    int done;       // bit 0: a, 1: b, 2: c (its output is stored)
+    int delivered;  // the outputs moved out in the Ready Both
     struct Poll<struct Both<TA, struct Both<TB, TC>>> poll(&Context cx);
-    void drop();
+    void drop();    // and outputs nobody received
 };
 
 // Polls every future in 'futs' until all are Ready, storing future i's
@@ -165,30 +168,32 @@ struct Join2<A, B, TA, TB> join2(A a, B b) {
     j.b = b;
     j.done_a = 0;
     j.done_b = 0;
+    j.delivered = 0;
     return j;
 }
 
 generic<A: Future, B: Future, TA, TB>
 struct Poll<struct Both<TA, TB>> Join2::poll(&Context cx) {
-    if (self.done_a == 0) {
-        struct Poll<TA> pa = self.a.poll(cx);
-        if (pa.ready_ != 0) { self.ra[0] = pa.value; self.done_a = 1; }
-    }
-    if (self.done_b == 0) {
-        struct Poll<TB> pb = self.b.poll(cx);
-        if (pb.ready_ != 0) { self.rb[0] = pb.value; self.done_b = 1; }
-    }
+    if (self.done_a == 0 && poll_take_into_(self.a.poll(cx), &self.ra[0]) != 0) self.done_a = 1;
+    if (self.done_b == 0 && poll_take_into_(self.b.poll(cx), &self.rb[0]) != 0) self.done_b = 1;
     if (self.done_a == 0 || self.done_b == 0) return Poll::pending();
     struct Both<TA, TB> r;
-    r.first = self.ra[0];
-    r.second = self.rb[0];
+    unsafe {   // the outputs move out of their slots (once: 'delivered')
+        r.first = self.ra[0];
+        r.second = self.rb[0];
+    }
+    self.delivered = 1;
     return Poll::ready(r);
 }
 
 generic<A: Future, B: Future, TA, TB>
 void Join2::drop() {
-    if (self.done_a == 0) { self.a.drop(); self.done_a = 1; }
-    if (self.done_b == 0) { self.b.drop(); self.done_b = 1; }
+    if (self.done_a == 0) { self.a.drop(); self.done_a = 2; }
+    else if (self.done_a == 1 && self.delivered == 0) { unsafe { drop(self.ra[0]); } }
+    if (self.done_b == 0) { self.b.drop(); self.done_b = 2; }
+    else if (self.done_b == 1 && self.delivered == 0) { unsafe { drop(self.rb[0]); } }
+    self.delivered = 1;
+    unsafe { forget(self.ra); forget(self.rb); }   // empty, moved out, or dropped above
 }
 
 generic<A, B, C, TA, TB, TC>
@@ -198,39 +203,42 @@ struct Join3<A, B, C, TA, TB, TC> join3(A a, B b, C c) {
     j.b = b;
     j.c = c;
     j.done = 0;
+    j.delivered = 0;
     return j;
 }
 
 generic<A: Future, B: Future, C: Future, TA, TB, TC>
 struct Poll<struct Both<TA, struct Both<TB, TC>>> Join3::poll(&Context cx) {
-    if ((self.done & 1) == 0) {
-        struct Poll<TA> pa = self.a.poll(cx);
-        if (pa.ready_ != 0) { self.ra[0] = pa.value; self.done = self.done | 1; }
-    }
-    if ((self.done & 2) == 0) {
-        struct Poll<TB> pb = self.b.poll(cx);
-        if (pb.ready_ != 0) { self.rb[0] = pb.value; self.done = self.done | 2; }
-    }
-    if ((self.done & 4) == 0) {
-        struct Poll<TC> pc = self.c.poll(cx);
-        if (pc.ready_ != 0) { self.rc[0] = pc.value; self.done = self.done | 4; }
-    }
+    if ((self.done & 1) == 0 && poll_take_into_(self.a.poll(cx), &self.ra[0]) != 0) self.done = self.done | 1;
+    if ((self.done & 2) == 0 && poll_take_into_(self.b.poll(cx), &self.rb[0]) != 0) self.done = self.done | 2;
+    if ((self.done & 4) == 0 && poll_take_into_(self.c.poll(cx), &self.rc[0]) != 0) self.done = self.done | 4;
     if (self.done != 7) return Poll::pending();
     struct Both<TB, TC> bc;
-    bc.first = self.rb[0];
-    bc.second = self.rc[0];
     struct Both<TA, struct Both<TB, TC>> r;
-    r.first = self.ra[0];
+    unsafe {   // the outputs move out of their slots (once: 'delivered')
+        bc.first = self.rb[0];
+        bc.second = self.rc[0];
+        r.first = self.ra[0];
+    }
     r.second = bc;
+    self.delivered = 1;
     return Poll::ready(r);
 }
 
 generic<A: Future, B: Future, C: Future, TA, TB, TC>
 void Join3::drop() {
+    int stored = self.delivered == 0 ? self.done : 0;
     if ((self.done & 1) == 0) self.a.drop();
     if ((self.done & 2) == 0) self.b.drop();
     if ((self.done & 4) == 0) self.c.drop();
+    unsafe {
+        if ((stored & 1) != 0) drop(self.ra[0]);
+        if ((stored & 2) != 0) drop(self.rb[0]);
+        if ((stored & 4) != 0) drop(self.rc[0]);
+        forget(self.ra); forget(self.rb); forget(self.rc);   // empty, moved out, or dropped above
+    }
     self.done = 7;
+    self.delivered = 1;
 }
 
 generic<F, T>
@@ -252,8 +260,7 @@ struct Poll<int> JoinAll::poll(&Context cx) {
     while (i < n) {
         unsigned long long bit = 1ULL << i;
         if ((self.done & bit) == 0ULL) {
-            struct Poll<T> p = self.futs[i].poll(cx);
-            if (p.ready_ != 0) { self.outs[i] = p.value; self.done = self.done | bit; }
+            if (poll_take_into_(self.futs[i].poll(cx), &self.outs[i]) != 0) self.done = self.done | bit;
         }
         i = i + 1UL;
     }
@@ -284,24 +291,37 @@ struct Select2<A, B, TA, TB> select2(A a, B b) {
 
 generic<A: Future, B: Future, TA, TB>
 struct Poll<struct Either<TA, TB>> Select2::poll(&Context cx) {
-    struct Either<TA, TB> e;
     struct Poll<TA> pa = self.a.poll(cx);
     if (pa.ready_ != 0) {
         self.b.drop();
         self.finished = 1;
+        struct Either<TA, TB> e;
         e.which = 1;
-        e.left = pa.value;
+        e.left = pa.unwrap();
         return Poll::ready(e);
     }
+    pa.drop();
     struct Poll<TB> pb = self.b.poll(cx);
     if (pb.ready_ != 0) {
         self.a.drop();
         self.finished = 1;
+        struct Either<TA, TB> e;
         e.which = 2;
-        e.right = pb.value;
+        e.right = pb.unwrap();
         return Poll::ready(e);
     }
+    pb.drop();
     return Poll::pending();
+}
+
+generic<TA, TB>
+void Either::drop() {
+    unsafe {   // only the slot 'which' names holds a value
+        if (self.which == 1) drop(self.left);
+        if (self.which == 2) drop(self.right);
+        forget(self.left); forget(self.right);
+    }
+    self.which = 0;
 }
 
 generic<A: Future, B: Future, TA, TB>
@@ -323,7 +343,8 @@ struct Poll<struct Picked<T>> SelectAny::poll(&Context cx) {
     unsigned long i = 0UL;
     while (i < n) {
         struct Poll<T> p = self.futs[i].poll(cx);
-        if (p.ready_ != 0) {
+        if (p.ready_ == 0) p.drop();
+        else {
             unsigned long k = 0UL;
             while (k < n) {
                 if (k != i) self.futs[k].drop();
@@ -332,7 +353,7 @@ struct Poll<struct Picked<T>> SelectAny::poll(&Context cx) {
             self.finished = 1;
             struct Picked<T> r;
             r.index = (int)i;
-            r.value = p.value;
+            r.value = p.unwrap();
             return Poll::ready(r);
         }
         i = i + 1UL;
@@ -393,8 +414,8 @@ struct MapFut<F, T, U> map_fut(F inner, fn U(T) f) {
 generic<F: Future, T, U>
 struct Poll<U> MapFut::poll(&Context cx) {
     struct Poll<T> p = self.inner.poll(cx);
-    if (p.ready_ == 0) return Poll::pending();
-    return Poll::ready(self.f(p.value));
+    if (p.ready_ == 0) { p.drop(); return Poll::pending(); }
+    return Poll::ready(self.f(p.unwrap()));
 }
 
 generic<F: Future, T, U>
@@ -413,13 +434,13 @@ generic<F: Future, T, G: Future, U>
 struct Poll<U> AndThen::poll(&Context cx) {
     if (self.stage == 0) {
         struct Poll<T> p = self.first.poll(cx);
-        if (p.ready_ == 0) return Poll::pending();
-        self.second[0] = self.f(p.value);
+        if (p.ready_ == 0) { p.drop(); return Poll::pending(); }
+        self.second[0] = self.f(p.unwrap());
         self.stage = 1;
     }
     if (self.stage == 1) {
         struct Poll<U> q = self.second[0].poll(cx);
-        if (q.ready_ == 0) return Poll::pending();
+        if (q.ready_ == 0) { q.drop(); return Poll::pending(); }
         self.stage = 2;
         return q;
     }

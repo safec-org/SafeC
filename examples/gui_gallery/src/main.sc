@@ -649,6 +649,7 @@ int main(int argc, char** argv) {
     g.canvas = app.open(&co);
     if (g.widgets.is_null() || g.canvas.is_null()) {
         unsafe { printf("gui_gallery: no window (no display?)\n"); }
+        g.photo.free();
         app.free();
         return 0;
     }
