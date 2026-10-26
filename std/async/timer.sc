@@ -132,7 +132,7 @@ static void sleep_fire_(?&Sleep sp) {
             s.id = 0;
             if (s.has_waker != 0) {
                 s.has_waker = 0;
-                struct Waker w = s.waker;
+                struct Waker w = std::replace(&s.waker, Waker::noop());
                 w.wake();
             }
         }
@@ -226,7 +226,9 @@ void Sleep::drop() {
 }
 
 void Sleep::reset(long long ms) {
-    self.drop();
+    // Drop in place (unregisters it; drop() is idempotent), then rearm the
+    // same, still pinned, Sleep.
+    unsafe { self.drop(); }
     self.duration_ms = ms < 0LL ? 0LL : ms;
     self.armed = 0;
     self.fired = 0;

@@ -2895,6 +2895,17 @@ ExprPtr Parser::parsePostfixExpr() {
 
 ExprPtr Parser::parsePrimaryExpr() {
     auto loc = cur().loc;
+    // 'needs_drop(T)': a compile-time constant, 1 if T owns something that
+    // must be dropped (for 'if const' in generic code).
+    if (cur().isIdent("needs_drop") && peek().is(TK::LParen)) {
+        consume();
+        consume();
+        auto t = parseType();
+        expect(TK::RParen, "expected ')' after needs_drop type");
+        auto fc = std::make_unique<FieldCountExpr>(std::move(t), loc);
+        fc->isNeedsDrop = true;
+        return fc;
+    }
     switch (cur().kind) {
     case TK::KW_fn_eval:
         // Parsed here (not parseUnaryExpr, unlike 'match'/'_Generic') so

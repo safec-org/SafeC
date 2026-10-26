@@ -281,8 +281,9 @@ static ExprPtr cloneExprImpl(const Expr *ep, const TypeSubst &subs) {
     }
     case ExprKind::FieldCount: {
         auto &fc = static_cast<const FieldCountExpr &>(e);
-        return fix(std::make_unique<FieldCountExpr>(
-            substituteType(fc.ofType, subs), fc.loc));
+        auto c = std::make_unique<FieldCountExpr>(substituteType(fc.ofType, subs), fc.loc);
+        c->isNeedsDrop = fc.isNeedsDrop;
+        return fix(std::move(c));
     }
     case ExprKind::SizeofPack: {
         auto &sp = static_cast<const SizeofPackExpr &>(e);

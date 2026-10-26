@@ -41,6 +41,7 @@
 // UNIT).
 #pragma once
 #include <std/sync/spinlock.h>
+#include <std/ownership.h>
 #include <std/dsp/timer_wheel.h>
 
 typedef int Unit;     // the output of a future that produces nothing: Rust's ()
@@ -118,7 +119,7 @@ struct Waker {
     // Type-erased constructor behind new/counted.
     static struct Waker raw_(void* wake, void* clone, void* drop, void* data, unsigned long tag);
 
-    void wake();                         // wake_by_ref(), then drop()
+    void wake() consume;                 // wake_by_ref(), then drop()
     void wake_by_ref() const;
     struct Waker clone() const;
     void drop();
@@ -253,6 +254,9 @@ struct Context {
     static struct Context noop();
 
     void wake_by_ref() const;    // waker.wake_by_ref(): "poll me again soon"
+    // Releases the waker. A Context owns its waker (a Drop value), so the
+    // executor that made one drops it after the poll.
+    void drop();
 };
 
 // ── Leaf futures ───────────────────────────────────────────────────────────

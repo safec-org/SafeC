@@ -296,7 +296,7 @@ void IoDriver::on_ready_(int fd, int filter) {
     int i = 0;
     while (i < ASYNC_IO_WAITERS) {
         if (self.waiters[i].serial != 0 && self.waiters[i].fd == fd) {
-            struct Waker w = self.waiters[i].w;
+            struct Waker w = std::replace(&self.waiters[i].w, Waker::noop());
             io_free_slot_(self, i);
             w.wake();
         }

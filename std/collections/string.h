@@ -102,7 +102,8 @@ struct String {
 
     // ── Lifecycle ────────────────────────────────────────────────────────────
     struct String  clone() const;
-    void           free();
+    void           drop();                 // frees the buffer (Drop)
+    void           free() consume;         // = drop()
 
     // ── Internal ────────────────────────────────────────────────────────────
     int            reserve_(unsigned long need);

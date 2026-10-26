@@ -299,6 +299,10 @@ private:
     llvm::Value *genSpawn(SpawnExpr &e, FnEnv &env);
 
     // Helpers
+    // drop(x) glue: call T_drop on 'addr' (a T), or drop each owning
+    // member of an aggregate (fields, elements, a present optional's value).
+    bool needsDropGlue(const TypePtr &ty, int depth = 0);
+    void emitDropGlue(llvm::Value *addr, const TypePtr &ty, FnEnv &env, int depth = 0);
     llvm::AllocaInst *createEntryAlloca(FnEnv &env, llvm::Type *ty,
                                          const std::string &name);
     llvm::Value *boolify(llvm::Value *v, const TypePtr &ty);  // produce i1

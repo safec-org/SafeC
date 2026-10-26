@@ -233,6 +233,35 @@ bool Sema::isMustDrop(const TypePtr &t0) const {
     }
 }
 
+std::string Sema::displayType(const TypePtr &t) const {
+    if (!t) return "?";
+    switch (t->kind) {
+    case TypeKind::Struct: {
+        auto &st = static_cast<const StructType &>(*t);
+        auto it = structInstanceOrigin_.find(st.name);
+        if (it == structInstanceOrigin_.end()) return st.name;
+        std::string s = it->second.first + "<";
+        for (size_t i = 0; i < it->second.second.size(); ++i)
+            s += (i ? ", " : "") + displayType(it->second.second[i]);
+        return s + ">";
+    }
+    case TypeKind::Optional: return "?" + displayType(static_cast<const OptionalType &>(*t).inner);
+    case TypeKind::Array: {
+        auto &a = static_cast<const ArrayType &>(*t);
+        return displayType(a.element) + "[" + (a.size >= 0 ? std::to_string(a.size) : "") + "]";
+    }
+    case TypeKind::Reference: {
+        auto &r = static_cast<const ReferenceType &>(*t);
+        std::string s = t->str();
+        std::string b = r.base ? r.base->str() : "";
+        if (!b.empty() && s.size() >= b.size() && s.compare(s.size() - b.size(), b.size(), b) == 0)
+            return s.substr(0, s.size() - b.size()) + displayType(r.base);
+        return s;
+    }
+    default: return t->str();
+    }
+}
+
 bool Sema::isConsumeMethod(const FunctionDecl *fd) const {
     if (!fd || !fd->isMethod || fd->isStaticMethod) return false;
     if (fd->isConsume) return true;
@@ -2112,6 +2141,11 @@ void Sema::checkStmt(Stmt &s, FunctionDecl &fn) {
 std::optional<int64_t> Sema::tryConstInt(const Expr &e) {
     switch (e.kind) {
     case ExprKind::IntLit: return static_cast<const IntLitExpr &>(e).value;
+    case ExprKind::FieldCount: {
+        auto &fc = static_cast<const FieldCountExpr &>(e);
+        if (!fc.isNeedsDrop || !fc.ofType || fc.ofType->kind == TypeKind::Generic) return std::nullopt;
+        return fc.needsDropValue;
+    }
     case ExprKind::SizeofType: {
         auto &se = static_cast<const SizeofTypeExpr &>(e);
         TypePtr t = resolveType(se.ofType);
@@ -2446,6 +2480,11 @@ TypePtr Sema::checkExpr(Expr &e) {
     case ExprKind::FieldCount: {
         auto &fc = static_cast<FieldCountExpr &>(e);
         fc.ofType = resolveType(fc.ofType);
+        if (fc.isNeedsDrop) {
+            fc.needsDropValue = isMustDrop(fc.ofType) ? 1 : 0;
+            ty = makeInt(32, true);
+            break;
+        }
         if (fc.ofType && fc.ofType->kind == TypeKind::Struct) {
             ty = makeInt(64, false);
         } else {
@@ -3777,6 +3816,38 @@ TypePtr Sema::checkCall(CallExpr &e) {
         // compiles to nothing. Leaking can break what a value's drop()
         // guarantees (a lock released, a scoped thread joined), so it is an
         // explicit, auditable 'unsafe' operation.
+        // ── drop(x): run x's destructor glue ────────────────────────────────
+        // x.drop() for a type with a drop() method; for an aggregate, drop
+        // every member that owns something (fields, elements, a present
+        // optional's value); nothing for a type that owns nothing. This is
+        // how generic code drops a T it owns, whatever T is.
+        if (ident.name == "drop" && !lookup("drop")) {
+            if (e.args.size() != 1)
+                diag_.error(e.loc, "drop expects 1 argument (the value to drop)");
+            for (auto &a : e.args) checkExpr(*a);
+            std::function<bool(const TypePtr &, int)> hasTaggedOwner = [&](const TypePtr &t0, int d) -> bool {
+                TypePtr t = t0;
+                while (t && t->kind == TypeKind::Newtype) t = static_cast<NewtypeType &>(*t).base;
+                if (!t || d > 16 || !isMustDrop(t)) return false;
+                if (t->kind == TypeKind::Struct) {
+                    auto &st = static_cast<const StructType &>(*t);
+                    if (hasDropMethod(st)) return false;
+                    if (st.isTaggedUnion) return true;
+                    for (auto &f : st.fields) if (hasTaggedOwner(f.type, d + 1)) return true;
+                    return false;
+                }
+                if (t->kind == TypeKind::Array) return hasTaggedOwner(static_cast<ArrayType &>(*t).element, d + 1);
+                if (t->kind == TypeKind::Optional) return hasTaggedOwner(static_cast<OptionalType &>(*t).inner, d + 1);
+                if (t->kind == TypeKind::Tuple)
+                    for (auto &x : static_cast<TupleType &>(*t).elementTypes) if (hasTaggedOwner(x, d + 1)) return true;
+                return false;
+            };
+            if (e.args.size() == 1 && e.args[0]->type && hasTaggedOwner(e.args[0]->type, 0))
+                diag_.error(e.loc, "drop(): which variant of a tagged union holds a value is only known at run "
+                                   "time; 'match' it and drop the payload");
+            e.type = makeVoid();
+            return e.type;
+        }
         if (ident.name == "forget" && !lookup("forget")) {
             if (e.args.size() != 1)
                 diag_.error(e.loc, "forget expects 1 argument (the value to leak)");

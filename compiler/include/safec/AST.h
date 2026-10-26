@@ -362,6 +362,10 @@ struct AlignofTypeExpr : Expr {
 // ── fieldcount(type) ──────────────────────────────────────────────────────
 struct FieldCountExpr : Expr {
     TypePtr ofType;
+    // 'needs_drop(T)' (same shape): 1 when T is a must-drop type (see
+    // Sema::isMustDrop), computed by Sema once T is concrete.
+    bool    isNeedsDrop = false;
+    int64_t needsDropValue = 0;
     FieldCountExpr(TypePtr t, SourceLocation l)
         : Expr(ExprKind::FieldCount, l), ofType(std::move(t)) {}
 };

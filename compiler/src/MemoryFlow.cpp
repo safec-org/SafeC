@@ -87,6 +87,7 @@ constexpr uint8_t kOLive   = 1;   // holds a value that must still be dropped
 constexpr uint8_t kODrop   = 2;   // dropped (drop() or a 'consume' method)
 constexpr uint8_t kOMove   = 4;   // moved out (returned, passed by value, stored elsewhere, sent)
 constexpr uint8_t kOUninit = 8;   // declared without an initializer
+constexpr uint8_t kOBuild  = 16;  // with kOLive: being built field by field (its fields may be assigned)
 constexpr uint8_t kOGone   = kODrop | kOMove;
 using OwnKey = std::pair<int, std::string>;
 
@@ -498,7 +499,7 @@ private:
     void ownEndFunction();
     bool ownMatchSubject(Expr *subject, const EV &subj, const std::vector<const std::vector<MatchPattern> *> &arms);
     void ownBind(const MatchPattern &p, SourceLocation loc);
-    std::string typeName(const TypePtr &t) const { return t ? t->str() : "?"; }
+    std::string typeName(const TypePtr &t) const;
 };
 
 // ── Driver ─────────────────────────────────────────────────────────────────────
@@ -533,6 +534,7 @@ private:
 };
 
 bool Walker::mustDrop(const TypePtr &t) const { return drv_.sema.isMustDrop(t); }
+std::string Walker::typeName(const TypePtr &t) const { return drv_.sema.displayType(t); }
 
 // ── Generic AST traversal (call graph, labels, statement order) ───────────────
 template <class FS, class FE>
@@ -1705,8 +1707,9 @@ static bool isPlaceExpr(const Expr *e) {
 }
 
 // ── Calls ──────────────────────────────────────────────────────────────────────
-// Does a value of this type hold a reference (so it can borrow)?
-static bool holdsRefs(const TypePtr &t0, int depth = 0) {
+// Does a value of this type hold a reference (so it can borrow)? A Drop
+// type's '&heap' fields are buffers it owns, not borrows.
+static bool holdsRefs(const Sema &sema, const TypePtr &t0, int depth = 0) {
     TypePtr t = stripNewtype(t0);
     if (!t || depth > 4) return false;
     switch (t->kind) {
@@ -1715,10 +1718,17 @@ static bool holdsRefs(const TypePtr &t0, int depth = 0) {
         return !(rt.base && rt.base->kind == TypeKind::Function) && rt.region != Region::Static;
     }
     case TypeKind::Slice: return true;
-    case TypeKind::Optional: return holdsRefs(static_cast<OptionalType &>(*t).inner, depth + 1);
-    case TypeKind::Struct:
-        for (auto &f : static_cast<StructType &>(*t).fields) if (holdsRefs(f.type, depth + 1)) return true;
+    case TypeKind::Optional: return holdsRefs(sema, static_cast<OptionalType &>(*t).inner, depth + 1);
+    case TypeKind::Struct: {
+        auto &st = static_cast<StructType &>(*t);
+        bool owner = sema.hasDropMethod(st);
+        for (auto &f : st.fields) {
+            const ReferenceType *rt = refOf(f.type);
+            if (owner && rt && rt->region == Region::Heap) continue;
+            if (holdsRefs(sema, f.type, depth + 1)) return true;
+        }
         return false;
+    }
     default: return false;
     }
 }
@@ -1739,7 +1749,7 @@ EV Walker::evalCall(CallExpr &e) {
     FunctionDecl *fd = nullptr;
     if (e.callee && e.callee->kind == ExprKind::Ident) fd = static_cast<IdentExpr &>(*e.callee).resolvedFn;
     // A method on an owned receiver returning a reference borrows from it.
-    if (!callOwners_.empty() && holdsRefs(e.type)) {
+    if (!callOwners_.empty() && holdsRefs(drv_.sema, e.type)) {
         int t = ownToken(e, callOwners_);
         if (r.agg) {
             for (auto &c : r.cells)
@@ -2266,9 +2276,11 @@ std::vector<std::map<OwnKey, uint8_t>::iterator> Walker::ownOverlap(int obj, con
     std::vector<std::map<OwnKey, uint8_t>::iterator> out;
     for (auto it = cur_.own.lower_bound({obj, ""}); it != cur_.own.end() && it->first.first == obj; ++it) {
         const std::string &k = it->first.second;
-        std::string ks = starAll(k), ps = starAll(path);
-        if (underPrefix(k, path) || underPrefix(path, k) || underPrefix(ks, ps) || underPrefix(ps, ks))
-            out.push_back(it);
+        if (underPrefix(k, path) || underPrefix(path, k)) { out.push_back(it); continue; }
+        if (hasStar(path) || hasStar(k)) {
+            std::string ks = starAll(k), ps = starAll(path);
+            if (underPrefix(ks, ps) || underPrefix(ps, ks)) out.push_back(it);
+        }
     }
     return out;
 }
@@ -2289,15 +2301,16 @@ void Walker::ownUse(const std::vector<CellRef> &cells, SourceLocation loc, bool 
                 std::vector<std::pair<SourceLocation, std::string>> notes;
                 auto g = goneAt_.find(it->first);
                 if (g != goneAt_.end()) notes.push_back({g->second, std::string("'") + ownDesc(it->first.first, it->first.second) + "' was " + goneWord(b) + " here"});
+                std::string other = ownDesc(it->first.first, it->first.second);
                 reportN(loc, std::string(write ? "assignment to part of '" : "use of '") + ownDesc(c.obj, c.path) +
-                                 "' after '" + ownDesc(it->first.first, it->first.second) + "' " +
+                                 (other == ownDesc(c.obj, c.path) ? std::string("' after it ") : "' after '" + other + "' ") +
                                  ((b & kOLive) ? "may have been " : "was ") + goneWord(b) +
                                  (write ? " (assign the whole value to make it live again)" : ""),
                         notes);
             } else if (b & kOUninit) {
                 // Initialized in place: field by field, or through a
                 // reference ('init(&x)', 'x.reset()').
-                it->second = kOLive;
+                it->second = write ? (kOLive | kOBuild) : kOLive;
             }
         }
     }
@@ -2305,6 +2318,13 @@ void Walker::ownUse(const std::vector<CellRef> &cells, SourceLocation loc, bool 
 
 void Walker::ownConsumeKey(int obj, const std::string &path, uint8_t kind, SourceLocation loc) {
     auto ov = ownVars_.find(obj);
+    if (ov != ownVars_.end() && ov->second.pseudo && !path.empty()) {
+        // A destructor taking *self apart field by field.
+        ownUse({{obj, path}}, loc, false);
+        size_t e = path.find_first_of(".[", 1);
+        dtorFields_.insert(path.substr(1, e == std::string::npos ? std::string::npos : e - 1));
+        return;
+    }
     for (auto it : ownOverlap(obj, path)) {
         const std::string &k = it->first.second;
         if (k != path && underPrefix(path, k)) {
@@ -2420,8 +2440,13 @@ void Walker::ownAssign(const std::vector<CellRef> &cells, SourceLocation loc) {
         for (auto it : ownOverlap(c.obj, c.path)) {
             const std::string &k = it->first.second;
             uint8_t b = it->second;
+            // An element picked at run time of an array kept as one unit:
+            // which element it overwrites is unknown (not tracked).
+            if (hasStar(c.path) && k != c.path) { it->second = kOLive; continue; }
             if (k != c.path && underPrefix(c.path, k)) {
-                // A field of a Drop value: the value owns the old contents.
+                // A field of a Drop value: the value owns the old contents
+                // (unless it is still being built).
+                if ((b & kOUninit) || (b & kOBuild)) { it->second = kOLive | kOBuild; continue; }
                 if (b & kOLive)
                     reportN(loc, "assigning to '" + ownDesc(c.obj, c.path) + "' overwrites part of '" +
                                      ownDesc(c.obj, k) + "', which owns it: drop it first, or swap it out with "
@@ -3019,6 +3044,7 @@ void Walker::run() {
             for (auto &f : st->fields)
                 if (mustDrop(f.type) && !dtorFields_.count(f.name)) {
                     std::string owner = st->name, m = fn_.name.size() > owner.size() + 1 ? fn_.name.substr(owner.size() + 1) : fn_.name;
+                    owner = typeName(refOf(fn_.params[0].type)->base);
                     reportN(fn_.loc, "'" + owner + "::" + m + "()' never drops field '" + f.name + "' (of Drop type '" +
                                          typeName(f.type) + "'): a destructor must drop or move every field it owns "
                                          "(self." + f.name + ".drop())",

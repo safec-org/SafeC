@@ -115,7 +115,9 @@ inline struct String String::clone() const {
     unsafe { return String::from_n((const char*)self.data, self.len); }
 }
 
-inline void String::free() {
+inline void String::free() { self.drop(); }
+
+inline void String::drop() {
     unsafe {
         if (self.cap > 0UL) { dealloc_raw_((void*)self.data); }
         self.data = (&heap char)0;

@@ -106,6 +106,7 @@ static void pool_run_one_(&ThreadPool p, &TaskHeader t) {
             fn int(?&TaskHeader, &Context) pf = (fn int(?&TaskHeader, &Context))t.poll_;
             done = pf(t, &cx);
         }
+        cx.drop();
     }
     if (done != 0) {
         task_header_finish_(t, aborted);

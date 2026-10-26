@@ -76,6 +76,9 @@ public:
     bool isMustDrop(const TypePtr &ty) const;
     // drop() itself, or a method declared 'consume' in its struct body.
     bool isConsumeMethod(const FunctionDecl *fd) const;
+    // A type as written in source: 'Vec<int>' rather than the mangled
+    // instance name.
+    std::string displayType(const TypePtr &ty) const;
     // "" when 'ty' is Send (sync=false) / Sync (sync=true), else why not.
     // 'syncMut' asks whether shared *mutable* access is race-free (only
     // types marked 'unsafe impl Sync' and aggregates of them).

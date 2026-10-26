@@ -96,6 +96,8 @@ struct Context Context::noop() {
     return Context::from_waker(Waker::noop());
 }
 
+void Context::drop() { self.waker.drop(); }
+
 void Context::wake_by_ref() const {
     self.waker.wake_by_ref();
 }
@@ -121,8 +123,7 @@ void WakerSlot::register_(const &Waker w) {
 int WakerSlot::wake() {
     if (self.set == 0) return 0;
     self.set = 0;
-    struct Waker w = self.w;
-    self.w = Waker::raw_((void*)0, (void*)0, (void*)0, (void*)0, 0UL);
+    struct Waker w = std::replace(&self.w, Waker::raw_((void*)0, (void*)0, (void*)0, (void*)0, 0UL));
     w.wake();
     return 1;
 }
@@ -200,7 +201,7 @@ int WaitList::wake_one() {
             self.serial[i] = 0;
             self.count = self.count - 1;
             self.next_ = (unsigned int)(i + 1);
-            struct Waker w = self.w[i];
+            struct Waker w = std::replace(&self.w[i], Waker::noop());
             w.wake();
             return 1;
         }
@@ -216,7 +217,7 @@ int WaitList::wake_all() {
         if (self.serial[i] != 0) {
             self.serial[i] = 0;
             self.count = self.count - 1;
-            struct Waker w = self.w[i];
+            struct Waker w = std::replace(&self.w[i], Waker::noop());
             w.wake();
             n = n + 1;
         }

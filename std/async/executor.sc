@@ -199,6 +199,7 @@ static int local_step_(&LocalExecutor ex, &TaskHeader t) {
         fn int(?&TaskHeader, &Context) pf = (fn int(?&TaskHeader, &Context))t.poll_;
         done = pf(t, &cx);
     }
+    cx.drop();
     ex.polls = ex.polls + 1LL;
     async_fetch_and_(&t.state, ~ASYNC_TASK_RUNNING);
     if (done != 0) {
