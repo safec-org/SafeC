@@ -126,6 +126,9 @@ Options (build / run / check / test):
                             repeatable) in addition to the manifest's
                             "default" feature
   --no-default-features    Do not enable the manifest's "default" feature
+  --crate-type <staticlib|cdylib|bin>
+                           Build this kind of artifact instead of the
+                           manifest's [build] crate_type
   --target <alias|triple>  Cross-compile: a bare-metal alias (x86, x86_64,
                             aarch32, aarch64, thumb, thumb2, arm-6m, arm-7m,
                             arm-7em, arm-8m, rv32i, rv32e, rv64i, rv64e,
@@ -316,6 +319,44 @@ int main(int argc, char** argv) {
         }
     }
 
+    // ── publish ───────────────────────────────────────────────────────────────
+    if (cmd == "publish") {
+        safeguard::PublishOptions popts;
+        safeguard::BuildOptions bopts;
+        for (int i = 2; i < argc; ++i) {
+            std::string arg = argv[i];
+            auto value = [&](const char* flag) -> std::string {
+                std::string f = flag;
+                if (arg.rfind(f + "=", 0) == 0) return arg.substr(f.size() + 1);
+                if (i + 1 >= argc) throw std::runtime_error(f + " requires an argument");
+                return argv[++i];
+            };
+            try {
+                if (arg == "--write") popts.write = true;
+                else if (arg == "--dry-run") popts.write = false;
+                else if (arg == "--tag") popts.tag = true;
+                else if (arg == "--push") popts.push = true;
+                else if (arg == "--no-verify") popts.verify = false;
+                else if (arg == "--verbose") bopts.verbose = true;
+                else if (arg == "--ci" || arg.rfind("--ci=", 0) == 0) popts.ci = value("--ci");
+                else if (arg == "--bump" || arg.rfind("--bump=", 0) == 0) popts.bump = value("--bump");
+                else if (arg == "--remote" || arg.rfind("--remote=", 0) == 0) popts.remote = value("--remote");
+                else { std::cerr << "safeguard: unknown option '" << arg << "'\n"; return 1; }
+            } catch (std::exception& e) {
+                std::cerr << "safeguard: " << e.what() << "\n";
+                return 1;
+            }
+        }
+        try {
+            auto [root, manifest] = requireProject();
+            safeguard::Builder builder(root, manifest, bopts);
+            return builder.publish(popts) ? 0 : 1;
+        } catch (std::exception& e) {
+            std::cerr << "safeguard error: " << e.what() << "\n";
+            return 1;
+        }
+    }
+
     // ── verify-lock ───────────────────────────────────────────────────────────
     if (cmd == "verify-lock") {
         try {
@@ -366,6 +407,18 @@ int main(int argc, char** argv) {
                 continue;
             }
             if (arg.rfind("--target=", 0) == 0) { opts.target = arg.substr(9); continue; }
+            if (arg == "--crate-type" || arg.rfind("--crate-type=", 0) == 0) {
+                if (arg == "--crate-type") {
+                    if (i + 1 >= argc) {
+                        std::cerr << "safeguard: --crate-type requires staticlib, cdylib or bin\n";
+                        return 1;
+                    }
+                    opts.crateType = argv[++i];
+                } else {
+                    opts.crateType = arg.substr(13);
+                }
+                continue;
+            }
             if (arg == "--sign" && cmd == "bundle") {
                 if (i + 1 >= argc) {
                     std::cerr << "safeguard: --sign requires an identity (\"-\" for ad-hoc)\n";

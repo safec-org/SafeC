@@ -46,6 +46,9 @@ struct BuildOptions {
     // overrides [bundle] codesign_identity.
     bool bundle = false;
     std::string signIdentity;
+
+    // --crate-type: overrides [build] crate_type ("staticlib", "cdylib", "bin").
+    std::string crateType;
 };
 
 // 'safeguard doc' (see Doc.cpp).
@@ -60,8 +63,25 @@ struct DocOptions {
     std::string sourceRef;     // --std: the git ref source links name (default "main")
 };
 
+// 'safeguard publish' (see Publish.cpp).
+struct PublishOptions {
+    std::string ci;            // overrides [publish] ci
+    std::string bump;          // "", "major", "minor", "patch" or a version
+    bool write = false;        // apply the plan (default: a dry run)
+    bool tag = false;          // commit the files it wrote and tag the version
+    bool push = false;         // push the branch and the tag
+    bool verify = true;        // run 'safeguard test' before tagging
+    std::string remote = "origin";
+};
+
+// --bump's arithmetic and .gitignore's entries, for publish (Publish.cpp).
+std::string publishBumpVersion(const std::string& current, const std::string& bump, std::string& err);
+const std::vector<std::string>& publishGitignoreEntries();
+
 class Builder {
 public:
+    // Prepares the project's git repository for publishing (Publish.cpp).
+    bool publish(const PublishOptions& opts);
     // Generates the project's (or std's) API reference with safec-doc: safec
     // --emit-doc-json over its headers and sources, then the doc tool
     // (prebuilt beside safeguard, or built from its SafeC sources on first

@@ -34,7 +34,15 @@ Builder::Builder(std::string projectRoot, Manifest manifest, BuildOptions opts)
     : root_(std::move(projectRoot))
     , manifest_(std::move(manifest))
     , opts_(std::move(opts))
-{}
+{
+    // --crate-type: build this kind of artifact instead of [build] crate_type's
+    // (a library's release CI builds it both static and shared).
+    if (!opts_.crateType.empty()) {
+        if (opts_.crateType != "bin" && opts_.crateType != "staticlib" && opts_.crateType != "cdylib")
+            throw std::runtime_error("--crate-type must be bin, staticlib or cdylib, got '" + opts_.crateType + "'");
+        manifest_.build.crateType = opts_.crateType;
+    }
+}
 
 // ── safec / std discovery ─────────────────────────────────────────────────────
 
