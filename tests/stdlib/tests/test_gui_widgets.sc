@@ -19,11 +19,11 @@ static int gActivates = 0;
 static int gResult = -1;
 static int gDraws = 0;
 
-static void on_click_cb(&Widget w, ?&void d) { gClicks = gClicks + 1; }
-static void on_change_cb(&Widget w, ?&void d) { gChanges = gChanges + 1; }
-static void on_activate_cb(&Widget w, ?&void d) { gActivates = gActivates + 1; }
-static void on_close_cb(&Widget w, int result, ?&void d) { gResult = result; }
-static void on_draw_cb(&Widget w, &GuiCanvas c, ?&void d) {
+static void on_click_cb(&Widget w, ?&Erased d) { gClicks = gClicks + 1; }
+static void on_change_cb(&Widget w, ?&Erased d) { gChanges = gChanges + 1; }
+static void on_activate_cb(&Widget w, ?&Erased d) { gActivates = gActivates + 1; }
+static void on_close_cb(&Widget w, int result, ?&Erased d) { gResult = result; }
+static void on_draw_cb(&Widget w, &GuiCanvas c, ?&Erased d) {
     gDraws = gDraws + 1;
     c.set_fill_color(GuiColor::hex(0xFF0000U));
     c.fill_rect(0.0f, 0.0f, 10.0f, 10.0f);
@@ -72,7 +72,7 @@ static void type(&GuiWindow win, &GuiUi ui, const &char s) {
 }
 static int is_focus(const &GuiUi ui, const &Widget w) {
     match (ui.focus) {
-        case some(f): { unsafe { return ((const void*)f == (const void*)w) ? 1 : 0; } }
+        case some(f): { unsafe { return ((const unsigned char*)f == (const unsigned char*)w) ? 1 : 0; } }
         case null: { }
     }
     return 0;
@@ -212,8 +212,8 @@ void t_focus_and_keys() {
     struct GuiWindow win = GuiWindow::create("focus", 300, 300);
     &Widget root = Widget::vstack().set_padding(8);
     &Widget input = Widget::textinput("name");
-    &Widget btn = Widget::button("Go").on_click(on_click_cb, (?&void)null);
-    &Widget chk = Widget::checkbox("Check", 0).on_change(on_change_cb, (?&void)null);
+    &Widget btn = Widget::button("Go").on_click(on_click_cb, (?&Erased)null);
+    &Widget chk = Widget::checkbox("Check", 0).on_change(on_change_cb, (?&Erased)null);
     &Widget off = Widget::button("Off").set_enabled(0);
     &Widget sl = Widget::slider(0.0, 10.0, 5.0).set_step(1.0);
     &Widget lbl = Widget::label("not focusable");
@@ -279,8 +279,8 @@ void t_text_editing() {
     reset_counters();
     struct GuiWindow win = GuiWindow::create("text", 400, 300);
     &Widget root = Widget::vstack().set_padding(8);
-    &Widget input = Widget::textinput("type").on_change(on_change_cb, (?&void)null)
-                                             .on_activate(on_activate_cb, (?&void)null);
+    &Widget input = Widget::textinput("type").on_change(on_change_cb, (?&Erased)null)
+                                             .on_activate(on_activate_cb, (?&Erased)null);
     &Widget area = Widget::textarea().set_pref_size(0, 100);
     &Widget ro = Widget::textinput("").set_text("fixed").set_read_only(1);
     &Widget pw = Widget::textinput("").set_password(1);
@@ -382,7 +382,7 @@ void t_lists_and_combos() {
     reset_counters();
     struct GuiWindow win = GuiWindow::create("lists", 400, 400);
     &Widget root = Widget::vstack().set_padding(8);
-    &Widget cb = Widget::combo().on_change(on_change_cb, (?&void)null);
+    &Widget cb = Widget::combo().on_change(on_change_cb, (?&Erased)null);
     cb.add_item("Red"); cb.add_item("Green"); cb.add_item("Blue");
     &Widget lst = Widget::list().set_pref_size(0, 120);
     lst.add_item("One"); lst.add_item("Two"); lst.add_item("Three");
@@ -438,7 +438,7 @@ void t_tree_and_table() {
     reset_counters();
     struct GuiWindow win = GuiWindow::create("tree", 400, 400);
     &Widget root = Widget::vstack().set_padding(8);
-    &Widget tr = Widget::tree().set_pref_size(0, 150).on_change(on_change_cb, (?&void)null);
+    &Widget tr = Widget::tree().set_pref_size(0, 150).on_change(on_change_cb, (?&Erased)null);
     int top = tr.add_node(-1, "Root");
     int kid = tr.add_node(top, "Child");
     tr.add_node(kid, "Grandchild");
@@ -499,17 +499,17 @@ void t_menus_and_shortcuts() {
     &Widget root = Widget::vstack();
     &Widget mb = Widget::menubar();
     &Widget file = Widget::menu("File");
-    &Widget open = Widget::menu_item("Open").set_shortcut("Ctrl+O").on_click(on_click_cb, (?&void)null);
-    &Widget wrap = Widget::menu_item("Word wrap").set_checked(0).on_change(on_change_cb, (?&void)null);
+    &Widget open = Widget::menu_item("Open").set_shortcut("Ctrl+O").on_click(on_click_cb, (?&Erased)null);
+    &Widget wrap = Widget::menu_item("Word wrap").set_checked(0).on_change(on_change_cb, (?&Erased)null);
     &Widget sub = Widget::menu("Recent");
-    &Widget recent = Widget::menu_item("a.txt").on_click(on_click_cb, (?&void)null);
+    &Widget recent = Widget::menu_item("a.txt").on_click(on_click_cb, (?&Erased)null);
     sub.add_child(recent);
     file.add_child(open); file.add_child(wrap); file.add_child(Widget::menu_separator()); file.add_child(sub);
     mb.add_child(file);
     root.add_child(mb);
     &Widget body = Widget::list().set_stretch(1);
     &Widget ctx = Widget::menu("");
-    &Widget del = Widget::menu_item("Delete").set_shortcut("Delete").on_click(on_click_cb, (?&void)null);
+    &Widget del = Widget::menu_item("Delete").set_shortcut("Delete").on_click(on_click_cb, (?&Erased)null);
     ctx.add_child(del);
     body.set_context_menu(ctx);
     root.add_child(body);
@@ -579,11 +579,11 @@ void t_dialogs() {
     reset_counters();
     struct GuiWindow win = GuiWindow::create("dialogs", 500, 400);
     &Widget root = Widget::vstack().set_padding(8);
-    &Widget under = Widget::button("Under").on_click(on_click_cb, (?&void)null);
+    &Widget under = Widget::button("Under").on_click(on_click_cb, (?&Erased)null);
     root.add_child(under);
     &GuiUi ui = make_ui(&win, root);
 
-    gui_message_box(ui, "Question", "Save the file?", GUI_MB_YES | GUI_MB_NO, on_close_cb, (?&void)null);
+    gui_message_box(ui, "Question", "Save the file?", GUI_MB_YES | GUI_MB_NO, on_close_cb, (?&Erased)null);
     flush(&win, ui);
     ASSERT_FALSE(ui.modal().is_null());
     &Widget box;
@@ -604,13 +604,13 @@ void t_dialogs() {
     click_w(&win, ui, under);
     ASSERT_EQ(gClicks, 1);
     // Escape cancels.
-    gui_message_box(ui, "Info", "Done.", GUI_MB_OK, on_close_cb, (?&void)null);
+    gui_message_box(ui, "Info", "Done.", GUI_MB_OK, on_close_cb, (?&Erased)null);
     flush(&win, ui);
     key(&win, ui, GUI_KEY_ESCAPE, 0);
     ASSERT_EQ(gResult, GUI_RESULT_CANCEL);
     ASSERT_TRUE(ui.modal().is_null());
     // Enter presses the default (first) button.
-    gui_message_box(ui, "Info", "Done.", GUI_MB_OK | GUI_MB_CANCEL, on_close_cb, (?&void)null);
+    gui_message_box(ui, "Info", "Done.", GUI_MB_OK | GUI_MB_CANCEL, on_close_cb, (?&Erased)null);
     flush(&win, ui);
     key(&win, ui, GUI_KEY_ENTER, 0);
     ASSERT_EQ(gResult, GUI_RESULT_OK);
@@ -662,7 +662,7 @@ void t_tabs_and_splitter() {
     reset_counters();
     struct GuiWindow win = GuiWindow::create("tabs", 400, 300);
     &Widget root = Widget::vstack();
-    &Widget tabs = Widget::tabs().set_pref_size(0, 120).on_change(on_change_cb, (?&void)null);
+    &Widget tabs = Widget::tabs().set_pref_size(0, 120).on_change(on_change_cb, (?&Erased)null);
     &Widget p1 = Widget::label("first page");
     &Widget p2 = Widget::label("second page");
     tabs.add_tab("One", p1);
@@ -712,11 +712,11 @@ void t_values() {
     reset_counters();
     struct GuiWindow win = GuiWindow::create("values", 400, 400);
     &Widget root = Widget::vstack().set_padding(8);
-    &Widget sl = Widget::slider(0.0, 100.0, 0.0).on_change(on_change_cb, (?&void)null);
+    &Widget sl = Widget::slider(0.0, 100.0, 0.0).on_change(on_change_cb, (?&Erased)null);
     &Widget sp = Widget::spinner(0.0, 10.0, 2.0, 0.5).set_decimals(1);
     &Widget pr = Widget::progress(0.25);
     &Widget cp = Widget::color_picker(GuiColor::hex(0xFF0000U));
-    &Widget cv = Widget::canvas(on_draw_cb, (?&void)null).set_pref_size(40, 40);
+    &Widget cv = Widget::canvas(on_draw_cb, (?&Erased)null).set_pref_size(40, 40);
     root.add_child(sl); root.add_child(sp); root.add_child(pr); root.add_child(cp); root.add_child(cv);
     &GuiUi ui = make_ui(&win, root);
 
@@ -809,7 +809,7 @@ void t_themes_and_scale() {
     ASSERT_EQ(b2.x, 16); ASSERT_EQ(b2.w, 240); ASSERT_EQ(b2.h, 80);
     // Clicks arrive in buffer pixels too.
     reset_counters();
-    b2.on_click(on_click_cb, (?&void)null);
+    b2.on_click(on_click_cb, (?&Erased)null);
     click_w(&hw, ui2, b2);
     ASSERT_EQ(gClicks, 1);
     ui2.free();

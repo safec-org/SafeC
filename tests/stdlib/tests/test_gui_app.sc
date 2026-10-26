@@ -12,7 +12,7 @@
 #include <std/gui/gui_widget.h>
 #include <std/gui/gui_app.h>
 
-extern void* memset(void* p, int v, unsigned long n);
+extern unsigned char* memset(unsigned char* p, int v, unsigned long n);
 
 struct Counts {
     int events;
@@ -83,7 +83,7 @@ static void on_click(&Widget w, ?&Counts oc) {
 
 static struct Counts counts() {
     struct Counts c;
-    unsafe { memset((void*)&c, 0, sizeof(struct Counts)); }
+    unsafe { memset((unsigned char*)&c, 0, sizeof(struct Counts)); }
     return c;
 }
 
@@ -179,7 +179,7 @@ void t_widget_roots() {
     &GuiUi u1 = app.set_root(w1, r1);
     app.set_root(w2, r2);
     match (app.ui_of(w1)) {
-        case some(u): { unsafe { ASSERT_TRUE((void*)u == (void*)u1); } }
+        case some(u): { unsafe { ASSERT_TRUE((unsigned char*)u == (unsigned char*)u1); } }
         case null: { ASSERT_TRUE(0); }
     }
     app.pump(0);

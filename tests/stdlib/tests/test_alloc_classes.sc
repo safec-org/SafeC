@@ -21,7 +21,7 @@ static int near(float a, float b) {
 }
 
 // Header word 1 holds the block's size class (all-ones when uncached).
-static unsigned long block_class(void* p) {
+static unsigned long block_class(unsigned char* p) {
     unsafe { return ((unsigned long*)((unsigned long)p - 16UL))[1]; }
 }
 
@@ -31,8 +31,8 @@ void t_size_classes() {
     unsafe {
         unsigned long i = 0UL;
         while (i < 9UL) {
-            void* p = alloc_raw_(sizes[i]);
-            ASSERT_TRUE(p != (void*)0);
+            unsigned char* p = alloc_raw_(sizes[i]);
+            ASSERT_TRUE(p != (unsigned char*)0);
             unsigned long cls = block_class(p);
             if (sizes[i] <= 1048576UL) ASSERT_EQ(cls, 32UL);
             else ASSERT_TRUE(cls == 0xFFFFFFFFFFFFFFFFUL);
@@ -133,7 +133,7 @@ void t_conv_then_alloc() {
 // and frees from another thread come back to the owner.
 #define SLAB_FLAG 0x4000000000000000UL
 
-static void* g_far[20000];
+static unsigned char* g_far[20000];
 
 static ?&int free_all_(?&int arg) {
     unsafe {
@@ -154,7 +154,7 @@ static ?&int alloc_all_(?&int arg) {
 void t_slabs() {
     unsafe {
         unsigned long sizes[12] = { 1UL, 8UL, 16UL, 17UL, 24UL, 33UL, 100UL, 200UL, 384UL, 513UL, 768UL, 1024UL };
-        void* ps[600];
+        unsigned char* ps[600];
         unsigned long si = 0UL;
         while (si < 12UL) {
             unsigned long sz = sizes[si];
@@ -163,10 +163,10 @@ void t_slabs() {
                 unsigned char* p = (unsigned char*)alloc_raw_(sz);
                 ASSERT_TRUE(p != (unsigned char*)0);
                 ASSERT_EQ((unsigned long)p % 16UL, 0UL);
-                ASSERT_TRUE((block_class((void*)p) & SLAB_FLAG) != 0UL);
+                ASSERT_TRUE((block_class((unsigned char*)p) & SLAB_FLAG) != 0UL);
                 unsigned long k = 0UL;
                 while (k < sz) { p[k] = (unsigned char)(i + k); k = k + 1UL; }
-                ps[i] = (void*)p;
+                ps[i] = (unsigned char*)p;
                 i = i + 1UL;
             }
             int bad = 0;
@@ -181,7 +181,7 @@ void t_slabs() {
             // free the even ones, reallocate them: they come from those slots
             i = 0UL;
             while (i < 600UL) { dealloc_raw_(ps[i]); i = i + 2UL; }
-            void* again = alloc_raw_(sz);
+            unsigned char* again = alloc_raw_(sz);
             int reused = 0;
             i = 0UL;
             while (i < 600UL) { if (ps[i] == again) reused = 1; i = i + 2UL; }
@@ -196,15 +196,15 @@ void t_slabs() {
         unsigned char* r = (unsigned char*)alloc_raw_(40UL);
         unsigned long k = 0UL;
         while (k < 40UL) { r[k] = (unsigned char)(k * 3UL); k = k + 1UL; }
-        r = (unsigned char*)realloc_buf_raw_((void*)r, 700UL);
-        ASSERT_TRUE((block_class((void*)r) & SLAB_FLAG) != 0UL);
-        r = (unsigned char*)realloc_buf_raw_((void*)r, 5000UL);
+        r = (unsigned char*)realloc_buf_raw_((unsigned char*)r, 700UL);
+        ASSERT_TRUE((block_class((unsigned char*)r) & SLAB_FLAG) != 0UL);
+        r = (unsigned char*)realloc_buf_raw_((unsigned char*)r, 5000UL);
         ASSERT_TRUE(r != (unsigned char*)0);
         int same = 1;
         k = 0UL;
         while (k < 40UL) { if (r[k] != (unsigned char)(k * 3UL)) same = 0; k = k + 1UL; }
         ASSERT_EQ(same, 1);
-        dealloc_raw_((void*)r);
+        dealloc_raw_((unsigned char*)r);
 
         // blocks made here, freed on another thread, then reused here
         unsigned long i = 0UL;
@@ -227,7 +227,7 @@ void t_slabs() {
             unsigned long a = (unsigned long)alloc_raw_(40UL);
             ASSERT_TRUE(a != 0UL);
             if (a >= lo && a <= hi) inOld = inOld + 1;
-            g_far[i] = (void*)a;
+            g_far[i] = (unsigned char*)a;
             i = i + 1UL;
         }
         ASSERT_TRUE(inOld > 10000);   // most come back from the remotely freed slabs
@@ -301,17 +301,17 @@ struct CountingHeap {
 ?&heap unsigned char CountingHeap::alloc(unsigned long size, unsigned long align) {
     // std::alloc's blocks are 16-aligned.
     if ((align & (align - 1UL)) != 0UL || align > 16UL) return null;
-    void* p;
+    unsigned char* p;
     unsafe { p = alloc_raw_(size); }
-    if (p == (void*)0) return null;
+    if (p == (unsigned char*)0) return null;
     self.live = self.live + 1UL;
     self.total = self.total + 1UL;
     unsafe { return (?&heap unsigned char)p; }
 }
 
 void CountingHeap::dealloc(?&heap unsigned char ptr) {
-    void* p = ptr;
-    if (p == (void*)0) return;
+    unsigned char* p = ptr;
+    if (p == (unsigned char*)0) return;
     unsafe { dealloc_raw_(p); }
     self.live = self.live - 1UL;
 }
@@ -363,7 +363,7 @@ struct OneShot {
 ?&heap unsigned char OneShot::alloc(unsigned long size, unsigned long align) {
     if (self.taken || size > 64UL || align > 8UL) return null;
     self.taken = 1;
-    unsafe { return (?&heap unsigned char)(void*)&self.slot[0]; }
+    unsafe { return (?&heap unsigned char)(unsigned char*)&self.slot[0]; }
 }
 
 // Fill with 'size'-byte blocks, reset, fill again: an ArenaAllocator gives

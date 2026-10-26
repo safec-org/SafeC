@@ -12,41 +12,41 @@ static int cmp_int(const &int a, const &int b) { return *a - *b; }
 
 static int check_heap() {
     // Reuse: a freed block of a class comes back for the next allocation.
-    void* a = malloc(100U);
-    void* b = malloc(100U);
-    if (a == (void*)0 || b == (void*)0 || a == b) { return 1; }
+    unsigned char* a = malloc(100U);
+    unsigned char* b = malloc(100U);
+    if (a == (unsigned char*)0 || b == (unsigned char*)0 || a == b) { return 1; }
     free(a);
-    void* c = malloc(90U);
+    unsigned char* c = malloc(90U);
     if (c != a) { return 2; }
     if (malloc_usable_size(c) < 90U) { return 3; }
     free(b); free(c);
     free(c);                       // double free is ignored
-    void* d = malloc(100U);
-    void* e = malloc(100U);
+    unsigned char* d = malloc(100U);
+    unsigned char* e = malloc(100U);
     if (d == e) { return 4; }
     free(d); free(e);
     // Growth: far more than the initial memory, in a loop that frees, so
     // reuse keeps it bounded.
     for (int round = 0; round < 64; round = round + 1) {
-        void* big = malloc(1048576U);   // 1 MiB
-        if (big == (void*)0) { return 5; }
+        unsigned char* big = malloc(1048576U);   // 1 MiB
+        if (big == (unsigned char*)0) { return 5; }
         unsafe { ((unsigned char*)big)[1048575] = (unsigned char)round; }
         free(big);
     }
-    void* huge = malloc(20U * 1048576U);    // grows memory past 20 MiB
-    if (huge == (void*)0) { return 6; }
+    unsigned char* huge = malloc(20U * 1048576U);    // grows memory past 20 MiB
+    if (huge == (unsigned char*)0) { return 6; }
     unsafe { ((unsigned char*)huge)[20U * 1048576U - 1U] = (unsigned char)1; }
     free(huge);
     // realloc keeps contents.
     unsafe {
         char* s = (char*)malloc(8U);
-        memcpy((void*)s, (const void*)"abcdefg", 8U);
-        s = (char*)realloc((void*)s, 5000U);
+        memcpy((unsigned char*)s, (const unsigned char*)"abcdefg", 8U);
+        s = (char*)realloc((unsigned char*)s, 5000U);
         if (strcmp(s, "abcdefg") != 0) { return 7; }
-        free((void*)s);
+        free((unsigned char*)s);
         int* z = (int*)calloc(16U, 4U);
         for (int i = 0; i < 16; i = i + 1) { if (z[i] != 0) { return 8; } }
-        free((void*)z);
+        free((unsigned char*)z);
     }
     return 0;
 }
@@ -60,7 +60,7 @@ static int check_strings() {
         if (strchr(s, '/') != s + 4 || strrchr(s, '/') != s + 7 || strchr(s, 'z') != (char*)0) { return 23; }
         if (strstr(s, "file") != s + 8 || strstr(s, "nope") != (char*)0) { return 24; }
         if (strspn("aaab", "a") != 3U || strcspn("abc,d", ",") != 3U) { return 25; }
-        if (memchr((const void*)s, (int)'.', 15U) != (void*)(s + 12)) { return 26; }
+        if (memchr((const unsigned char*)s, (int)'.', 15U) != (unsigned char*)(s + 12)) { return 26; }
         if (strtoll("-42x", (char**)0, 10) != -42LL || strtoull("0x1F", (char**)0, 0) != 31ULL) { return 27; }
         if (atoi("  17") != 17) { return 28; }
         double d = strtod("-1.25e2", (char**)0);

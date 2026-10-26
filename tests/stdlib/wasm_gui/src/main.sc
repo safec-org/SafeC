@@ -29,9 +29,9 @@ static int gLastCp = 0;
 static int gLastMods = 0;
 static int gLastButton = -1;
 
-static void on_click(&Widget w, ?&void d) { gClicks = gClicks + 1; }
+static void on_click(&Widget w, ?&Erased d) { gClicks = gClicks + 1; }
 
-static int on_event_b(&GuiApp app, &GuiWindow win, &GuiEvent ev, ?&void d) {
+static int on_event_b(&GuiApp app, &GuiWindow win, &GuiEvent ev, ?&Erased d) {
     if (ev.kind >= 0 && ev.kind < 20) { gKinds[ev.kind] = gKinds[ev.kind] + 1; }
     if (ev.kind == GUI_EVENT_MOUSE_DOWN || ev.kind == GUI_EVENT_MOUSE_MOVE || ev.kind == GUI_EVENT_SCROLL) {
         gLastX = ev.x;
@@ -47,7 +47,7 @@ static int on_event_b(&GuiApp app, &GuiWindow win, &GuiEvent ev, ?&void d) {
     return 0;
 }
 
-static void draw_b(&GuiApp app, &GuiWindow win, &GuiCanvas c, ?&void d) {
+static void draw_b(&GuiApp app, &GuiWindow win, &GuiCanvas c, ?&Erased d) {
     c.set_fill_color(GuiColor::rgb((unsigned char)255, (unsigned char)0, (unsigned char)0));
     c.fill_rect(0.0f, 0.0f, (float)win.width, (float)win.height);
     // 50% white, premultiplied in the buffer: straight in the ImageData
@@ -59,12 +59,12 @@ static void draw_b(&GuiApp app, &GuiWindow win, &GuiCanvas c, ?&void d) {
     }
 }
 
-static int frame_b(&GuiApp app, &GuiWindow win, double now, ?&void d) {
+static int frame_b(&GuiApp app, &GuiWindow win, double now, ?&Erased d) {
     gFrames = gFrames + 1;
     return 1;
 }
 
-static void tick(&GuiApp app, unsigned int id, ?&void d) { gTimer = gTimer + 1; }
+static void tick(&GuiApp app, unsigned int id, ?&Erased d) { gTimer = gTimer + 1; }
 
 __attribute__((export_name("start")))
 int start() {
@@ -79,15 +79,15 @@ int start() {
         &GuiWindow a = (struct GuiWindow*)gA;
         &GuiWindow b = (struct GuiWindow*)gB;
         &Widget root = Widget::vstack().set_padding(10).set_spacing(8);
-        gButton = Widget::button("Press").on_click(on_click, (?&void)null);
+        gButton = Widget::button("Press").on_click(on_click, (?&Erased)null);
         gInput = Widget::textinput("type");
         root.add_child(gButton);
         root.add_child(gInput);
         gApp.set_root(a, root);
-        gApp.on_draw(b, draw_b, (?&void)null);
-        gApp.on_event(b, on_event_b, (?&void)null);
-        gApp.on_frame(b, frame_b, (?&void)null);
-        gApp.set_timeout(30.0, tick, (?&void)null);
+        gApp.on_draw(b, draw_b, (?&Erased)null);
+        gApp.on_event(b, on_event_b, (?&Erased)null);
+        gApp.on_frame(b, frame_b, (?&Erased)null);
+        gApp.set_timeout(30.0, tick, (?&Erased)null);
     }
     gui_web_run(&gApp);
     return 0;

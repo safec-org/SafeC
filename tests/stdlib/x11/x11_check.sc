@@ -14,35 +14,37 @@
 #include <std/gui/gui_gpu.h>
 #include <std/collections/string.h>
 
-extern void* XOpenDisplay(const char* name);
-extern int XCloseDisplay(void* d);
-extern int XSync(void* d, int discard);
-extern void* XGetImage(void* d, unsigned long drawable, int x, int y, unsigned int w, unsigned int h,
+struct XDpy_ { char opaque_; };   // Xlib's Display, opaque
+struct XImg_ { char opaque_; };   // an XImage (fields read at their LP64 offsets)
+extern XDpy_* XOpenDisplay(const char* name);
+extern int XCloseDisplay(XDpy_* d);
+extern int XSync(XDpy_* d, int discard);
+extern XImg_* XGetImage(XDpy_* d, unsigned long drawable, int x, int y, unsigned int w, unsigned int h,
                        unsigned long planes, int format);
-extern int XDestroyImage(void* image);
-extern int XSendEvent(void* d, unsigned long w, int propagate, long mask, void* event);
-extern unsigned char XKeysymToKeycode(void* d, unsigned long keysym);
-extern unsigned long XInternAtom(void* d, const char* name, int onlyIfExists);
-extern unsigned long XDefaultRootWindow(void* d);
-extern int XResizeWindow(void* d, unsigned long w, unsigned int width, unsigned int height);
-extern int XGetWindowAttributes(void* d, unsigned long w, void* attrs);
-extern int XGetWindowProperty(void* d, unsigned long w, unsigned long prop, long offset, long length,
+extern int XDestroyImage(XImg_* image);
+extern int XSendEvent(XDpy_* d, unsigned long w, int propagate, long mask, unsigned char* event);
+extern unsigned char XKeysymToKeycode(XDpy_* d, unsigned long keysym);
+extern unsigned long XInternAtom(XDpy_* d, const char* name, int onlyIfExists);
+extern unsigned long XDefaultRootWindow(XDpy_* d);
+extern int XResizeWindow(XDpy_* d, unsigned long w, unsigned int width, unsigned int height);
+extern int XGetWindowAttributes(XDpy_* d, unsigned long w, unsigned char* attrs);
+extern int XGetWindowProperty(XDpy_* d, unsigned long w, unsigned long prop, long offset, long length,
                               int del, unsigned long reqType, unsigned long* actualType, int* actualFormat,
                               unsigned long* nitems, unsigned long* after, unsigned char** data);
-extern int XFree(void* p);
-extern unsigned long XCreateSimpleWindow(void* d, unsigned long parent, int x, int y, unsigned int w,
+extern int XFree(unsigned char* p);
+extern unsigned long XCreateSimpleWindow(XDpy_* d, unsigned long parent, int x, int y, unsigned int w,
                                          unsigned int h, unsigned int bw, unsigned long border, unsigned long bg);
-extern int XDestroyWindow(void* d, unsigned long w);
-extern int XPending(void* d);
-extern int XNextEvent(void* d, void* ev);
-extern int XFlush(void* d);
-extern int XCheckTypedWindowEvent(void* d, unsigned long w, int type, void* ev);
-extern unsigned long XGetSelectionOwner(void* d, unsigned long selection);
-extern int XSetSelectionOwner(void* d, unsigned long selection, unsigned long owner, unsigned long time);
-extern int XConvertSelection(void* d, unsigned long selection, unsigned long target, unsigned long prop,
+extern int XDestroyWindow(XDpy_* d, unsigned long w);
+extern int XPending(XDpy_* d);
+extern int XNextEvent(XDpy_* d, unsigned char* ev);
+extern int XFlush(XDpy_* d);
+extern int XCheckTypedWindowEvent(XDpy_* d, unsigned long w, int type, unsigned char* ev);
+extern unsigned long XGetSelectionOwner(XDpy_* d, unsigned long selection);
+extern int XSetSelectionOwner(XDpy_* d, unsigned long selection, unsigned long owner, unsigned long time);
+extern int XConvertSelection(XDpy_* d, unsigned long selection, unsigned long target, unsigned long prop,
                              unsigned long requestor, unsigned long time);
-extern int XChangeProperty(void* d, unsigned long w, unsigned long prop, unsigned long type, int format,
-                           int mode, const void* data, int n);
+extern int XChangeProperty(XDpy_* d, unsigned long w, unsigned long prop, unsigned long type, int format,
+                           int mode, const unsigned char* data, int n);
 extern int fork();
 extern void _exit(int code);
 extern int waitpid(int pid, int* status, int options);
@@ -52,29 +54,29 @@ extern int printf(const char* fmt, ...);
 extern unsigned long strlen(const char* s);
 
 
-static void* g_dpy = (void*)0;     // the test's own connection
+static XDpy_* g_dpy = (XDpy_*)0;     // the test's own connection
 static unsigned long g_win = 0UL;
-static void* g_gui_dpy = (void*)0; // std/gui's own connection
+static XDpy_* g_gui_dpy = (XDpy_*)0; // std/gui's own connection
 
 // The Display* std/gui's X11 backend uses, from its native handles.
-static void* gui_display_of(&GuiWindow win) {
+static XDpy_* gui_display_of(&GuiWindow win) {
     ?&GuiWindowState ost = gui_window_state(win);
     match (ost) {
-        case null: return (void*)0;
+        case null: return (XDpy_*)0;
         case some(st): {
             &GuiBackend b = gui_backend();
             struct GuiNativeHandle h = b.native_handle(st);
-            unsafe { return (void*)(unsigned long)h.display; }
+            unsafe { return (XDpy_*)(unsigned long)h.display; }
         }
     }
-    return (void*)0;
+    return (XDpy_*)0;
 }
 
 // 0x00RRGGBB at (x, y) of the window, read back from the server.
 static unsigned int read_pixel_of(unsigned long xw, int x, int y, int w, int h) {
     unsafe {
-        void* img = XGetImage(g_dpy, xw, 0, 0, (unsigned int)w, (unsigned int)h, ~0UL, 2);
-        if (img == (void*)0) { return 0xFFFFFFFFu; }
+        XImg_* img = XGetImage(g_dpy, xw, 0, 0, (unsigned int)w, (unsigned int)h, ~0UL, 2);
+        if (img == (XImg_*)0) { return 0xFFFFFFFFu; }
         unsigned char* data = *(unsigned char**)((unsigned long)img + 16UL);
         int bpl = *(int*)((unsigned long)img + 44UL);
         unsigned int px = *(unsigned int*)(data + (unsigned long)(y * bpl + x * 4));
@@ -100,7 +102,7 @@ static void send_input_to(unsigned long xw, int type, long mask, int x, int y, u
         *(unsigned int*)(b + 80) = state;
         *(unsigned int*)(b + 84) = detail;   // keycode / button
         *(int*)(b + 88) = 1;                 // same_screen
-        XSendEvent(g_dpy, xw, 0, mask, (void*)b);
+        XSendEvent(g_dpy, xw, 0, mask, (unsigned char*)b);
         XSync(g_dpy, 0);
     }
 }
@@ -126,7 +128,7 @@ void t_x11() {
         ASSERT_FALSE(win.platform.is_null());
         if (win.platform.is_null()) return;
         g_dpy = XOpenDisplay((const char*)0);
-        ASSERT_TRUE(g_dpy != (void*)0);
+        ASSERT_TRUE(g_dpy != (XDpy_*)0);
         g_win = (unsigned long)win.native_handle();
         g_gui_dpy = gui_display_of(&win);
         XSync(g_gui_dpy, 0);
@@ -190,7 +192,7 @@ void t_x11() {
         *(unsigned long*)(b + 40) = XInternAtom(g_dpy, "WM_PROTOCOLS", 0);
         *(int*)(b + 48) = 32;
         *(long*)(b + 56) = (long)XInternAtom(g_dpy, "WM_DELETE_WINDOW", 0);
-        XSendEvent(g_dpy, g_win, 0, 0L, (void*)b);
+        XSendEvent(g_dpy, g_win, 0, 0L, (unsigned char*)b);
         XSync(g_dpy, 0);
         ASSERT_TRUE(wait_event(&win, GUI_EVENT_CLOSE, &ev));
         ASSERT_EQ(win.shouldClose, 1);
@@ -206,9 +208,9 @@ void t_x11() {
 
 static int g_clicks1 = 0;
 static int g_clicks2 = 0;
-static void click1(&Widget w, ?&void d) { g_clicks1 = g_clicks1 + 1; }
-static void click2(&Widget w, ?&void d) { g_clicks2 = g_clicks2 + 1; }
-static void paint2(&GuiApp app, &GuiWindow win, &GuiCanvas c, ?&void d) {
+static void click1(&Widget w, ?&Erased d) { g_clicks1 = g_clicks1 + 1; }
+static void click2(&Widget w, ?&Erased d) { g_clicks2 = g_clicks2 + 1; }
+static void paint2(&GuiApp app, &GuiWindow win, &GuiCanvas c, ?&Erased d) {
     c.set_fill_color(GuiColor::hex(0xFF0000U));
     c.fill_rect(0.0f, 0.0f, 8.0f, 8.0f);
 }
@@ -217,7 +219,7 @@ static void paint2(&GuiApp app, &GuiWindow win, &GuiCanvas c, ?&void d) {
 static int server_width(unsigned long xw) {
     long attrs[32];
     unsafe {
-        if (!XGetWindowAttributes(g_dpy, xw, (void*)&attrs[0])) { return -1; }
+        if (!XGetWindowAttributes(g_dpy, xw, (unsigned char*)&attrs[0])) { return -1; }
         return *(int*)((unsigned long)&attrs[0] + 8UL);
     }
 }
@@ -231,7 +233,7 @@ static int prop_is(unsigned long xw, const char* prop, const char* want) {
                            &type, &format, &n, &after, &data);
         if (data == (unsigned char*)0) { return 0; }
         int same = (n == strlen(want) && strcmp((const char*)data, want) == 0) ? 1 : 0;
-        XFree((void*)data);
+        XFree((unsigned char*)data);
         return same;
     }
 }
@@ -246,8 +248,8 @@ static void click_at(&GuiApp app, unsigned long xw, int x, int y, &int counter, 
 // A forked X client that owns CLIPBOARD and serves one UTF8_STRING request.
 static void clipboard_owner_child(const char* text) {
     unsafe {
-        void* d = XOpenDisplay((const char*)0);
-        if (d == (void*)0) { _exit(2); }
+        XDpy_* d = XOpenDisplay((const char*)0);
+        if (d == (XDpy_*)0) { _exit(2); }
         unsigned long w = XCreateSimpleWindow(d, XDefaultRootWindow(d), 0, 0, 1u, 1u, 0u, 0UL, 0UL);
         unsigned long clip = XInternAtom(d, "CLIPBOARD", 0);
         unsigned long utf8 = XInternAtom(d, "UTF8_STRING", 0);
@@ -257,7 +259,7 @@ static void clipboard_owner_child(const char* text) {
         while (waited < 500) {
             while (XPending(d) > 0) {
                 long ev[24];
-                XNextEvent(d, (void*)&ev[0]);
+                XNextEvent(d, (unsigned char*)&ev[0]);
                 unsigned char* b = (unsigned char*)&ev[0];
                 if (*(int*)b != 30) { continue; }          // SelectionRequest
                 unsigned long requestor = *(unsigned long*)(b + 40);
@@ -274,10 +276,10 @@ static void clipboard_owner_child(const char* text) {
                 *(unsigned long*)(r + 48) = target;
                 *(unsigned long*)(r + 56) = 0UL;
                 if (target == utf8) {
-                    XChangeProperty(d, requestor, property, utf8, 8, 0, (const void*)text, (int)strlen(text));
+                    XChangeProperty(d, requestor, property, utf8, 8, 0, (const unsigned char*)text, (int)strlen(text));
                     *(unsigned long*)(r + 56) = property;
                 }
-                XSendEvent(d, requestor, 0, 0L, (void*)r);
+                XSendEvent(d, requestor, 0, 0L, (unsigned char*)r);
                 XSync(d, 0);
                 if (target == utf8) { _exit(0); }
             }
@@ -309,14 +311,14 @@ void t_x11_multi() {
         ASSERT_EQ(app.window_count(), 2UL);
 
         &Widget r1 = Widget::vstack().set_padding(10);
-        &Widget b1 = Widget::button("One").on_click(click1, (?&void)null);
+        &Widget b1 = Widget::button("One").on_click(click1, (?&Erased)null);
         r1.add_child(b1);
         &Widget r2 = Widget::vstack().set_padding(10);
-        &Widget b2 = Widget::button("Two").on_click(click2, (?&void)null);
+        &Widget b2 = Widget::button("Two").on_click(click2, (?&Erased)null);
         r2.add_child(b2);
         app.set_root(w1, r1);
         app.set_root(w2, r2);
-        app.on_draw(w2, paint2, (?&void)null);
+        app.on_draw(w2, paint2, (?&Erased)null);
         int i = 0;
         while (i < 10) { app.pump(5); i = i + 1; }
         XSync(g_gui_dpy, 0);
@@ -367,7 +369,7 @@ void t_x11_multi() {
         i = 0;
         while (!got && i < 400) {
             app.pump(5);                                   // std/gui serves the request
-            if (XCheckTypedWindowEvent(g_dpy, tw, 31, (void*)&nev[0])) { got = 1; }
+            if (XCheckTypedWindowEvent(g_dpy, tw, 31, (unsigned char*)&nev[0])) { got = 1; }
             i = i + 1;
         }
         ASSERT_TRUE(got);
@@ -404,7 +406,7 @@ void t_x11_multi() {
         *(unsigned long*)(b + 40) = XInternAtom(g_dpy, "WM_PROTOCOLS", 0);
         *(int*)(b + 48) = 32;
         *(long*)(b + 56) = (long)XInternAtom(g_dpy, "WM_DELETE_WINDOW", 0);
-        XSendEvent(g_dpy, x2, 0, 0L, (void*)b);
+        XSendEvent(g_dpy, x2, 0, 0L, (unsigned char*)b);
         XSync(g_dpy, 0);
         i = 0;
         while (app.window_count() > 1UL && i < 200) { app.pump(5); i = i + 1; }

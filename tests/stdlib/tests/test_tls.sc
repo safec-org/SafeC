@@ -51,14 +51,14 @@ static int have_openssl_cli() {
     return g_have_openssl;
 }
 
-extern int getsockname(int fd, void* addr, unsigned int* len);
+extern int getsockname(int fd, unsigned char* addr, unsigned int* len);
 
 // The port a listening socket got (sockaddr_in: the port at byte 2).
 static int bound_port(int fd) {
     unsigned char sa[16];
     unsigned int len = 16U;
     unsafe {
-        if (getsockname(fd, (void*)&sa[0], &len) != 0) { return -1; }
+        if (getsockname(fd, (unsigned char*)&sa[0], &len) != 0) { return -1; }
     }
     return ((int)sa[2] << 8) | (int)sa[3];
 }
@@ -353,7 +353,7 @@ static int g_srv_conns = 0;
 static int g_srv_ready = 0;
 static int g_srv_failures = 0;
 
-static ?&void run_tls_server(?&void arg) {
+static ?&int run_tls_server(?&int arg) {
     unsafe {
         int lfd = tcp_listen_nb((unsigned short)0);
         if (lfd < 0) { g_srv_ready = -1; return null; }

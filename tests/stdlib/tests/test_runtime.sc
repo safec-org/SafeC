@@ -728,7 +728,7 @@ long long MemStream::read([]unsigned char buf_s) {
     unsigned long k = self.len - self.rd;
     if (k > n) k = n;
     if (k > self.step) k = self.step;
-    unsafe { safe_memcpy_raw_((void*)buf, (const void*)&self.data[self.rd], k); }
+    unsafe { safe_memcpy_raw_((unsigned char*)buf, (const unsigned char*)&self.data[self.rd], k); }
     self.rd = self.rd + k;
     return (long long)k;
 }
@@ -740,7 +740,7 @@ long long MemStream::write([]const unsigned char buf_s) {
     unsigned long k = 20000UL - self.len;
     if (k > n) k = n;
     if (k == 0UL && n > 0UL) return -1LL;
-    unsafe { safe_memcpy_raw_((void*)&self.data[self.len], (const void*)buf, k); }
+    unsafe { safe_memcpy_raw_((unsigned char*)&self.data[self.len], (const unsigned char*)buf, k); }
     self.len = self.len + k;
     return (long long)k;
 }
@@ -768,7 +768,7 @@ int stream_echo(&S s, const &unsigned char src, unsigned long n) {
     if (!write_all(s, ((const unsigned char*)src)[0..n])) return 0;
     if (!read_exact(s, back[0..n])) return 0;
     int same;
-    unsafe { same = safe_memcmp_raw_((const void*)&back[0], (const void*)src, n) == 0; }
+    unsafe { same = safe_memcmp_raw_((const unsigned char*)&back[0], (const unsigned char*)src, n) == 0; }
     return same;
 }
 
@@ -782,7 +782,7 @@ int seek_roundtrip(&S s, const &unsigned char src, unsigned long n) {
     if (!read_exact(s, back[0..n - 100UL])) return 0;
     if (s.tell() != (long long)n) return 0;
     int same;
-    unsafe { same = safe_memcmp_raw_((const void*)&back[0], (const void*)((const unsigned char*)src + 100), n - 100UL) == 0; }
+    unsafe { same = safe_memcmp_raw_((const unsigned char*)&back[0], (const unsigned char*)((const unsigned char*)src + 100), n - 100UL) == 0; }
     return same;
 }
 
@@ -851,7 +851,7 @@ void t_io_roles() {
         ASSERT_EQ(bw.len, 0UL);
         unsigned char back[3000];
         ASSERT_EQ(read_exact(&p, back[0..3000UL]), 1);
-        ASSERT_EQ(safe_memcmp_raw_((const void*)&back[0], (const void*)&data[0], 3000UL), 0);
+        ASSERT_EQ(safe_memcmp_raw_((const unsigned char*)&back[0], (const unsigned char*)&data[0], 3000UL), 0);
         &File g = std::expect_ref(File::open(path, "wb"), "wb handle");
         ASSERT_EQ(write_flushed(g, src, 3000UL), 1);
         g.close();
@@ -863,7 +863,7 @@ void t_io_roles() {
         ASSERT_EQ(read_exact(&br, back[0..10UL]), 1);
         ASSERT_EQ(br.buffered(), 2990UL);               // the rest came with the first read
         ASSERT_EQ(read_exact(&br, back[10..3000UL]), 1);
-        ASSERT_EQ(safe_memcmp_raw_((const void*)&back[0], (const void*)&data[0], 3000UL), 0);
+        ASSERT_EQ(safe_memcmp_raw_((const unsigned char*)&back[0], (const unsigned char*)&data[0], 3000UL), 0);
         ASSERT_EQ(br.read(back[0..16UL]), 0);           // EOF
         h.close();
         h = std::expect_ref(File::open(path, "rb"), "rb handle");
