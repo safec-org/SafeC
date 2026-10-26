@@ -1287,6 +1287,7 @@ int check_expr(int e) {
         t = TY_U64;
     }
     else if (k == E_SIZEOF_E) { check_expr(g_node[e].a); t = TY_U64; }
+    else if (k == E_SIZEOFPACK) { t = TY_U64; }
     else if (k == E_INITLIST) { t = check_initlist(e, 0); }
     else if (k == E_NEW) { t = check_new(e); }
     else if (k == E_ARENA) { t = check_arena(e); }

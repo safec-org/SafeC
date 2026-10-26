@@ -217,11 +217,37 @@ void push_pattern_env(int gpn) {
     }
 }
 
+// variadic packs: the index of the 'T...' generic parameter / 'T... args'
+// function parameter, or -1
+int pack_gparam(int gpn) {
+    int i = 0;
+    while (gpn != 0 && i < g_node[gpn].nlist) {
+        if (g_node[g_list[g_node[gpn].list + i]].flags == 1) { return i; }
+        i = i + 1;
+    }
+    return -1;
+}
+
+int pack_param(int fnode) {
+    int i = 0;
+    while (i < g_node[fnode].nlist) {
+        int p = g_list[g_node[fnode].list + i];
+        if (g_node[p].kind == D_PARAM && g_node[p].flags == 1) { return i; }
+        i = i + 1;
+    }
+    return -1;
+}
+
+// pack entries of the call being instantiated (-1: no pack)
+int g_call_pk_n = -1;
+int g_call_pk_ty[32];
+
 void push_inst_env(int inst) {
     int f = g_inst_tmpl[inst];
     int gpn = g_node[g_func[f].node].b;
     int i = 0;
     while (i < g_node[gpn].nlist && i < g_inst_nargs[inst]) {
+        if (g_node[g_list[g_node[gpn].list + i]].flags == 1) { break; }
         env_push(g_node[g_list[g_node[gpn].list + i]].sid, g_tyl[g_inst_args[inst] + i]);
         i = i + 1;
     }
@@ -231,9 +257,21 @@ int instantiate_func(int tf) {
     int fnode = g_func[tf].node;
     int gpn = g_node[fnode].b;
     int np = g_node[gpn].nlist;
-    int args[32];
+    int args[64];
     int i = 0;
+    int pg = pack_gparam(gpn);
+    int pk = g_call_pk_n;
+    g_call_pk_n = -1;
+    if (pg >= 0) {
+        // the pack is the last generic parameter: its entries follow
+        np = pg;
+        if (pk < 0) { pk = 0; }
+    } else { pk = -1; }
     while (i < np && i < 32) { args[i] = bind_get(g_node[g_list[g_node[gpn].list + i]].sid); i = i + 1; }
+    if (pk > 0) {
+        int j = 0;
+        while (j < pk && np < 64) { args[np] = g_call_pk_ty[j]; np = np + 1; j = j + 1; }
+    }
     int k = 0;
     while (k < g_ninst) {
         if (g_inst_tmpl[k] == tf && g_inst_nargs[k] == np) {
@@ -259,7 +297,17 @@ int instantiate_func(int tf) {
         i = i + 1;
     }
     int name = intern_tmp();
+    if (pk >= 0) {
+        g_pk_n = pk;
+        g_pk_tsid = g_node[g_list[g_node[gpn].list + pg]].sid;
+        int pp = pack_param(fnode);
+        g_pk_psid = 0;
+        if (pp >= 0) { g_pk_psid = g_node[g_list[g_node[fnode].list + pp]].sid; }
+        int j = 0;
+        while (j < pk && j < 32) { g_pk_ty[j] = g_call_pk_ty[j]; j = j + 1; }
+    }
     int c = clone_node(fnode);
+    g_pk_n = -1;
     g_node[c].flags = g_node[c].flags & ~NF_GENERIC;
     int nf = new_func(name, c);
     g_func[nf].origsid = g_func[tf].origsid;
@@ -765,8 +813,13 @@ int generic_call(int e, int tf, int recv_base) {
     g_nenv = saved;
     g_nbind = 0;
     int ok = 1;
+    int pg = pack_gparam(gpn);
+    int ppi = -1;
+    if (pg >= 0) { ppi = pack_param(fnode); }
+    int nmatch = n;
+    if (ppi >= 0 && ppi < nmatch) { nmatch = ppi; }
     i = 0;
-    while (i < n && i < g_ty[pat].nlist) {
+    while (i < nmatch && i < g_ty[pat].nlist) {
         int pt = g_tyl[g_ty[pat].list + i];
         if (ats[i] != 0 && mentions_generic(pt) == 1) {
             // a bare null binds nothing against a nullable reference
@@ -780,13 +833,13 @@ int generic_call(int e, int tf, int recv_base) {
     int unbound = 0;
     i = 0;
     while (i < g_node[gpn].nlist) {
-        if (bind_get(g_node[g_list[g_node[gpn].list + i]].sid) == 0) { unbound = 1; }
+        if (i != pg && bind_get(g_node[g_list[g_node[gpn].list + i]].sid) == 0) { unbound = 1; }
         i = i + 1;
     }
     if (ok == 1 && unbound == 1 && expect != 0) { match_type(g_ty[pat].base, expect); }
     i = 0;
     while (i < g_node[gpn].nlist && ok == 1) {
-        if (bind_get(g_node[g_list[g_node[gpn].list + i]].sid) == 0) { ok = 0; }
+        if (i != pg && bind_get(g_node[g_list[g_node[gpn].list + i]].sid) == 0) { ok = 0; }
         i = i + 1;
     }
     if (ok == 0) {
@@ -798,6 +851,14 @@ int generic_call(int e, int tf, int recv_base) {
         return TY_ERROR;
     }
     if (check_bounds(gpn, e) == 1) { return TY_ERROR; }
+    if (pg >= 0) {
+        // the arguments from the pack parameter on are the pack's entries
+        g_call_pk_n = 0;
+        if (ppi >= 0) {
+            i = ppi;
+            while (i < n && g_call_pk_n < 32) { g_call_pk_ty[g_call_pk_n] = ats[i]; g_call_pk_n = g_call_pk_n + 1; i = i + 1; }
+        }
+    }
     int nf = instantiate_func(tf);
     g_func[nf].used = 1;
     queue_func(nf);
@@ -810,6 +871,7 @@ int generic_call(int e, int tf, int recv_base) {
     int ft = g_func[nf].ty;
     int np = g_ty[ft].nlist;
     i = 0;
+    if (pg >= 0) { i = n; }   // like safec: no conversion checks with a pack
     while (i < n && i + self_off < np) {
         int a = g_list[g_node[e].list + i];
         int pt = g_tyl[g_ty[ft].list + i + self_off];

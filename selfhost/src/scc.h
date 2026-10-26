@@ -298,6 +298,7 @@ struct Tok {
 #define E_TYPEARG   33   // placeholder
 #define E_SPAWN     34   // spawn(a, b): a = function, b = argument
 #define E_FNEVAL    35   // fn_eval(a, b): a = object, b = function name; sema: d = method
+#define E_SIZEOFPACK 36  // sizeof...(sid); ival = entry count once instantiated
 // statements
 #define S_BLOCK     40   // list
 #define S_EXPR      41   // a
@@ -668,6 +669,10 @@ int list_begin();
 void list_push(int v);
 int list_end(int mark, int node);
 int clone_node(int n);
+extern int g_pk_n;
+extern int g_pk_tsid;
+extern int g_pk_psid;
+extern int g_pk_ty[32];
 int tok_kind(int i);
 
 // ── types.sc ─────────────────────────────────────────────────────────────────

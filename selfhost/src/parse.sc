@@ -60,8 +60,40 @@ int list_end(int mark, int node) {
 }
 
 // deep copy of a subtree (generic instantiation)
+// pack expansion while cloning a generic function for an instance:
+// the pack parameter 'args' (type pack g_pk_tsid with g_pk_n entries of
+// types g_pk_ty[]) becomes the parameters args0..argsN-1
+int g_pk_n = -1;
+int g_pk_tsid = 0;
+int g_pk_psid = 0;
+int g_pk_ty[32];
+
+int pack_ident(int sid, int i, int tok) {
+    tmp_reset();
+    tmp_str(sid);
+    tmp_int((long)i);
+    int id = new_node(E_IDENT, tok);
+    g_node[id].sid = intern_tmp();
+    return id;
+}
+
 int clone_node(int n) {
     if (n == 0) { return 0; }
+    if (g_pk_n >= 0) {
+        int nk = g_node[n].kind;
+        // 'args[2]' with a literal index: the parameter args2
+        if (nk == E_INDEX && g_node[n].a != 0 && g_node[g_node[n].a].kind == E_IDENT && g_node[g_node[n].a].sid == g_pk_psid &&
+            g_node[n].b != 0 && g_node[g_node[n].b].kind == E_INT) {
+            return pack_ident(g_pk_psid, (int)g_node[g_node[n].b].ival, g_node[n].tok);
+        }
+        if (nk == E_SIZEOFPACK) {
+            int sp = new_node(E_SIZEOFPACK, g_node[n].tok);
+            g_node[sp] = g_node[n];
+            g_node[sp].ival = 0L;
+            if (g_node[n].sid == g_pk_tsid) { g_node[sp].ival = (long)g_pk_n; }
+            return sp;
+        }
+    }
     int c = new_node(g_node[n].kind, g_node[n].tok);
     g_node[c] = g_node[n];
     g_node[c].ty = 0;
@@ -88,8 +120,28 @@ int clone_node(int n) {
         int mark = list_begin();
         int i = 0;
         while (i < g_node[n].nlist) {
-            list_push(clone_node(g_list[g_node[n].list + i]));
+            int el = g_list[g_node[n].list + i];
             i = i + 1;
+            if (g_pk_n >= 0 && k == E_CALL && g_node[el].kind == E_IDENT && g_node[el].sid == g_pk_psid) {
+                // forwarding 'args' to a call: args0, args1, ...
+                int j = 0;
+                while (j < g_pk_n) { list_push(pack_ident(g_pk_psid, j, g_node[el].tok)); j = j + 1; }
+                continue;
+            }
+            if (g_pk_n >= 0 && k == D_FUNC && g_node[el].kind == D_PARAM && g_node[el].flags == 1) {
+                int j = 0;
+                while (j < g_pk_n) {
+                    int pp = new_node(D_PARAM, g_node[el].tok);
+                    g_node[pp] = g_node[el];
+                    g_node[pp].flags = 0;
+                    g_node[pp].sid = g_node[pack_ident(g_node[el].sid, j, g_node[el].tok)].sid;
+                    g_node[pp].c = g_pk_ty[j];
+                    list_push(pp);
+                    j = j + 1;
+                }
+                continue;
+            }
+            list_push(clone_node(el));
         }
         list_end(mark, c);
     }
@@ -956,6 +1008,16 @@ int parse_unary() {
     }
     if (k == K_SIZEOF) {
         advance();
+        if (cur() == T_ELLIPSIS) {
+            // sizeof...(T): the number of entries of pack T
+            advance();
+            expect_msg(T_LPAREN, "expected '(' after 'sizeof...'");
+            int sp = new_node(E_SIZEOFPACK, t);
+            g_node[sp].sid = cur_sid();
+            advance();
+            expect_msg(T_RPAREN, "expected ')' after sizeof... pack name");
+            return sp;
+        }
         int expr_operand = 0;
         if (peek(1) == T_IDENT && (peek(2) == T_DOT || peek(2) == T_ARROW || peek(2) == T_LBRACKET)) { expr_operand = 1; }
         if (cur() == T_LPAREN && is_type_start_tok(g_p + 1) == 1 && expr_operand == 0) {

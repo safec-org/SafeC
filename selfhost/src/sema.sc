@@ -1093,7 +1093,7 @@ void const_error(int e) {
 int sema_const_int(int e) {
     if (e == 0) { return 0; }
     int k = g_node[e].kind;
-    if (k == E_INT || k == E_CHAR || k == E_BOOL) { g_cval = g_node[e].ival; return 1; }
+    if (k == E_INT || k == E_CHAR || k == E_BOOL || k == E_SIZEOFPACK) { g_cval = g_node[e].ival; return 1; }
     if (k == E_SIZEOF_T) {
         int t = resolve_type(g_node[e].c);
         if (g_ty[t].kind == TY_NAMED || g_ty[t].kind == TY_GENERIC) { return 0; }
