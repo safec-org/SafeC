@@ -254,9 +254,9 @@ inline int Reactor::poll_events_raw_(fn void(?&Erased, int, int) on_ready, ?&Era
 }
 
 inline void Reactor::close_() {
-    self.watched.clear();
-    self.sigfds.clear();
-    unsafe { WSACleanup(); }
+    self.free_tables_();
+    if (self.kq >= 0) { unsafe { WSACleanup(); } }   // only after a successful init()
+    self.kq = -1;
 }
 
 } // namespace std

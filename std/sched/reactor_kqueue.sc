@@ -152,7 +152,9 @@ inline int Reactor::poll_events_raw_(fn void(?&Erased, int, int) on_ready, ?&Era
 }
 
 inline void Reactor::close_() {
-    unsafe { close(self.kq); }
+    self.free_tables_();
+    if (self.kq >= 0) { unsafe { close(self.kq); } }
+    self.kq = -1;
 }
 
 } // namespace std

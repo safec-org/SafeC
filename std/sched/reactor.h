@@ -95,7 +95,8 @@ struct Reactor {
     // instead.
     struct Vec<struct WatchedFd> watched;
 
-    // A reactor with no OS event queue yet (kq = -1): call init() next.
+    // A reactor with no OS event queue yet (kq = -1): call init() next,
+    // and drop() it when done.
     static struct Reactor new();
 
     // Opens the underlying OS event queue. Returns 0 on success, -1 on
@@ -126,7 +127,16 @@ struct Reactor {
     // Type-erased form (see std/erased.h), implemented by each backend.
     int  poll_events_raw_(fn void(?&Erased, int, int) on_ready, ?&Erased ctx, long long timeout_ms);
 
+    // Closes the OS event queue (and, on epoll, every signalfd it opened;
+    // on Windows, its WSAStartup) and frees the registration tables.
+    // Idempotent: a closed reactor is like Reactor::new() — init() may
+    // open it again, and closing or dropping it again does nothing.
     void close_();
+    // close_(): a Reactor is a Drop type, so a local one is dropped (or
+    // closed and then dropped) on every path.
+    void drop();
+
+    void free_tables_();   // internal: close_()'s table release (reactor.sc)
 };
 
 generic<T>

@@ -20,9 +20,21 @@ release tags.
   `drop()` drop every element still held (before, `StrMap::clear()` /
   `drop()` and the others released the storage but leaked the values).
   `BTree`, `StaticVec` and `StaticMap` live in place / over the caller's
-  storage and have no `drop()`: `clear()` them. Code that freed a map's
-  values itself before dropping it (`m.foreach(free_value); m.drop()`) now
-  frees them twice — drop the map alone.
+  storage and have no `drop()`: `clear()` them. Don't free a container's
+  values yourself before dropping it (`m.foreach(free_value); m.drop()`):
+  drop the container alone.
+- **`std::Reactor` is a `Drop` type:** it had no `drop()`, and `close_()`
+  left the `sigfds` / `watched` tables allocated (and, on Windows, called
+  `WSACleanup` even if `init()` had failed). `Reactor::drop()` closes it;
+  `close_()` now also frees both tables, is idempotent (`kq = -1`
+  afterwards) and leaves a reactor `init()` can reopen. The HTTP server's
+  reactor threads drop their reactor (on the `init()` failure path too).
+- **`WsConn` never touches a descriptor it doesn't own:** a zero-initialised
+  `WsConn` (e.g. after a failed `accept()`) sent a close frame to fd 0 and
+  closed it when dropped. New `WsConn::closed()` (fd = -1) is the starting
+  value for `accept()` and std's own placeholders; `accept()` leaves the
+  connection closed when it fails; `drop()` / `close()` and the send
+  functions do nothing on a closed connection (fd < 0).
 
 ### Changed — no `void*` anywhere in std
 
