@@ -611,12 +611,12 @@ void __wk_basic_paint(&GuiUi ui, &GuiCanvas c, &Widget w) {
     if (k == WIDGET_CANVAS) {
         if ((w.style.setMask & WIDGET_STYLE_BG) != 0) { c.set_fill_color(w.style.bg); c.fill_rect(x, y, ww, hh); }
         unsafe {
-            if (w.onDraw != (void*)0) {
+            if (!w.onDraw.is_null()) {
                 c.save();
                 c.clip_rect(x, y, ww, hh);
                 c.translate(x, y);
                 c.scale(ui.scale, ui.scale);
-                WidgetCanvasFn d = (WidgetCanvasFn)w.onDraw;
+                WidgetCanvasFn d = w.onDraw!;
                 d(w, c, w.onDrawData);
                 c.restore();
             }
@@ -675,7 +675,7 @@ int __wk_basic_event(&GuiUi ui, &Widget w, &GuiEvent ev) {
     if (k == WIDGET_LABEL || k == WIDGET_SEPARATOR || k == WIDGET_PROGRESS) { return 0; }
     if (k == WIDGET_IMAGE || k == WIDGET_CANVAS) {
         int clickable = 0;
-        unsafe { clickable = w.onClick != (void*)0 ? 1 : 0; }
+        clickable = !w.onClick.is_null() ? 1 : 0;
         if (!clickable) { return 0; }
     }
     if (k == WIDGET_BUTTON || k == WIDGET_CHECKBOX || k == WIDGET_TOGGLE || k == WIDGET_IMAGE || k == WIDGET_CANVAS) {
