@@ -7,6 +7,14 @@ release tags.
 
 ## [Unreleased]
 
+### Fixed
+
+- A local declaration whose type is a typedef name followed by two or more
+  `*` (`Foo_t** x = pp;`, `Foo_t*** w;`) parses as a declaration instead of
+  failing with "undeclared identifier"; nested prefix operators in
+  expressions (`**pp`, `a * **pp`, `-*p`, `- -x`) parse too (compiler and
+  selfhost).
+
 ### Changed — no `void*` anywhere in std
 
 - **The raw memory layer is bytes:** `alloc_raw_`, `dealloc_raw_`,

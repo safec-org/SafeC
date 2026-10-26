@@ -1024,6 +1024,11 @@ int parse_cast() {
         }
         g_p = saved;
     }
+    // nested prefix operators ('**pp', '-*p', '!!x'): the unary cases parse
+    // their operand through here, so hand them back to parse_unary
+    int k = cur();
+    if (k == T_MINUS || k == T_BANG || k == T_TILDE || k == T_INC || k == T_DEC ||
+        k == T_AMP || k == T_STAR || k == K_SIZEOF || k == K_ALIGNOF) { return parse_unary(); }
     return parse_postfix();
 }
 
@@ -1369,6 +1374,17 @@ int looks_like_var_decl() {
     if (k == T_LBRACKET && peek(1) == T_RBRACKET) { return 1; }
     if (k == T_IDENT && peek(1) == T_IDENT) { return 1; }
     if (k == T_IDENT && peek(1) == T_STAR && peek(2) == T_IDENT) { return 1; }
+    // TypeName** varName: two or more '*', then a name and a declarator
+    // follower (as an expression, 'a * *b' only means something inside a
+    // larger expression)
+    if (k == T_IDENT && peek(1) == T_STAR && peek(2) == T_STAR) {
+        int i = 2;
+        while (peek(i) == T_STAR) { i = i + 1; }
+        if (peek(i) == T_IDENT) {
+            int f = peek(i + 1);
+            if (f == T_ASSIGN || f == T_SEMI || f == T_COMMA || f == T_LBRACKET) { return 1; }
+        }
+    }
     if (k == T_IDENT && peek(1) == T_LT && g_typename[cur_sid()] == 1) { return 1; }
     return 0;
 }

@@ -188,6 +188,20 @@ bool Parser::looksLikeVarDeclStart() const {
     // Disambiguate: TypeName * varName vs expr * expr
     // Heuristic: if token[2] is an ident (name), it's a declaration
     if (cur().is(TK::Ident) && peek().is(TK::Star) && peek(2).is(TK::Ident)) return true;
+    // Ident followed by two or more '*' then ident → multi-level pointer var
+    // decl (TypeName** varName). As an expression this would be 'a * *b'
+    // (or 'a * **b', ...), which only means something inside a larger
+    // expression, so require a declarator follower ('=', ';', ',', '[')
+    // after the name to keep e.g. 'a * *b + c;' an expression statement.
+    if (cur().is(TK::Ident) && peek().is(TK::Star) && peek(2).is(TK::Star)) {
+        int i = 2;
+        while (peek(i).is(TK::Star)) ++i;
+        if (peek(i).is(TK::Ident)) {
+            const Token &f = peek(i + 1);
+            if (f.is(TK::Eq) || f.is(TK::Semicolon) || f.is(TK::Comma) || f.is(TK::LBracket))
+                return true;
+        }
+    }
     return false;
 }
 
@@ -2856,7 +2870,19 @@ ExprPtr Parser::parseCastExpr() {
         pos_ = saved;
         diag_.discardSince(diagMark);
     }
-    return parsePostfixExpr();
+    // A prefix operator applied to another prefix operator's operand
+    // ('**pp', '-*p', '!!x', '- -x'): the unary cases above parse their
+    // operand through here, so hand nested prefix operators back to
+    // parseUnaryExpr instead of letting parsePrimaryExpr reject them.
+    switch (cur().kind) {
+    case TK::Minus: case TK::Bang: case TK::Tilde:
+    case TK::PlusPlus: case TK::MinusMinus:
+    case TK::Amp: case TK::Star:
+    case TK::KW_sizeof: case TK::KW_alignof:
+        return parseUnaryExpr();
+    default:
+        return parsePostfixExpr();
+    }
 }
 
 ExprPtr Parser::parsePostfixExpr() {
