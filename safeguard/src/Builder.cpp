@@ -2845,7 +2845,9 @@ bool Builder::test() {
             ++passed;
             continue;
         }
-        std::string testBin = (buildDir / name).string();
+        // Windows: the .exe clang adds to the link output (as outputPath()
+        // names it), so the spawn below finds the real file.
+        std::string testBin = (buildDir / (targetIsWindows() ? name + ".exe" : name)).string();
         if (!linkFinal({obj}, archives, testBin, isCxx(lang) || depsCxx, /*shared=*/false, isObjC(lang))) {
             std::cout << "test " << name << " ... FAILED (link error)\n";
             ++failed;

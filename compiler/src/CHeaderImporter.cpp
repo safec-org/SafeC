@@ -129,6 +129,16 @@ std::string CHeaderImporter::runClangASTDump(
 static bool hasUnsupportedType(const std::string &qt) {
     // "long double" — SafeC has Float32/Float64 only, no 80/128-bit float.
     if (qt.find("long double") != std::string::npos) return true;
+    // ...nor the 128-bit IEEE / IBM floats: glibc 2.43+ declares them for
+    // clang too ('typedef __float128 _Float128;', 'typedef _Complex
+    // __float128 __cfloat128;' in <bits/floatn.h>, reached from <stdio.h>
+    // and <stdlib.h>), plus functions using them (strtof128).
+    if (qt.find("float128") != std::string::npos) return true;   // __float128, __cfloat128
+    if (qt.find("Float128") != std::string::npos) return true;   // _Float128, _Float128x
+    if (qt.find("__ibm128") != std::string::npos) return true;
+    // C99 complex types — SafeC has none ('_Complex float', and the
+    // __cfloat128 typedef above).
+    if (qt.find("_Complex") != std::string::npos) return true;
     // Wide character types — not in SafeC's primitive set.
     if (qt.find("wchar_t")  != std::string::npos) return true;
     if (qt.find("__wchar_t") != std::string::npos) return true;

@@ -33,6 +33,9 @@ OUT="$1"; SAFEC_IN="$2"; SAFEGUARD_IN="$3"; LSP_IN="${4:-}"
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 
 mkdir -p "$OUT/bin" "$OUT/std"
+# Absolute: the steps below run tools from other directories (sg_doc cds
+# into the doctool's build copy), so a relative <out> would no longer resolve.
+OUT="$(cd "$OUT" && pwd)"
 cp "$SAFEC_IN" "$SAFEGUARD_IN" "$OUT/bin/"
 if [[ -n "$LSP_IN" ]]; then cp "$LSP_IN" "$OUT/bin/"; fi
 cp -R "$ROOT/std/." "$OUT/std/"

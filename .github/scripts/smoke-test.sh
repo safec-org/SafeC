@@ -803,10 +803,16 @@ rm -rf "$PRE"
 # against a small fake DOM through std/wasm/safec_dom.js. Needs node and
 # clang's wasm-ld; skipped where either is missing.
 section "std/wasm DOM interop (Node)"
-WASM_LD_PROG="$("$CLANG_BIN" -print-prog-name=wasm-ld 2>/dev/null || true)"
+# The clang that turns safec's IR into wasm32 objects: the one safeguard
+# picks itself (SAFEC_CLANG if set, else safec --print-clang, the clang of
+# the LLVM safec was built with). Not $CLANG_BIN: on macOS that's Apple's
+# clang, older than Homebrew's LLVM, and it rejects newer IR ('gep nuw').
+WASM_CLANG="${SAFEC_CLANG:-$("$SAFEC_BIN" --print-clang 2>/dev/null || true)}"
+[[ -n "$WASM_CLANG" ]] || WASM_CLANG="$CLANG_BIN"
+WASM_LD_PROG="$("$WASM_CLANG" -print-prog-name=wasm-ld 2>/dev/null || true)"
 if command -v node >/dev/null 2>&1 && { [[ -x "$WASM_LD_PROG" ]] || command -v "$WASM_LD_PROG" >/dev/null 2>&1; }; then
     rm -rf "$SAFEC_HOME/tests/stdlib/wasm/build"
-    if SAFEGUARD="$SAFEGUARD_BIN" SAFEC="$SAFEC_BIN" SAFEC_CLANG="$CLANG_BIN" \
+    if SAFEGUARD="$SAFEGUARD_BIN" SAFEC="$SAFEC_BIN" SAFEC_CLANG="$WASM_CLANG" \
             bash "$SAFEC_HOME/tests/stdlib/wasm/run.sh" >/tmp/wasm_dom.txt 2>&1; then
         pass "$(tail -1 /tmp/wasm_dom.txt)"
     else
@@ -826,7 +832,7 @@ fi
 section "std/gui on WebAssembly (Node)"
 if command -v node >/dev/null 2>&1 && { [[ -x "$WASM_LD_PROG" ]] || command -v "$WASM_LD_PROG" >/dev/null 2>&1; }; then
     rm -rf "$SAFEC_HOME/tests/stdlib/wasm_gui/build"
-    if SAFEGUARD="$SAFEGUARD_BIN" SAFEC="$SAFEC_BIN" SAFEC_CLANG="$CLANG_BIN" \
+    if SAFEGUARD="$SAFEGUARD_BIN" SAFEC="$SAFEC_BIN" SAFEC_CLANG="$WASM_CLANG" \
             bash "$SAFEC_HOME/tests/stdlib/wasm_gui/run.sh" >/tmp/wasm_gui.txt 2>&1; then
         pass "$(tail -1 /tmp/wasm_gui.txt)"
     else
