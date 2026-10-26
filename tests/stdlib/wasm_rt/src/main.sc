@@ -68,34 +68,38 @@ static int check_strings() {
     }
     // std on top of them.
     struct String t = String::from("Hello, wasm");
+    defer t.drop();
     if (!t.contains("wasm") || t.index_of(",") != 5LL) { return 30; }
     struct String u = t.to_upper();
+    defer u.drop();
     if (!u.eq_cstr("HELLO, WASM")) { return 31; }
-    long long n = String::from("12345").parse_int((?&int)null);
+    struct String num = String::from("12345");
+    long long n = num.parse_int((?&int)null);
+    num.drop();
     if (n != 12345LL) { return 32; }
-    t.free(); u.free();
     return 0;
 }
 
 static int check_sort_map_json() {
     struct Vec<int> v = Vec::new();
+    defer v.drop();
     int vals[7] = { 5, 3, 9, 1, 7, 2, 8 };
     for (int i = 0; i < 7; i = i + 1) { v.push(vals[i]); }
     v.sort(cmp_int);
     for (unsigned long i = 1UL; i < v.len; i = i + 1UL) { if (*v.at(i - 1UL) > *v.at(i)) { return 40; } }
-    v.free();
     // HashMap growth goes through checked size arithmetic (__multi3).
     struct HashMap<int, long long> m = HashMap::new();
+    defer m.drop();
     for (int i = 0; i < 500; i = i + 1) { m.insert(i, (long long)i * 3LL); }
     ?&long long got = m.get(321);
     match (got) { case some(x): { if (*x != 963LL) { return 41; } } case null: { return 42; } }
-    m.free();
     int ok = 0;
     struct Value doc = json_parse("[{\"u\":\"/a.html#x\",\"t\":\"Title\"},{\"u\":\"/b\",\"n\":2}]", &ok);
+    defer doc.drop();
     if (!ok || doc.array_len() != 2UL) { return 43; }
     struct String back = value_to_json(&doc);
+    defer back.drop();
     if (!back.contains("\"t\":\"Title\"")) { return 44; }
-    doc.free(); back.free();
     // __multi3 directly: (2^40 + 3) * (2^30 + 5).
     unsigned long long r[2];
     __multi3(&r[0], 1099511627779ULL, 0ULL, 1073741829ULL, 0ULL);
