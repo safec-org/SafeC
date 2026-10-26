@@ -53,6 +53,9 @@ release tags.
   now provides `gmtime_r`, `localtime_r` (UTC: the playground has no time
   zone), `mktime`, `strftime`, `strptime`, `clock_gettime` (the epoch: no
   clock) and `nanosleep`; a difftest corpus case checks them against glibc.
+  `tools/genvfs.py` now embeds each bundled file in chunks of at most
+  32 KiB: scc decodes a string literal into a 64 KiB buffer, so the grown
+  runtime came out truncated in the self-compiled scc (bootstrap stage 2).
 
 ### Changed — no `void*` anywhere in std
 
