@@ -450,10 +450,10 @@ void t_hal() {
         unsigned char tx[3];
         unsigned char rx[3];
         tx[0] = (unsigned char)1; tx[1] = (unsigned char)2; tx[2] = (unsigned char)3;
-        s.write(&tx[0], (?&unsigned char)&rx[0], 3UL);
+        s.write(tx[..], rx[..]);
         ASSERT_EQ(rx[2], 3);
-        s.write(&tx[0], null, 3UL);                    // rx is optional
-        s.read(&rx[0], 2UL);
+        s.write(tx[..], null);                         // rx is optional
+        s.read(rx[0..2]);
         ASSERT_EQ(rx[0], 0xFF);
         s.cs_assert();
         ASSERT_EQ(r[3], 0);
@@ -466,17 +466,17 @@ void t_hal() {
         ASSERT_EQ(r[4], 400000);
         unsigned char data[2];
         data[0] = (unsigned char)0x10; data[1] = (unsigned char)0x20;
-        ASSERT_EQ(bus.write((unsigned char)0x50, &data[0], 2UL), I2C_OK);
+        ASSERT_EQ(bus.write((unsigned char)0x50, data[0..2]), I2C_OK);
         ASSERT_EQ(r[3], 0x50 << 1);
         ASSERT_EQ(r[2], 2);                            // ended with STOP
         ASSERT_TRUE(bus.probe((unsigned char)0x50));
         unsigned char rd[1];
-        ASSERT_EQ(bus.write_read((unsigned char)0x50, &data[0], 1UL, &rd[0], 1UL), I2C_OK);
+        ASSERT_EQ(bus.write_read((unsigned char)0x50, data[0..1], rd[..]), I2C_OK);
         r[1] = 0u;                                     // NACK
-        ASSERT_EQ(bus.write((unsigned char)0x51, &data[0], 2UL), I2C_NACK);
+        ASSERT_EQ(bus.write((unsigned char)0x51, data[0..2]), I2C_NACK);
         ASSERT_EQ(r[2], 2);                            // STOP still sent on error
         r[1] = 4u;                                     // bus error
-        ASSERT_EQ(bus.read((unsigned char)0x51, &data[0], 2UL), I2C_ERROR);
+        ASSERT_EQ(bus.read((unsigned char)0x51, data[0..2]), I2C_ERROR);
         ASSERT_EQ(r[2], 2);
 
         zero_regs_(&r[0], 16);
@@ -611,14 +611,14 @@ void t_hal_chips() {
         r[5] = 0xC7u;
         unsigned char two[2];
         two[0] = (unsigned char)0x11; two[1] = (unsigned char)0x22;
-        ASSERT_EQ(si.write((unsigned char)0x3C, &two[0], 2UL), I2C_OK);
+        ASSERT_EQ(si.write((unsigned char)0x3C, two[0..2]), I2C_OK);
         ASSERT_EQ(r[4], 0x22);                         // last byte written
         ASSERT_TRUE((r[0] & 0x200u) != 0u);            // STOP
-        ASSERT_EQ(si.read((unsigned char)0x3C, &two[0], 2UL), I2C_OK);
+        ASSERT_EQ(si.read((unsigned char)0x3C, two[0..2]), I2C_OK);
         ASSERT_EQ(two[1], (0x3C << 1) | 1);            // RAM "DR" still holds the address byte
         ASSERT_TRUE((r[0] & 0x400u) == 0u);            // ACK cleared for the last byte
         r[5] = 0x400u;                                 // AF: not acknowledged
-        ASSERT_EQ(si.write((unsigned char)0x3C, &two[0], 1UL), I2C_NACK);
+        ASSERT_EQ(si.write((unsigned char)0x3C, two[0..1]), I2C_NACK);
         ASSERT_FALSE(si.probe((unsigned char)0x3C));
 
         // STM32 TIM: CR1 +0, SR +0x10, EGR +0x14, CNT +0x24, PSC +0x28, ARR +0x2C

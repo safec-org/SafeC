@@ -54,10 +54,11 @@ struct SpiDevice {
     void          cs_assert();
     // Deassert chip select (drive high).
     void          cs_deassert();
-    // Transfer a buffer of bytes. `rx` receives incoming data (may be null).
-    void          write(const &unsigned char tx, ?&unsigned char rx, unsigned long len);
-    // Read len bytes (sends 0xFF as dummy TX).
-    void          read(&unsigned char rx, unsigned long len);
+    // Transfer tx (full-duplex); `rx`, when given, receives the incoming
+    // bytes (up to rx.len of them).
+    void          write([]const unsigned char tx, ?[]unsigned char rx);
+    // Fill rx (sends 0xFF as dummy TX).
+    void          read([]unsigned char rx);
     unsigned long addr_() const;
 };
 
@@ -79,23 +80,22 @@ void SpiDevice::cs_assert() { self.chip.cs(self.addr_(), 1); }
 generic<C: SpiChip>
 void SpiDevice::cs_deassert() { self.chip.cs(self.addr_(), 0); }
 generic<C: SpiChip>
-void SpiDevice::write(const &unsigned char tx, ?&unsigned char rx, unsigned long len) {
+void SpiDevice::write([]const unsigned char tx, ?[]unsigned char rx) {
     unsigned long i = 0UL;
-    while (i < len) {
-        unsigned char b;
-        unsafe { b = self.transfer(tx[i]); }
+    while (i < tx.len) {
+        unsigned char b = self.transfer(tx[i]);
         match (rx) {
-            case null: { }
-            case some(r): { unsafe { r[i] = b; } }
+            case none: { }
+            case some(r): { if (i < r.len) { r[i] = b; } }
         }
         i = i + 1UL;
     }
 }
 generic<C: SpiChip>
-void SpiDevice::read(&unsigned char rx, unsigned long len) {
+void SpiDevice::read([]unsigned char rx) {
     unsigned long i = 0UL;
-    while (i < len) {
-        unsafe { rx[i] = self.transfer((unsigned char)0xFF); }
+    while (i < rx.len) {
+        rx[i] = self.transfer((unsigned char)0xFF);
         i = i + 1UL;
     }
 }
