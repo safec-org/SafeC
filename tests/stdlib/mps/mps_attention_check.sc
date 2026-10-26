@@ -263,7 +263,7 @@ int main() {
         unsafe {
             ok = l ? std::mps_linear_attention(dq, dk, dv, dout, 1UL, 40UL, 56UL, 64UL, 0)
                    : std::mps_flash_attention(dq, dk, dv, dout, 1UL, 40UL, 56UL, 64UL, (float)0.0, 0);
-            ok = ok && dout.read(((unsigned char*)(void*)(got.at(0UL)))[0..qn * 4UL]);
+            ok = ok && dout.read(((unsigned char*)(got.at(0UL)))[0..qn * 4UL]);
         }
         double e = relerr(&got, &cpu);
         check(ok && e <= 1.0e-5, l ? "linear matches attention.h" : "flash matches attention.h");
@@ -299,10 +299,10 @@ int main() {
     std::mps_batch_end();
     check(okb, "batched attention encoded");
     struct Vec<float> want = ref_attn(&q, &k, &v, one, 1, 0);
-    unsafe { check(dout.read(((unsigned char*)(void*)(got.at(0UL)))[0..qn * 4UL]) && relerr(&got, &want) <= 2.0e-5, "batched flash"); }
+    unsafe { check(dout.read(((unsigned char*)(got.at(0UL)))[0..qn * 4UL]) && relerr(&got, &want) <= 2.0e-5, "batched flash"); }
     want.free();
     want = ref_attn(&q, &k, &v, one, 0, 1);
-    unsafe { check(dout2.read(((unsigned char*)(void*)(got.at(0UL)))[0..qn * 4UL]) && relerr(&got, &want) <= 2.0e-5, "batched linear"); }
+    unsafe { check(dout2.read(((unsigned char*)(got.at(0UL)))[0..qn * 4UL]) && relerr(&got, &want) <= 2.0e-5, "batched linear"); }
     want.free();
 
     // Rejected shapes

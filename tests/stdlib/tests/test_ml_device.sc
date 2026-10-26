@@ -23,9 +23,9 @@
 #include <std/ml/attention_advanced.h>
 #include <std/ml/transformer.h>
 
-extern void* malloc(unsigned long n);
-extern void free(void* p);
-extern void* memcpy(void* d, const void* s, unsigned long n);
+extern unsigned char* malloc(unsigned long n);
+extern void free(unsigned char* p);
+extern unsigned char* memcpy(unsigned char* d, const unsigned char* s, unsigned long n);
 
 // ── The reference device ─────────────────────────────────────────────────────
 // Registered in the Metal slot (no feature enables Metal in this build).
@@ -49,17 +49,17 @@ struct RefBackend {
 };
 int RefBackend::available() { return 1; }
 unsigned long RefBackend::alloc(unsigned long bytes) { unsafe { return (unsigned long)malloc(bytes); } }
-void RefBackend::release(unsigned long h) { unsafe { free((void*)h); } }
+void RefBackend::release(unsigned long h) { unsafe { free((unsigned char*)h); } }
 int RefBackend::upload(unsigned long dst, const &float src, unsigned long n) {
-    unsafe { memcpy((void*)dst, (const void*)src, 4UL * n); }
+    unsafe { memcpy((unsigned char*)dst, (const unsigned char*)src, 4UL * n); }
     return 1;
 }
 int RefBackend::download(&float dst, unsigned long src, unsigned long n) {
-    unsafe { memcpy((void*)dst, (const void*)src, 4UL * n); }
+    unsafe { memcpy((unsigned char*)dst, (const unsigned char*)src, 4UL * n); }
     return 1;
 }
 int RefBackend::copy(unsigned long dst, unsigned long src, unsigned long n) {
-    unsafe { memcpy((void*)dst, (const void*)src, 4UL * n); }
+    unsafe { memcpy((unsigned char*)dst, (const unsigned char*)src, 4UL * n); }
     return 1;
 }
 int RefBackend::sync() { return 1; }
@@ -601,7 +601,7 @@ void t_reference_device_loss_scale() {
     opt.zero_grad();
     tensor_matmul(x, W).sum().backward();
     W.sync();
-    unsafe { tensor_grad_host_raw_((void*)W); ASSERT_TRUE(absf_((W->grad[0]) - ((float)2.0)) <= (float)1e-3); }
+    unsafe { tensor_grad_host_raw_((FloatTensor*)W); ASSERT_TRUE(absf_((W->grad[0]) - ((float)2.0)) <= (float)1e-3); }
     opt.step();
     ASSERT_TRUE(absf_((W.at1(0UL)) - ((float)0.3)) <= (float)1e-3);
     ASSERT_TRUE(absf_((device_loss_scale(REF_DEVICE)) - ((float)32768.0)) <= (float)0.5);
@@ -627,7 +627,7 @@ static float at_loss_(&FloatTensor Q, &FloatTensor K, &FloatTensor V, &FloatTens
 }
 
 static void at_grads_(&FloatTensor t, &float out) {
-    unsafe { tensor_grad_host_raw_((void*)t); unsigned long i = 0UL; while (i < t->size) { out[i] = t->grad[i]; i = i + 1UL; } }
+    unsafe { tensor_grad_host_raw_((FloatTensor*)t); unsigned long i = 0UL; while (i < t->size) { out[i] = t->grad[i]; i = i + 1UL; } }
 }
 
 void t_attention_gradients() {

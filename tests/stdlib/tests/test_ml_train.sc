@@ -15,12 +15,12 @@
 #include <std/ml/cnn.h>
 #include <std/sync/parallel.h>
 
-extern void* malloc(unsigned long size);
-extern void free(void* ptr);
+extern unsigned char* malloc(unsigned long size);
+extern void free(unsigned char* ptr);
 
 static void tensor_drop(&FloatTensor t) {   // a heap tensor: destroyed in place, then freed
     unsafe { t->free(); }
-    unsafe { free((void*)t); }
+    unsafe { free((unsigned char*)t); }
 }
 
 // ── Gradient checks ──────────────────────────────────────────────────────────
@@ -89,7 +89,7 @@ static double grad_check_(int which) {
     tensor_arena_end();
     stepArena.free();
     x->free(); aux->free();
-    unsafe { free((void*)x); free((void*)aux); }
+    unsafe { free((unsigned char*)x); free((unsigned char*)aux); }
     return worst;
 }
 
@@ -523,7 +523,7 @@ void t_cgan() {
             if (dx * dx + dy * dy < (float)0.5) hit = hit + 1UL;
             i = i + 1UL;
         }
-        s->free(); free((void*)s);
+        s->free(); free((unsigned char*)s);
     }
     ASSERT_TRUE(hit > 300UL);
     g.free();

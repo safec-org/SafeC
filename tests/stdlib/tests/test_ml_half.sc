@@ -8,19 +8,19 @@
 #include <std/ml/tensor.h>
 #include <std/collections/vec.h>
 
-extern void* malloc(unsigned long size);
-extern void free(void* ptr);
-extern void* memcpy(void* dst, const void* src, unsigned long n);
+extern unsigned char* malloc(unsigned long size);
+extern void free(unsigned char* ptr);
+extern unsigned char* memcpy(unsigned char* dst, const unsigned char* src, unsigned long n);
 
 static unsigned int bits_of_(float v) {
     unsigned int u = 0U;
-    unsafe { memcpy((void*)&u, (const void*)&v, 4UL); }
+    unsafe { memcpy((unsigned char*)&u, (const unsigned char*)&v, 4UL); }
     return u;
 }
 
 static float float_of_(unsigned int u) {
     float v = (float)0.0;
-    unsafe { memcpy((void*)&v, (const void*)&u, 4UL); }
+    unsafe { memcpy((unsigned char*)&v, (const unsigned char*)&u, 4UL); }
     return v;
 }
 
@@ -91,7 +91,7 @@ void t_fp16_to_f32_all() {
             i = i + 1UL;
         }
         ASSERT_EQ(bad, 0UL);
-        free((void*)h); free((void*)f);
+        free((unsigned char*)h); free((unsigned char*)f);
     }
 }
 
@@ -121,7 +121,7 @@ static unsigned long check_narrowing_(unsigned long n, unsigned long seed) {
             if (bits_of_(back[i]) != ((unsigned int)b[i] << 16)) bad = bad + 1UL;
             i = i + 1UL;
         }
-        free((void*)v); free((void*)h); free((void*)b); free((void*)back);
+        free((unsigned char*)v); free((unsigned char*)h); free((unsigned char*)b); free((unsigned char*)back);
     }
     return bad;
 }
@@ -157,14 +157,14 @@ void t_half_to_half_bulk() {
             i = i + 1UL;
         }
         ASSERT_EQ(bad, 0UL);
-        free((void*)src); free((void*)d);
+        free((unsigned char*)src); free((unsigned char*)d);
     }
 }
 
 generic<E>
 static void tensor_drop_(&DenseTensor<E> t) {
     unsafe { t->free(); }   // a heap tensor: destroyed in place, then freed
-    unsafe { free((void*)t); }
+    unsafe { free((unsigned char*)t); }
 }
 
 // Masters -> 16-bit copies -> back; fp16 <-> bf16; gradients with the loss
