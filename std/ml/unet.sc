@@ -17,7 +17,9 @@ struct UNet UNet::new(unsigned long inChannels, unsigned long c1, unsigned long 
     return net;
 }
 
-void UNet::free() {
+void UNet::free() { self.drop(); }
+
+void UNet::drop() {
     unsafe {
         ((struct Conv2D*)&self->encConv1).free();
         ((struct Conv2D*)&self->encConv2).free();

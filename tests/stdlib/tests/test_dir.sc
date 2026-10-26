@@ -98,7 +98,6 @@ void t_dir() {
     ASSERT_STR_EQ(all.at(0UL).as_ptr(), "a/b/c/deep.bin");
     ASSERT_STR_EQ(all.at(1UL).as_ptr(), "a/one.md");
     ASSERT_STR_EQ(all.at(2UL).as_ptr(), "top.txt");
-    for (unsigned long i = 0UL; i < all.len; i = i + 1UL) { all.at(i).free(); }
     all.clear();
 
     // Copy a tree, then read a file back whole.
@@ -106,7 +105,6 @@ void t_dir() {
     ASSERT_TRUE(dir_walk("build/test_dir_tmp/copy", &all));
     ASSERT_EQ(all.len, 2);
     ASSERT_STR_EQ(all.at(0UL).as_ptr(), "x/b/c/deep.bin");
-    for (unsigned long i = 0UL; i < all.len; i = i + 1UL) { all.at(i).free(); }
     all.free();
     struct String text = String::from(">");
     ASSERT_TRUE(File::read_to_string("build/test_dir_tmp/copy/x/one.md", &text));

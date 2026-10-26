@@ -32,14 +32,16 @@ int inner_push(&struct Vec<struct Item> items) {
     return (int)e.vals.len;
 }
 
-// Freeing each element's own memory, one element at a time.
+// Freeing each element's own memory, one element at a time (taking it
+// out of the element: the Vec drops what is left).
 void free_all(&struct Vec<struct Item> items) {
     for (unsigned long i = 0UL; i < items.len; i = i + 1UL) {
         &struct Item e = items.at(i);
-        e.name.free();
-        e.vals.free();
+        std::replace(&e.name, String::new()).drop();
+        struct Vec<int> none = Vec::new();
+        std::replace(&e.vals, none).drop();
     }
-    items.free();
+    items.clear();
 }
 
 // A map lookup used before the next insert.

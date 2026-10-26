@@ -38,7 +38,6 @@ static int __wb_vertical_sep(const &Widget w) {
 
 static void __wb_text_block(&GuiUi ui, &Widget w, &int cw, &int ch) {
     // a label's text, newlines included
-    struct GuiTextLayout l = GuiTextLayout::new();
     match (w.style.font) {
         case some(bf): {
             *cw = 0;
@@ -48,6 +47,7 @@ static void __wb_text_block(&GuiUi ui, &Widget w, &int cw, &int ch) {
         }
         case null: { }
     }
+    struct GuiTextLayout l = GuiTextLayout::new();
     unsafe { l.build_n_(__w_face(ui, w), __w_font_size(ui, w), (const char*)w.text.data, w.text.len, 0.0f, w.textAlign); }
     *cw = (int)ceil_f(l.width);
     *ch = (int)ceil_f(l.height);

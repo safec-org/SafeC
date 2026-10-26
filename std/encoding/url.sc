@@ -245,13 +245,10 @@ void QueryParams::set(const &char key, const &char value) {
         &UrlQueryPair p = self.pairs.at(i);
         if (url_cstr_eq_(p.key.as_ptr(), key)) {
             if (!done) {
-                p.value.free();
-                p.value = String::from(value);
+                std::replace(&p.value, String::from(value)).drop();
                 done = 1;
             } else {
-                p.key.free();
-                p.value.free();
-                self.pairs.remove(i);
+                drop(self.pairs.remove(i));
                 continue;
             }
         }
@@ -266,9 +263,7 @@ unsigned long QueryParams::remove(const &char key) {
     while (i < self.pairs.length()) {
         &UrlQueryPair p = self.pairs.at(i);
         if (url_cstr_eq_(p.key.as_ptr(), key)) {
-            p.key.free();
-            p.value.free();
-            self.pairs.remove(i);
+            drop(self.pairs.remove(i));
             n = n + 1UL;
             continue;
         }
@@ -287,9 +282,7 @@ void QueryParams::sort() {
             &UrlQueryPair a = self.pairs.at(j - 1UL);
             &UrlQueryPair b = self.pairs.at(j);
             if (a.key.cmp(&b.key) <= 0) { break; }
-            struct UrlQueryPair t = *a;
-            *a = *b;
-            *b = t;
+            std::swap(a, b);
             j = j - 1UL;
         }
         i = i + 1UL;
@@ -325,15 +318,10 @@ struct QueryParams QueryParams::clone() const {
     return q;
 }
 
-void QueryParams::free() {
-    unsigned long i = 0UL;
-    while (i < self.pairs.length()) {
-        &UrlQueryPair p = self.pairs.at(i);
-        p.key.free();
-        p.value.free();
-        i = i + 1UL;
-    }
-    self.pairs.free();
+void QueryParams::free() { self.drop(); }
+
+void QueryParams::drop() {
+    self.pairs.drop();   // and each pair's strings
 }
 
 // ── Url ────────────────────────────────────────────────────────────────────
@@ -579,9 +567,9 @@ static struct String url_merge_paths_(const &Url base, const &String refPath) {
 }
 
 static void url_copy_authority_(&Url dst, const &Url src) {
-    dst.username.free(); dst.username = src.username.clone();
-    dst.password.free(); dst.password = src.password.clone();
-    dst.host.free(); dst.host = src.host.clone();
+    std::replace(&dst.username, src.username.clone()).drop();
+    std::replace(&dst.password, src.password.clone()).drop();
+    std::replace(&dst.host, src.host.clone()).drop();
     dst.port = src.port;
     dst.has_authority = src.has_authority;
 }
@@ -686,8 +674,7 @@ struct QueryParams Url::query_params() const {
 }
 
 void Url::set_query_params(const &QueryParams params) {
-    self.query.free();
-    self.query = params.to_string();
+    std::replace(&self.query, params.to_string()).drop();
     self.has_query = params.length() > 0UL;
 }
 
@@ -715,7 +702,9 @@ struct Url Url::clone() const {
     return u;
 }
 
-void Url::free() {
+void Url::free() { self.drop(); }
+
+void Url::drop() {
     self.scheme.free();
     self.username.free();
     self.password.free();

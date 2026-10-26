@@ -124,7 +124,9 @@ int Dir::next(&DirEntry out) {
     return 0;
 }
 
-void Dir::close() {
+void Dir::close() { self.drop(); }
+
+void Dir::drop() {
     unsafe {
         struct DirPosix_* h = (struct DirPosix_*)(void*)self;
         closedir(h->dirp);

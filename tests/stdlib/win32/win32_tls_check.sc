@@ -45,9 +45,11 @@ static int fetch(int backend, const &char host, int verify, const ?&char alpn) {
     if (!r.ok()) {
         printf("    [%d] %s: %s\n", backend, host, r.error.message);
         unsafe { closesocket((unsigned long long)fd); }
-        return r.error.code;
+        int failed = r.error.code;
+        r.drop();
+        return failed;
     }
-    struct TlsStream t = r.value;
+    struct TlsStream t = r.unwrap();
     printf("    [%s] %s %x %s alpn='%s'\n", t.backend_name(), host, t.version(), t.cipher(), t.alpn());
     int code = TLS_OK;
     unsafe {

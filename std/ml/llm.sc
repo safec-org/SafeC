@@ -49,7 +49,7 @@ struct String LlmClient::chat(&Vec<struct LlmMessage> messages, ?&int ok) {
     }
 
     struct String body;
-    unsafe { body = value_to_json(&req); value_free(&req); }
+    unsafe { body = value_to_json(&req); req.free(); }
 
     struct String headers = string_new();
     unsafe {
@@ -78,7 +78,7 @@ struct String LlmClient::chat(&Vec<struct LlmMessage> messages, ?&int ok) {
     struct Value root;
     unsafe { root = json_parse(resp.body.as_ptr(), &parseOk); resp.free(); }
     if (!parseOk) {
-        unsafe { *ok = 0; value_free(&root); }
+        unsafe { *ok = 0; root.free(); }
         return string_new();
     }
 
@@ -96,7 +96,7 @@ struct String LlmClient::chat(&Vec<struct LlmMessage> messages, ?&int ok) {
                 } else { *ok = 0; }
             } else { *ok = 0; }
         } else { *ok = 0; }
-        value_free(&root);
+        root.free();
     }
     return result;
 }
@@ -163,7 +163,7 @@ struct Value Chain::run(const &Value input) {
         unsafe {
             ChainStepFn* fp = self.steps.at(i);
             struct Value next = (*fp)(&current);
-            value_free(&current);
+            current.free();
             current = next;
         }
         i = i + 1UL;
@@ -171,7 +171,9 @@ struct Value Chain::run(const &Value input) {
     return current;
 }
 
-void Chain::free() {
+void Chain::free() { self.drop(); }
+
+void Chain::drop() {
     unsafe { self.steps.free(); }
 }
 
@@ -232,7 +234,7 @@ struct Value Graph::run(struct Value initialState, int maxSteps) {
         if (node == (struct GraphNode*)0) break;
 
         struct Value nextState;
-        unsafe { nextState = node->nodeFn(&state); value_free(&state); }
+        unsafe { nextState = node->nodeFn(&state); state.free(); }
         state = nextState;
 
         struct String nextName;
@@ -251,7 +253,9 @@ struct Value Graph::run(struct Value initialState, int maxSteps) {
     return state;
 }
 
-void Graph::free() {
+void Graph::free() { self.drop(); }
+
+void Graph::drop() {
     unsigned long n;
     unsafe { n = self.nodes.length(); }
     unsigned long i = 0UL;
@@ -308,7 +312,9 @@ struct String Tracer::to_json() const {
     return out;
 }
 
-void Tracer::free() {
+void Tracer::free() { self.drop(); }
+
+void Tracer::drop() {
     unsigned long n;
     unsafe { n = self.events.length(); }
     unsigned long i = 0UL;

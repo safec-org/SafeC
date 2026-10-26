@@ -66,8 +66,8 @@ void hydrate_fmt_apply_(?&HydrateFmtBinding<T> bq) {
         case null: { }
         case some(b): {
             struct String text = String::new();
-            T v = b.signal.get();
-            b.format(&text, &v);
+            &T v = b.signal.get_ref();   // borrowed: the Signal keeps owning it
+            b.format(&text, v);
             dom_set_text(b.handle, text.as_ptr());
             text.free();
         }

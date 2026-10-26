@@ -121,6 +121,8 @@ struct Context local_context_(&LocalExecutor ex, struct Waker w) {
     return cx;
 }
 
+void LocalExecutor::drop() { self.timers.drop(); }
+
 struct LocalExecutor LocalExecutor::new() {
     struct LocalExecutor ex;
     ex.head = null;
@@ -175,6 +177,7 @@ static int local_step_(&LocalExecutor ex, &TaskHeader t) {
     fn void(?&TaskHeader, unsigned long) wk = local_task_wake_;
     struct Context cx = local_context_(ex, Waker::new(wk, (?&TaskHeader)t, 0UL));
     int done = t.poll_(t, &cx);
+    cx.drop();
     ex.polls = ex.polls + 1LL;
     async_fetch_and_(&t.state, ~ASYNC_TASK_RUNNING);
     if (done != 0) {

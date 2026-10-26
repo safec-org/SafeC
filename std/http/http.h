@@ -79,8 +79,9 @@ struct HttpResponse {
     void          set_body_bytes([]const unsigned char data);
     // internal: the (reference, length) core of set_body_bytes()
     void          set_body_bytes_n_(const &unsigned char data, unsigned long len);
+    void drop();
 
-    void free();
+    void free() consume;   // = drop()
 };
 
 struct HttpRequest {
@@ -112,8 +113,9 @@ struct HttpRequest {
     // The value of cookie 'name' from the Cookie header(s); empty if unset.
     struct String cookie(const &char name) const;
     struct HttpRequest clone() const;
+    void drop();
 
-    void free();
+    void free() consume;   // = drop()
 };
 
 // A connected, blocking TCP socket — optionally with TLS on it: the
@@ -130,7 +132,9 @@ struct TcpStream {
     int fd;
     ?&heap TlsStream tls;    // null: plain TCP
 
-    // Wraps an open socket fd (owned by the stream from then on: close()).
+    // Wraps an open socket fd. A TcpStream is a handle, not an owner (std
+    // makes short-lived streams over fds that something else closes), so
+    // it is not a Drop type: whoever owns the fd calls close() once.
     static struct TcpStream from_fd(int fd);
     // Wraps an established TLS stream (heap-allocated: the TcpStream owns
     // it from then on, and close() sends close_notify, frees it and closes

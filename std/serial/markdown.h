@@ -128,7 +128,8 @@ struct MdNode {
 
     // Recursively frees this node's whole subtree and the node itself
     // (every MdNode is heap-allocated by MdNode::parse) — don't use it after.
-    void free();
+    void drop();
+    void free() consume;   // = drop()
 };
 
 // Appends the GitHub/VitePress-style slug of 'text' to 'out': lower-cased;

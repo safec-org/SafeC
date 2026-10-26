@@ -42,7 +42,8 @@ struct CookieList {
     const ?&char  get(const &char name) const;
     const ?&char  name_at(unsigned long i) const;
     const ?&char  value_at(unsigned long i) const;
-    void          free();
+    void          drop();
+    void          free() consume;   // = drop()
 };
 
 struct SetCookie {
@@ -70,7 +71,8 @@ struct SetCookie {
     // "name=value; Path=/; Max-Age=3600; Expires=...; Secure; HttpOnly;
     // SameSite=Lax" — the header value.
     struct String to_string() const;
-    void          free();
+    void          drop();
+    void          free() consume;   // = drop()
 };
 
 // Appends "Set-Cookie: <c.to_string()>" to the response's headers (one per

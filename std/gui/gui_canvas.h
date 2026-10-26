@@ -233,7 +233,8 @@ struct GuiCanvas {
     // Back to the initial state (identity transform, black fill, no clip,
     // empty save stack and path).
     void reset();
-    void free();
+    void drop();
+    void free() consume;   // = drop()
 
     // ── state ────────────────────────────────────────────────────────────
     void save();

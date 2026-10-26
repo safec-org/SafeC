@@ -97,12 +97,7 @@ long long http_route_match(const &char pattern, const &char path, &Vec<RoutePara
         if (score > 1000000000000000LL) { score = 1000000000000000LL; }
     }
     // No match: drop captures added during the attempt.
-    while (params.length() > before) {
-        &RouteParam last = params.at(params.length() - 1UL);
-        last.name.free();
-        last.value.free();
-        params.pop();
-    }
+    while (params.length() > before) drop(params.pop());
     return 0LL;
 }
 
@@ -117,13 +112,7 @@ const ?&char http_route_param(const &Vec<RouteParam> params, const &char name) {
 }
 
 void http_route_params_clear(&Vec<RouteParam> params) {
-    unsigned long i = 0UL;
-    while (i < params.length()) {
-        &RouteParam rp = params.at(i);
-        rp.name.free();
-        rp.value.free();
-        i = i + 1UL;
-    }
+    // clear() drops each param's strings
     params.clear();
 }
 

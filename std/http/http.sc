@@ -334,8 +334,7 @@ static unsigned long http_headers_rewrite_(&String raw, const &char name, const 
             out.push(vp);
         }
     }
-    raw.free();
-    *raw = out;
+    std::replace(raw, out).drop();
     return removed;
 }
 
@@ -363,12 +362,16 @@ unsigned long http_headers_remove(&String raw, const &char name) {
 
 // ── Request / response values ─────────────────────────────────────────────
 
-void HttpResponse::free() {
+void HttpResponse::free() { self.drop(); }
+
+void HttpResponse::drop() {
     self.headers.free();
     self.body.free();
 }
 
-void HttpRequest::free() {
+void HttpRequest::free() { self.drop(); }
+
+void HttpRequest::drop() {
     self.method.free();
     self.path.free();
     self.headers.free();
@@ -771,18 +774,19 @@ struct TcpStream http_open_stream(const &char host, unsigned short port, int tls
         }
         defaults.free();
         if (!r.ok()) {
-            e = r.error;
+            e = r.unwrap_err();
             unsafe { sock_close_(fd); }
         } else {
+            struct TlsStream ts = r.unwrap();
             ?&heap TlsStream h = std::alloc(sizeof(struct TlsStream));
             match (h) {
                 case some(hp): {
-                    *hp = r.value;
+                    *hp = ts;
                     if (io_timeout_ms <= 0) { sock_set_io_timeout(fd, 0); }
                     out = TcpStream::over_tls(hp);
                 }
                 case null: {
-                    r.value.close();
+                    ts.close();
                     e = TlsError::make(TLS_ERR_NO_MEMORY, "out of memory");
                 }
             }
@@ -1348,8 +1352,7 @@ static struct HttpResponse http_exchange_(const &char host, unsigned short port,
             if (statusCode < 100 || statusCode > 999) { restHeaders.free(); good = 0; break; }
             if (statusCode < 200 && statusCode != 101) { restHeaders.free(); continue; }
             resp.status = statusCode;
-            resp.headers.free();
-            resp.headers = restHeaders;
+            std::replace(&resp.headers, restHeaders).drop();
             break;
         }
         if (good && !isHead && http_status_has_body_(resp.status)) {
@@ -1576,8 +1579,7 @@ struct HttpResponse http_fetch_n_(const &char method, const &char url,
     }
     match (final_url) {
         case some(fu): {
-            fu.free();
-            *fu = cur.to_string();
+            std::replace(fu, cur.to_string()).drop();
         }
         case null: { }
     }
@@ -1633,8 +1635,7 @@ static void http_origin_form_(&String path) {
     struct Url u = Url::parse(path.as_ptr(), &ok);
     if (ok) {
         struct String t = u.request_target();
-        path.free();
-        *path = t;
+        std::replace(path, t).drop();
     }
     u.free();
 }
@@ -1680,17 +1681,15 @@ static int http_read_request_(&BufReader<TcpStream> in, const &HttpServerConfig 
         if (parts[0].is_empty() || parts[1].is_empty()) { good = 0; }
     }
     if (good) {
-        req.method.free();
-        req.method = parts[0].clone();
-        req.path.free();
-        req.path = parts[1].clone();
+        std::replace(&req.method, parts[0].clone()).drop();
+        std::replace(&req.path, parts[1].clone()).drop();
         http_origin_form_(&req.path);
     }
     unsigned long pi = 0UL;
-    while (pi < np) { parts[pi].free(); pi = pi + 1UL; }
+    while (pi < np) { unsafe { parts[pi].free(); } pi = pi + 1UL; }   // split filled the first np
+    unsafe { forget(parts); }                                          // ... all freed above
     requestLine.free();
-    req.headers.free();
-    req.headers = rest;
+    std::replace(&req.headers, rest).drop();
     if (!good) { return HTTP_READ_ERROR_; }
 
     const &char h = req.headers.as_ptr();
@@ -1823,18 +1822,20 @@ static void http_serve_conn_(struct HttpServerShared_* sh, int fd) {
         struct Result<TlsStream, TlsError> tr;
         unsafe { tr = sh->acceptor.accept(fd); }
         if (!tr.ok()) {
+            tr.drop();
             unsafe { sock_close_(fd); }
             return;
         }
+        struct TlsStream ts = tr.unwrap();
         ?&heap TlsStream h = std::alloc(sizeof(struct TlsStream));
         match (h) {
             case some(hp): {
-                *hp = tr.value;
+                *hp = ts;
                 s = TcpStream::over_tls(hp);
                 conn.tls = hp;
             }
             case null: {
-                tr.value.close();
+                ts.close();
                 return;
             }
         }
@@ -1978,9 +1979,10 @@ struct HttpServer HttpServer::bind(const &HttpServerConfig cfg, ?&int ok) {
                     case some(tc): {
                         struct Result<TlsAcceptor, TlsError> ar = TlsAcceptor::new(tc);
                         if (ar.ok()) {
-                            sh->acceptor = ar.value;
+                            sh->acceptor = ar.unwrap();
                             sh->has_tls = 1;
                         } else {
+                            ar.drop();
                             good = 0;
                             dealloc_raw_((void*)sh->activeFds);
                             dealloc_raw_((void*)sh->tids);
@@ -2281,10 +2283,8 @@ static struct HttpRequest http_parse_request_from_buf_(struct String* buf, long 
         struct String parts[8];
         unsigned long np = requestLine.split(" ", parts[0..8]);
         if (np >= 2UL) {
-            req.method.free();
-            req.method = parts[0].clone();
-            req.path.free();
-            req.path = parts[1].clone();
+            std::replace(&req.method, parts[0].clone()).drop();
+            std::replace(&req.path, parts[1].clone()).drop();
         } else {
             good = 0;
         }
@@ -2292,8 +2292,7 @@ static struct HttpRequest http_parse_request_from_buf_(struct String* buf, long 
         while (pi < np) { parts[pi].free(); pi = pi + 1UL; }
         requestLine.free();
 
-        req.headers.free();
-        req.headers = restHeaders;
+        std::replace(&req.headers, restHeaders).drop();
 
         // By the time this is called, the task's read phases have already
         // accumulated the full body (Content-Length bytes past headerEnd) —
@@ -2308,8 +2307,7 @@ static struct HttpRequest http_parse_request_from_buf_(struct String* buf, long 
             if (clok && (unsigned long)headerEnd + cl < bodyEnd) bodyEnd = (unsigned long)headerEnd + cl;
         }
         clStr.free();
-        req.body.free();
-        req.body = buf->substr((unsigned long)headerEnd, bodyEnd);
+        std::replace(&req.body, buf->substr((unsigned long)headerEnd, bodyEnd)).drop();
 
         if (ok != (int*)0) { *ok = good; }
     }

@@ -35,7 +35,8 @@ struct BumpAllocator {
     unsigned long remaining() const;
 
     // Free the backing buffer (only valid for heap-backed allocators from BumpAllocator::new).
-    void          destroy();
+    void          drop();
+    void          destroy() consume;   // = drop()
 };
 
 } // namespace std

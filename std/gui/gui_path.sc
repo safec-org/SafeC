@@ -497,7 +497,9 @@ void GuiPath::clear() {
     self.startX = 0.0f; self.startY = 0.0f;
 }
 
-void GuiPath::free() {
+void GuiPath::free() { self.drop(); }
+
+void GuiPath::drop() {
     self.segs.free();
     self.hasCurrent = 0;
 }

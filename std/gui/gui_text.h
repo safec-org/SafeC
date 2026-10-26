@@ -157,8 +157,9 @@ struct GuiTypeface {
     // Takes ownership of 'b.coverage'. Returns the stored entry.
     &GuiGlyphBitmap cache_insert(struct GuiGlyphBitmap b);
     void  cache_clear();
+    void drop();
 
-    void free();
+    void free() consume;   // = drop()
 };
 
 // One positioned glyph of a GuiTextLayout.
@@ -215,7 +216,8 @@ struct GuiTextLayout {
     void  caret(unsigned long pos, &float x, &float top, &float height) const;
     // The line holding byte offset 'pos'.
     unsigned long line_of(unsigned long pos) const;
-    void  free();
+    void  drop();
+    void  free() consume;   // = drop()
 };
 
 } // namespace std

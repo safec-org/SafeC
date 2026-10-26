@@ -18,8 +18,8 @@
 extern void* malloc(unsigned long size);
 extern void free(void* ptr);
 
-static void tensor_drop(&FloatTensor t) {
-    t->free();
+static void tensor_drop(&FloatTensor t) {   // a heap tensor: destroyed in place, then freed
+    unsafe { t->free(); }
     unsafe { free((void*)t); }
 }
 

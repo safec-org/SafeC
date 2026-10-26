@@ -64,7 +64,8 @@ struct TlsfAllocator {
     void          reset();
 
     // Free the backing buffer (only valid for heap-backed allocators).
-    void          destroy();
+    void          drop();
+    void          destroy() consume;   // = drop()
 
     // Internal helpers.
     void          insert_(&TlsfBlock blk);

@@ -24,7 +24,9 @@ struct GuiTextLayout GuiTextLayout::new() {
     return l;
 }
 
-void GuiTextLayout::free() {
+void GuiTextLayout::free() { self.drop(); }
+
+void GuiTextLayout::drop() {
     self.glyphs.free();
     self.lines.free();
 }

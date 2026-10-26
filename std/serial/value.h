@@ -108,7 +108,8 @@ struct Value {
 
     // Deep copy / recursive release of the whole tree.
     struct Value    clone() const;
-    void            free();
+    void            drop();
+    void            free() consume;   // = drop()
 
     // ── Text formats (any Format) ───────────────────────────────────────────
     // A fresh String holding this tree in format f.

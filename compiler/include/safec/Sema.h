@@ -67,6 +67,24 @@ public:
     // Run all analyses; returns false if there were errors
     bool run();
 
+    // ── Ownership (Drop) and thread safety (Send/Sync) ──────────────────────
+    // A struct with a 'void drop()' method implements the builtin Drop
+    // trait. A value is must-drop when its type implements Drop or holds a
+    // must-drop value by value (a field, an array element, a tuple member,
+    // an optional's payload) — references, pointers and slices only borrow.
+    bool hasDropMethod(const StructType &st) const;
+    bool isMustDrop(const TypePtr &ty) const;
+    // drop() itself, or a method declared 'consume' in its struct body.
+    bool isConsumeMethod(const FunctionDecl *fd) const;
+    // A type as written in source: 'Vec<int>' rather than the mangled
+    // instance name.
+    std::string displayType(const TypePtr &ty) const;
+    // "" when 'ty' is Send (sync=false) / Sync (sync=true), else why not.
+    // 'syncMut' asks whether shared *mutable* access is race-free (only
+    // types marked 'unsafe impl Sync' and aggregates of them).
+    std::string threadSafety(const TypePtr &ty, bool sync, bool syncMut = false,
+                             bool inOwner = false, int depth = 0) const;
+
 private:
     // ── Scope management ──────────────────────────────────────────────────────
     void pushScope(bool isUnsafe = false);
@@ -132,6 +150,7 @@ private:
     TypePtr checkNew(NewExpr &e);
     TypePtr checkTupleLit(TupleLitExpr &e);
     TypePtr checkSpawn(SpawnExpr &e);
+    void checkThreadArg(Expr &arg, const TypePtr &argTy, bool scoped, const char *what);
 
     // Aggregate initializer '{a, b, c}' against a known target type (struct
     // fields or array elements, matched positionally). Falls back to
@@ -148,6 +167,15 @@ private:
     // body (monomorphized instances included) is type-checked.
     void checkMemoryFlow();
     std::vector<FunctionDecl *> checkedFns_;
+    mutable std::unordered_map<const StructType *, int> mustDropCache_;   // 0 no, 1 yes, 2 in progress
+    // Structs whose 'void drop() if (cond);' condition is false: not Drop.
+    std::unordered_set<std::string> disabledDrops_;
+    // Until every declaration is collected a struct's drop() may not be
+    // registered yet: must-drop answers aren't cached and drop() conditions
+    // wait (see collectStruct).
+    bool declsCollected_ = false;
+    std::vector<std::pair<std::string, std::shared_ptr<Expr>>> pendingDropConds_;
+    void evalDropCond(const std::string &structName, Expr &cond, SourceLocation loc);
 
     // ── Region safety ─────────────────────────────────────────────────────────
     // Returns the scope depth a reference type originated from

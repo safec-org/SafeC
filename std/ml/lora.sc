@@ -22,7 +22,9 @@ static void lora_heap_end_(?&TensorArena cur) {
 }
 
 static void lora_drop_(&FloatTensor t) {
-    t->free();
+    // A heap tensor: destroyed in place through the reference, then its
+    // memory released (a Box the checker can't see).
+    unsafe { t->free(); }
     unsafe { free((void*)t); }
 }
 
@@ -162,8 +164,8 @@ void LoraMlp::detach() {
     }
     unsigned long k = 0UL;
     while (k < self.A.length()) { lora_drop_(*self.A.at(k)); lora_drop_(*self.B.at(k)); k = k + 1UL; }
-    self.A.free();
-    self.B.free();
+    self.A.clear();   // the adapters are gone; the (empty) lists stay
+    self.B.clear();
 }
 
 // ══ NF4 ══════════════════════════════════════════════════════════════════════
@@ -318,7 +320,9 @@ unsigned long Nf4Tensor::bytes() const {
     return b + 4UL * self.blocks;
 }
 
-void Nf4Tensor::free() {
+void Nf4Tensor::free() { self.drop(); }
+
+void Nf4Tensor::drop() {
     unsafe {
         free((void*)self.codes);
         if (self.absmax != (float*)0) free((void*)self.absmax);
@@ -384,10 +388,11 @@ unsigned long QLoraMlp::base_bytes() const {
     return n;
 }
 
-void QLoraMlp::free() {
+void QLoraMlp::free() { self.drop(); }
+
+void QLoraMlp::drop() {
     unsigned long k = 0UL;
     while (k < self.nLayers) {
-        self.W.at(k).free();
         lora_drop_(*self.bias.at(k));
         lora_drop_(*self.A.at(k));
         lora_drop_(*self.B.at(k));

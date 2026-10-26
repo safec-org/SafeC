@@ -49,7 +49,8 @@ struct BST {
     ?&K           max_key() const;         // null if empty
     void          foreach_inorder(fn void(const &K, &V) func);
     void          clear();
-    void          free();
+    void          drop();
+    void          free() consume;   // = drop()
 
     ?&heap struct BSTNode<K, V> find_(const &K key) const;
     void          relink_(?&heap struct BSTNode<K, V> parent, int dir,
@@ -295,13 +296,16 @@ void BST::foreach_inorder(fn void(const &K, &V) func) {
 }
 
 generic<K, V, C: Order>
-void BST::free() {
+void BST::free() { self.drop(); }
+
+generic<K, V, C: Order>
+void BST::drop() {
     self.pool.free_all();
     self.root = null;
     self.len = 0UL;
 }
 
 generic<K, V, C: Order>
-void BST::clear() { self.free(); }
+void BST::clear() { unsafe { self.drop(); } }   // drop in place: drop() leaves it empty
 
 } // namespace std

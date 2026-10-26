@@ -55,8 +55,9 @@ struct GuiFont {
     // load() leaves the font untouched. Both return 1 = ok.
     int  save(const &char path) const;
     int  load(const &char path);
+    void drop();
 
-    void free();
+    void free() consume;   // = drop()
 
     // Drawing with this font (mirrors GuiWindow::draw_text() and
     // gui_draw.h's gui_text_width()/gui_text_height() for the built-in

@@ -56,7 +56,8 @@ struct SlabAllocator {
     unsigned long max_align() const;
 
     // Free the backing buffer (only valid for heap-backed allocators from SlabAllocator::new).
-    void          destroy();
+    void          drop();
+    void          destroy() consume;   // = drop()
 
     // Internal: build embedded free-list through the buffer.
     void          build_freelist_();

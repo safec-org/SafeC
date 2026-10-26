@@ -171,7 +171,7 @@ void IoDriver::close_() {
     while (i < ASYNC_IO_WAITERS) {
         if (self.waiters[i].serial != 0) {
             self.waiters[i].serial = 0;
-            self.waiters[i].w.drop();
+            std::replace(&self.waiters[i].w, Waker::noop()).drop();
         }
         i = i + 1;
     }
@@ -223,10 +223,7 @@ int IoDriver::wait(int fd, int filter, const &Waker w, int id) {
     if (io_valid_(self, id) != 0) {
         int slot = io_slot_(id);
         if (self.waiters[slot].fd == fd && self.waiters[slot].filter == filter) {
-            if (self.waiters[slot].w.will_wake(w) == 0) {
-                self.waiters[slot].w.drop();
-                self.waiters[slot].w = w.clone();
-            }
+            if (self.waiters[slot].w.will_wake(w) == 0) std::replace(&self.waiters[slot].w, w.clone()).drop();
             return id;
         }
         self.cancel(id);
@@ -271,7 +268,7 @@ int IoDriver::wait(int fd, int filter, const &Waker w, int id) {
 void IoDriver::cancel(int id) {
     if (io_valid_(self, id) == 0) return;
     int slot = io_slot_(id);
-    self.waiters[slot].w.drop();
+    std::replace(&self.waiters[slot].w, Waker::noop()).drop();
     io_free_slot_(self, slot);
 }
 
@@ -296,7 +293,7 @@ void IoDriver::on_ready_(int fd, int filter) {
     int i = 0;
     while (i < ASYNC_IO_WAITERS) {
         if (self.waiters[i].serial != 0 && self.waiters[i].fd == fd) {
-            struct Waker w = self.waiters[i].w;
+            struct Waker w = std::replace(&self.waiters[i].w, Waker::noop());
             io_free_slot_(self, i);
             w.wake();
         }
@@ -388,6 +385,8 @@ struct AsyncTcpStream AsyncTcpStream::from_fd(int fd) {
     return s;
 }
 
+void AsyncTcpStream::drop() { self.close(); }
+
 int AsyncTcpStream::close() {
     if (self.fd < 0) return -1;
     int rc = async_sock_close(self.fd);
@@ -454,6 +453,8 @@ unsigned short AsyncTcpListener::local_port() const {
     if (self.fd < 0) return (unsigned short)0;
     return async_sock_local_port(self.fd);
 }
+
+void AsyncTcpListener::drop() { self.close(); }
 
 int AsyncTcpListener::close() {
     if (self.fd < 0) return -1;

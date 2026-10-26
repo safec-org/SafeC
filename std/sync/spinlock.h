@@ -6,6 +6,7 @@ namespace std {
 
 struct Spinlock {
     int locked;    // 0 = unlocked, 1 = locked (accessed atomically)
+    unsafe impl Send + Sync;   // every access is atomic
 
     // An unlocked spinlock.
     static struct Spinlock new();

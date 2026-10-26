@@ -240,9 +240,9 @@ void t_x509() {
         ASSERT_EQ(x509_verify_signed_by(ld[..], &leaf, id[..], &ica), 0);
         // truncated DER doesn't parse
         ASSERT_TRUE(x509_parse(ld[0..l.len - 5UL], &leaf) != 0);
-        tls_der_list_free_(&c);
-        tls_der_list_free_(&r);
-        tls_der_list_free_(&root);
+        c.drop();
+        r.drop();
+        root.drop();
     }
 }
 
@@ -257,8 +257,8 @@ static int chain_code(const &char chainFile, const &char rootFile, const ?&char 
     int code = TLS_OK;
     unsafe { code = tls_verify_chain_(&chain, (?&TlsTrust_)&t, null, host, server, tls_now_(), &e); }
     if (code != TLS_OK) { printf("      %s + %s: %s\n", chainFile, rootFile, e.message); }
-    tls_trust_free_(&t);
-    tls_der_list_free_(&chain);
+    t.drop();
+    chain.drop();
     return code;
 }
 
@@ -284,6 +284,7 @@ void t_chain() {
     struct Vec<struct Vec<unsigned char>> empty = Vec::new();
     struct TlsError e = TlsError::none();
     ASSERT_EQ(tls_verify_chain_(&empty, null, null, null, 1, tls_now_(), &e), TLS_ERR_NO_CERT);
+    empty.drop();
 }
 
 void t_config() {
@@ -370,10 +371,11 @@ static ?&void run_tls_server(?&void arg) {
             if (!r.ok()) {
                 printf("      server: %s\n", r.error.message);
                 g_srv_failures = g_srv_failures + 1;
+                r.drop();
                 close(fd);
                 continue;
             }
-            struct TlsStream t = r.value;
+            struct TlsStream t = r.unwrap();
             unsigned char buf[2048];
             long long k = t.read(buf[0..2000UL]);
             char out[600];
@@ -406,8 +408,8 @@ static int start_server(const &char cert, const &char key, int backend, int veri
     }
     struct Result<TlsAcceptor, TlsError> ar = TlsAcceptor::new(&sc);
     sc.free();
-    if (!ar.ok()) { printf("      acceptor: %s\n", ar.error.message); return 0; }
-    g_acc = ar.value;
+    if (!ar.ok()) { printf("      acceptor: %s\n", ar.error.message); ar.drop(); return 0; }
+    g_acc = ar.unwrap();
     g_srv_port = 0;
     g_srv_conns = conns;
     g_srv_ready = 0;
@@ -451,9 +453,11 @@ static int client_req(int port, int backend, const &char host, const &char root,
     if (!r.ok()) {
         printf("      client(%d) %s: %s\n", backend, host, r.error.message);
         close(fd);
-        return r.error.code;
+        int failed = r.error.code;
+        r.drop();
+        return failed;
     }
-    struct TlsStream t = r.value;
+    struct TlsStream t = r.unwrap();
     int code = TLS_OK;
     match (alpn_want) {
         case some(w): { if (!str_eq(t.alpn(), w)) { printf("      alpn '%s' != '%s'\n", t.alpn(), w); code = TLS_ERR_INTERNAL; } }
@@ -519,7 +523,7 @@ void t_nonblocking() {
         fd_set_nonblocking(fd);
         struct Result<TlsStream, TlsError> r = TlsStream::client(fd, "localhost", &cfg);
         ASSERT_TRUE(r.ok());
-        struct TlsStream t = r.value;
+        struct TlsStream t = r.unwrap();
         int wants = 0;
         int h = TLS_WANT_READ;
         int spins = 0;
@@ -722,8 +726,12 @@ static struct HttpResponse route_handler(&HttpRequest req, &HttpCtx ctx) {
                     case null: { }
                 }
                 m.free();
+            } else {
+                unsafe { forget(m); }   // nothing was stored in m
             }
             c.close();
+        } else {
+            c.drop();
         }
         return HttpResponse::new(200);
     }

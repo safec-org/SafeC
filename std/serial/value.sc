@@ -124,7 +124,9 @@ struct Value Value::clone() const {
     return out;
 }
 
-void Value::free() {
+void Value::free() { self.drop(); }
+
+void Value::drop() {
     int kind = self.kind;
     if (kind == VAL_STRING) {
         unsafe { if (self.str_val != (char*)0) { dealloc_raw_((void*)self.str_val); } }
@@ -165,7 +167,9 @@ inline struct Value value_string(const &char s) { return Value::from_str(s); }
 inline void value_array_push(&Value arr, struct Value v) { arr.array_push(v); }
 inline void value_object_set(&Value obj, const &char key, struct Value v) { obj.object_set(key, v); }
 inline struct Value value_clone(const &Value v) { return v.clone(); }
-inline void value_free(&Value v) { v.free(); }
+// Drops *v in place: the caller must not use it again (an old-style
+// release through a reference, which the ownership checker can't follow).
+inline void value_free(&Value v) { unsafe { v.free(); } }
 
 inline int Value::kind_of() const { return self.kind; }
 inline int Value::is_null() const { return self.kind == VAL_NULL; }

@@ -10,11 +10,19 @@
 // Elements are stored by value in one contiguous heap buffer. Element access
 // hands out '?&T' (null when out of range) — a reference into the buffer,
 // valid until the next call that can reallocate it (push/insert/extend/
-// reserve/shrink/free). Copies are shallow: a Vec of structs that own heap
-// memory (String, Vec, ...) doesn't free those on clear()/free().
+// reserve/shrink/drop) — the compiler rejects using one after drop().
+//
+// A Vec owns its buffer and its elements: it is a Drop type (drop() it, or
+// move it, on every path), and drop()/clear() drop each element whose type
+// owns something (String, Vec, ...: see needs_drop). push/insert/set take
+// the element by value; one they can't store is dropped. clone(), filter(),
+// extend() and from_arr() copy elements bit for bit, so for an element type
+// that owns something they would share it: they panic instead (build such
+// a copy element by element, cloning each).
 #include <std/mem.h>
 #include <std/panic.h>
 #include <std/cmp.h>
+#include <std/ownership.h>
 
 namespace std {
 
@@ -61,7 +69,8 @@ struct Vec {
     void          foreach(fn void(&T, unsigned long) func);
     struct Vec<T> filter(fn int(const &T) pred) const;
 
-    void          free();
+    void          drop();                             // frees the buffer (Drop)
+    void          free() consume;                     // = drop()
 };
 
 generic<T>
@@ -157,8 +166,11 @@ generic<T>
 
 generic<T>
 int Vec::set(unsigned long idx, T value) {
-    if (idx >= self.len) return 0;
-    unsafe { self.data[idx] = value; }
+    if (idx >= self.len) { drop(value); return 0; }
+    unsafe {
+        drop(self.data[idx]);
+        self.data[idx] = value;
+    }
     return 1;
 }
 
@@ -182,7 +194,7 @@ int Vec::push(T value) {
         unsigned long next = self.cap < 4UL ? 4UL : self.cap * 2UL;
         ?&heap T grown = null;
         unsafe { grown = (?&heap T)realloc_array_raw_((void*)self.data, next, sizeof(T)); }
-        if (grown.is_null()) return 0;
+        if (grown.is_null()) { drop(value); return 0; }
         self.data = grown;
         self.cap = next;
     }
@@ -200,12 +212,12 @@ generic<T>
 
 generic<T>
 int Vec::insert(unsigned long idx, T value) {
-    if (idx > self.len) return 0;
+    if (idx > self.len) { drop(value); return 0; }
     if (self.len == self.cap) {
         unsigned long next = self.cap < 4UL ? 4UL : self.cap * 2UL;
         ?&heap T grown = null;
         unsafe { grown = (?&heap T)realloc_array_raw_((void*)self.data, next, sizeof(T)); }
-        if (grown.is_null()) return 0;
+        if (grown.is_null()) { drop(value); return 0; }
         self.data = grown;
         self.cap = next;
     }
@@ -231,10 +243,18 @@ generic<T>
 }
 
 generic<T>
-void Vec::clear() { self.len = 0UL; }
+void Vec::clear() {
+    if const (needs_drop(T)) {
+        unsigned long i = 0UL;
+        while (i < self.len) { unsafe { drop(self.data[i]); } i = i + 1UL; }
+    }
+    self.len = 0UL;
+}
+
 
 generic<T>
 int Vec::extend([]const T items) {
+    if const (needs_drop(T)) panic_at("Vec::extend: the elements own resources; push clones of them instead", "vec.h", 0);
     unsigned long count = items.len;
     if (count == 0UL) return 1;
     if (self.len + count > self.cap) {
@@ -400,6 +420,7 @@ int Vec::contains(const &T key, fn int(const &T, const &T) cmp) const {
 
 generic<T>
 struct Vec<T> Vec::clone() const {
+    if const (needs_drop(T)) panic_at("Vec::clone: the elements own resources; clone them one by one", "vec.h", 0);
     struct Vec<T> out = Vec::with_cap(self.len);
     match (self.data) {
         case null: { }
@@ -418,6 +439,7 @@ void Vec::foreach(fn void(&T, unsigned long) func) {
 
 generic<T>
 struct Vec<T> Vec::filter(fn int(const &T) pred) const {
+    if const (needs_drop(T)) panic_at("Vec::filter: the elements own resources; build the result with clones", "vec.h", 0);
     struct Vec<T> out = Vec::new();
     unsafe {
         unsigned long i = 0UL;
@@ -430,7 +452,11 @@ struct Vec<T> Vec::filter(fn int(const &T) pred) const {
 }
 
 generic<T>
-void Vec::free() {
+void Vec::free() { self.drop(); }
+
+generic<T>
+void Vec::drop() {
+    self.clear();
     unsafe { dealloc_raw_((void*)self.data); }
     self.data = null;
     self.len = 0UL;

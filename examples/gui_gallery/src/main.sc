@@ -668,6 +668,7 @@ int main(int argc, char** argv) {
     g.app = &app;
     if (!open_gallery(&app, &g)) {
         unsafe { printf("gui_gallery: no window (no display?)\n"); }
+        g.photo.free();
         app.free();
         return 0;
     }

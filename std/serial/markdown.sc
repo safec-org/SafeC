@@ -76,7 +76,9 @@ static void md_add_inline_(struct MdNode* parent, struct MdNode* child) {
     }
 }
 
-void MdNode::free() {
+void MdNode::free() { self.drop(); }
+
+void MdNode::drop() {
     unsigned long cn = self.children.length();
     for (unsigned long ci = 0UL; ci < cn; ci = ci + 1UL) {
         &heap MdNode child;
@@ -1030,12 +1032,6 @@ static void md_table_cells_(const char* l, struct Vec<struct String>* cells) {
     }
 }
 
-static void md_free_strings_(struct Vec<struct String>* v) {
-    unsafe {
-        for (unsigned long i = 0UL; i < v->length(); i = i + 1UL) { v->at(i)->free(); }
-        v->free();
-    }
-}
 
 // Could line 'l' start a table header row (has a '|')?
 static int md_has_pipe_(const char* l) {
@@ -1243,7 +1239,7 @@ static unsigned long md_parse_list_(struct MdParser_* st, struct MdNode* parent,
         struct MdNode* li = md_new_(MD_LIST_ITEM);
         md_parse_blocks_(st, li, &item, 0UL, item.length());
         md_add_(list, li);
-        md_free_strings_(&item);
+        item.drop();
         i = j;
         // Blank lines before the next item of this list: loose.
         unsigned long k = i;
@@ -1356,7 +1352,7 @@ static void md_parse_blocks_(struct MdParser_* st, struct MdNode* parent, struct
             struct MdNode* bq = md_new_(MD_BLOCKQUOTE);
             md_parse_blocks_(st, bq, &q, 0UL, q.length());
             md_add_(parent, bq);
-            md_free_strings_(&q);
+            q.drop();
             i = j;
             continue;
         }
@@ -1397,7 +1393,7 @@ static void md_parse_blocks_(struct MdParser_* st, struct MdNode* parent, struct
                 }
                 md_parse_blocks_(st, box, &inner, 0UL, inner.length());
                 md_add_(parent, box);
-                md_free_strings_(&inner);
+                inner.drop();
                 kind.free(); title.free();
                 i = j;
                 continue;
@@ -1468,18 +1464,18 @@ static void md_parse_blocks_(struct MdParser_* st, struct MdNode* parent, struct
                         }
                         md_add_(row, cell);
                     }
-                    md_free_strings_(&cells);
+                    cells.drop();
                     md_add_(table, row);
                     j = j + (first ? 2UL : 1UL);
                     first = 0;
                 }
                 md_add_(parent, table);
-                md_free_strings_(&head);
+                head.drop();
                 aligns.free();
                 i = j;
                 continue;
             }
-            md_free_strings_(&head);
+            head.drop();
             aligns.free();
         }
 
@@ -1548,8 +1544,8 @@ static void md_parse_blocks_(struct MdParser_* st, struct MdNode* parent, struct
     }
     struct MdNode* doc = md_new_(MD_DOC);
     md_parse_blocks_(&st, doc, &lines, 0UL, lines.length());
-    md_free_strings_(&lines);
-    md_free_strings_(&st.ids);
+    lines.drop();
+    st.ids.drop();
     unsafe { return doc; }
 }
 

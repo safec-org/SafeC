@@ -1382,6 +1382,7 @@ void gen_expr(int e) {
         return;
     }
     if (k == E_SIZEOF_E) { emit_i64((long)ty_size(g_node[g_node[e].a].ty)); g_pw = 64; return; }
+    if (k == E_FIELDCOUNT && (g_node[e].flags & NF_NEEDSDROP) != 0) { emit_i32((int)g_node[e].ival); g_pw = 32; return; }
     if (k == E_SIZEOFPACK || k == E_FIELDCOUNT) { emit_i64(g_node[e].ival); g_pw = 64; return; }
     if (k == E_INITLIST) { gen_value_as(e, t); return; }
     if (k == E_NEW) { gen_new(e); return; }

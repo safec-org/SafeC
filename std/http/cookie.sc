@@ -104,15 +104,10 @@ const ?&char CookieList::value_at(unsigned long i) const {
     return self.items.at(i).value.as_ptr();
 }
 
-void CookieList::free() {
-    unsigned long i = 0UL;
-    while (i < self.items.length()) {
-        &CookiePair p = self.items.at(i);
-        p.name.free();
-        p.value.free();
-        i = i + 1UL;
-    }
-    self.items.free();
+void CookieList::free() { self.drop(); }
+
+void CookieList::drop() {
+    self.items.drop();   // and each pair's strings
 }
 
 struct SetCookie SetCookie::new(const &char name, const &char value) {
@@ -214,7 +209,9 @@ struct String SetCookie::to_string() const {
     return out;
 }
 
-void SetCookie::free() {
+void SetCookie::free() { self.drop(); }
+
+void SetCookie::drop() {
     self.name.free();
     self.value.free();
     self.path.free();

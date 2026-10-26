@@ -19,7 +19,9 @@ struct HostPark HostPark::new() {
     return p;
 }
 
-void HostPark::destroy() {
+void HostPark::destroy() { self.drop(); }
+
+void HostPark::drop() {
     if (self.ok == 0) return;
     cond_destroy(&self.cv);
     mutex_destroy(&self.mu);

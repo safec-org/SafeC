@@ -33,7 +33,8 @@ struct Dataset {
     // The same with this set's statistics applied to it and 'test' (no test
     // leakage).
     void standardize_pair(&Dataset test);
-    void free();
+    void drop();
+    void free() consume;   // = drop()
 
     // Two interleaved half circles, 2 classes (scikit-learn's make_moons).
     static struct Dataset moons(unsigned long n, float noise, &Rng rng);
@@ -104,7 +105,8 @@ struct DataLoader {
     // once) and gathers each batch there; 1 on success, else the loader
     // stays on the CPU.
     int to(int device);
-    void free();
+    void drop();
+    void free() consume;   // = drop()
 
     static struct DataLoader new(const &Dataset ds, unsigned long batchSize, int shuffle, unsigned long seed);
 };

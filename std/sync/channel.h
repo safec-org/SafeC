@@ -34,15 +34,19 @@ extern void* memcpy(void* dst, const void* src, size_t n);   // size_t: 32-bit o
 
 namespace std {
 
-generic<T>
+generic<T: Send>
 struct Chan {
+    unsafe impl Send + Sync;   // the runtime channel is locked inside
     ?&Erased raw_;   // runtime handle from __safec_chan_create; null if creation failed
 
     static struct Chan<T> new(int cap);   // buffered channel of `cap` slots
 
     int  send(T val);     // 1 on success, 0 if closed (or never created)
     ?T   recv();          // null once closed and drained
-    void close();         // wakes every blocked sender/receiver
+    // No more sends; wakes every blocked sender/receiver (receivers drain
+    // what is buffered first). The runtime channel itself is never freed
+    // (there is no destroy), so a Chan is not a Drop type.
+    void close();
 
     // send/recv under the Fifo names (std/collections/traits.h), so generic
     // producer/consumer code takes a Chan like any queue. Both block.
@@ -61,13 +65,15 @@ struct Chan<T> Chan::new(int cap) {
 
 generic<T>
 int Chan::send(T val) {
-    if (self.raw_.is_null()) return 0;
+    if (self.raw_.is_null()) { drop(val); return 0; }
     unsigned long long slot = 0ULL;
     bool ok;
     unsafe {
         memcpy((void*)&slot, (const void*)&val, (size_t)sizeof(T));
         ok = __safec_chan_send((void*)self.raw_, (void*)&slot);
     }
+    if (ok) { unsafe { forget(val); } }   // its bytes moved into the channel
+    else drop(val);                       // closed: nobody will receive it
     return ok ? 1 : 0;
 }
 

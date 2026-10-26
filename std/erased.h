@@ -22,6 +22,11 @@ namespace std {
 
 struct Erased {
     char opaque_;   // never constructed or read; only referenced
+    // Safe code can't reach through an Erased, so it shares nothing by
+    // itself: whether the erased value may cross threads is up to the type
+    // holding it (a Waker's task data must be; a GUI handler's context is
+    // behind a !Send window).
+    unsafe impl Send + Sync;
 };
 
 } // namespace std

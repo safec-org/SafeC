@@ -12,3 +12,14 @@ ctests/cheaders/complex_float128.sc
 # are not tracked, so one held across a push or a rehashing insert is not
 # reported (SUBSET.md, "Memory-flow analysis")
 ctests/lifetimes/container_refs_err.sc
+
+# ownership (Drop) errors: scc doesn't run safec's ownership checks
+# (SUBSET.md, "Ownership and thread safety")
+ctests/ownership/borrows_err.sc
+ctests/ownership/destructors_err.sc
+ctests/ownership/forget_err.sc
+ctests/ownership/generics_err.sc
+ctests/ownership/leaks_err.sc
+ctests/ownership/use_after_err.sc
+# std/thread.h is not bundled with scc (SUBSET.md, "Not supported")
+ctests/threads/mutex.sc

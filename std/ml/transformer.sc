@@ -35,7 +35,7 @@ static &FloatTensor xf_tmp_(&Vec<&FloatTensor> tmp, &FloatTensor t) {
     return t;
 }
 
-static void xf_release_(const &FloatTensor out, &Vec<&FloatTensor> tmp) {
+static void xf_release_(const &FloatTensor out, struct Vec<&FloatTensor> tmp) {
     unsigned long i = 0UL;
     while (i < tmp.length()) { attn_release_tmp_(out, *tmp.at(i)); i = i + 1UL; }
     tmp.free();
@@ -74,7 +74,9 @@ struct DiTBlock DiTBlock::new(unsigned long dModel, unsigned long dHidden, unsig
     return blk;
 }
 
-void DiTBlock::free() {
+void DiTBlock::free() { self.drop(); }
+
+void DiTBlock::drop() {
     unsafe {
         self->Wq->free(); self->Wk->free(); self->Wv->free(); self->Wo->free();
         self->W1->free(); self->b1->free(); self->W2->free(); self->b2->free(); self->WadaLN->free();
@@ -110,7 +112,7 @@ void DiTBlock::free() {
     &FloatTensor h2Mod = xf_tmp_(&tmp, tensor_add_bias(h2Scaled, shift2));
     &FloatTensor ffnOut = xf_tmp_(&tmp, xf_ffn_(&tmp, h2Mod, self.W1, self.b1, self.W2, self.b2));
     &FloatTensor out = tensor_add(x1, xf_tmp_(&tmp, tensor_mul_row(ffnOut, gate2)));
-    xf_release_(out, &tmp);
+    xf_release_(out, tmp);
     return out;
 }
 
@@ -129,7 +131,9 @@ struct JiTBlock JiTBlock::new(unsigned long dModel, unsigned long dHidden, unsig
     return blk;
 }
 
-void JiTBlock::free() {
+void JiTBlock::free() { self.drop(); }
+
+void JiTBlock::drop() {
     unsafe {
         self->Wq->free(); self->Wk->free(); self->Wv->free(); self->Wo->free();
         self->W1->free(); self->b1->free(); self->W2->free(); self->b2->free();
@@ -145,7 +149,7 @@ void JiTBlock::free() {
     &FloatTensor x1 = xf_tmp_(&tmp, tensor_add(x, attnOut));
     &FloatTensor h2 = xf_tmp_(&tmp, x1.layer_norm((float)1e-5));
     &FloatTensor out = tensor_add(x1, xf_tmp_(&tmp, xf_ffn_(&tmp, h2, self.W1, self.b1, self.W2, self.b2)));
-    xf_release_(out, &tmp);
+    xf_release_(out, tmp);
     return out;
 }
 
@@ -182,11 +186,11 @@ void JiT::collect_params(&Vec<&FloatTensor> out) const {
 
 void JiT::collect_state(&Vec<&FloatTensor> out) const { self.collect_params(out); }
 
-void JiT::free() {
+void JiT::free() { self.drop(); }
+
+void JiT::drop() {
     attn_release_(self.WPatchEmbed);
-    unsigned long i = 0UL;
-    while (i < self.blocks.length()) { self.blocks.at(i).free(); i = i + 1UL; }
-    self.blocks.free();
+    self.blocks.free();   // and each block
 }
 
 void DiTBlock::collect_params(&Vec<&FloatTensor> out) const {

@@ -50,6 +50,7 @@
 #define ASYNC_TASK_DONE     4    // finished (output stored) or aborted (dropped)
 #define ASYNC_TASK_ABORTED  8    // JoinHandle::abort() was called
 #define ASYNC_TASK_QUEUED   16   // in a ThreadPool's run queue
+#define ASYNC_TASK_TAKEN    32   // the output was taken (take() or the JoinHandle)
 
 namespace std {
 
@@ -87,8 +88,12 @@ struct AsyncTask {
     static struct AsyncTask<F, T> new(F fut);
     int is_finished() const;    // done, either way
     int is_aborted() const;
-    // The output, if it finished (not aborted).
-    ?T  take() const;
+    // The output, if it finished (not aborted) and wasn't taken yet: it
+    // moves out of the task (once).
+    ?T  take();
+    // The task owns its future and, until taken, its output. Drop it once
+    // it finished (or was aborted) and nothing polls it any more.
+    void drop();
 };
 
 // What spawn() returns: await it (it is a future) or ask it about the task.
@@ -149,6 +154,9 @@ struct LocalExecutor {
 
     int  live_count() const;
     int  has_ready() const;       // some task is woken
+    // Releases the timer queue. Spawned tasks are owned by their AsyncTask
+    // storage, not by the executor: finish or abort them first.
+    void drop();
     // Internal: install (or, with nulls, remove) the running Park's unpark.
     generic<P> void install_park_(?fn void(?&P) unpark, ?&P park);
 };
@@ -193,8 +201,8 @@ int async_task_poll_(?&AsyncTask<F, T> tp, &Context cx) {
     match (tp) {
         case some(t): {
             struct Poll<T> p = t.fut.poll(cx);
-            if (p.ready_ == 0) return 0;
-            t.out[0] = p.value;
+            if (p.ready_ == 0) { p.drop(); return 0; }
+            t.out[0] = p.unwrap();
             return 1;
         }
         case null: return 1;
@@ -205,7 +213,7 @@ int async_task_poll_(?&AsyncTask<F, T> tp, &Context cx) {
 generic<F, T>
 void async_task_drop_(?&AsyncTask<F, T> tp) {
     match (tp) {
-        case some(t): t.fut.drop();
+        case some(t): { unsafe { t.fut.drop(); } }   // the executor's abort: the task drops nothing again
         case null: { }
     }
 }
@@ -236,10 +244,30 @@ int AsyncTask::is_aborted() const {
 }
 
 generic<F: Future, T>
-?T AsyncTask::take() const {
+?T AsyncTask::take() {
+    int st = async_fetch_or_(&self.hdr.state, ASYNC_TASK_TAKEN);
+    if ((st & ASYNC_TASK_DONE) == 0 || (st & ASYNC_TASK_ABORTED) != 0 || (st & ASYNC_TASK_TAKEN) != 0) {
+        if ((st & ASYNC_TASK_TAKEN) == 0) async_fetch_and_(&self.hdr.state, ~ASYNC_TASK_TAKEN);
+        return null;
+    }
+    unsafe { return self.out[0]; }   // moves out: TAKEN keeps it from moving twice
+}
+
+generic<F: Future, T>
+void AsyncTask::drop() {
+    // A spawned task that hasn't finished is still in its executor's list:
+    // dropping it (its future may borrow locals that are going away) would
+    // leave the executor polling freed memory. Finish, or abort() and run
+    // the executor until it is done, first.
+    if (self.hdr.exec_ != (void*)0 && (async_load_(&self.hdr.state) & ASYNC_TASK_DONE) == 0)
+        panic_at("AsyncTask dropped while its executor may still poll it", "std/async/executor.h", 0);
+    self.fut.drop();                 // idempotent: a finished future drops nothing
+    self.hdr.joiner.drop();
     int st = async_load_(&self.hdr.state);
-    if ((st & ASYNC_TASK_DONE) == 0 || (st & ASYNC_TASK_ABORTED) != 0) return null;
-    return self.out[0];
+    if ((st & ASYNC_TASK_DONE) != 0 && (st & (ASYNC_TASK_ABORTED | ASYNC_TASK_TAKEN)) == 0) {
+        unsafe { drop(self.out[0]); }   // a finished task's output nobody took
+    }
+    unsafe { forget(self.out); }        // otherwise the slot holds nothing
 }
 
 // Whether 'hdr' is done, registering 'w' to be woken when it is if not.
@@ -254,8 +282,12 @@ struct Poll<?T> JoinHandle::poll(&Context cx) {
             if (task_header_poll_join_(t, &cx.waker) == 0) return Poll::pending();
             int st = async_load_(&t.state);
             if ((st & ASYNC_TASK_ABORTED) != 0) { ?T none = null; return Poll::ready(none); }
+            if ((async_fetch_or_(&t.state, ASYNC_TASK_TAKEN) & ASYNC_TASK_TAKEN) != 0) {
+                ?T taken = null;   // the output already moved out (take())
+                return Poll::ready(taken);
+            }
             match (self.out_) {
-                case some(o): { ?T v = *o; return Poll::ready(v); }
+                case some(o): { ?T v = null; unsafe { v = *o; } return Poll::ready(v); }   // moves out once
                 case null: { ?T none = null; return Poll::ready(none); }
             }
         }
@@ -369,8 +401,10 @@ T LocalExecutor::block_on(&P park, &F fut) {
             if (p.ready_ != 0) {
                 self.unpark_ = null;
                 self.park_ = null;
-                return p.value;
+                cx.drop();
+                return p.unwrap();
             }
+            p.drop();
         }
         self.turn(park.now_ms());
         if (async_load_(&self.root_woken) != 0 || self.has_ready() != 0) continue;

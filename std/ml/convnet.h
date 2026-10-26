@@ -329,7 +329,8 @@ struct ConvNet {
     // model_copy carry them too.
     void collect_params(&Vec<&FloatTensor> out) const;
     void collect_state(&Vec<&FloatTensor> out) const;
-    void free();
+    void drop();
+    void free() consume;   // = drop()
 
     static struct ConvNet new(unsigned long channels, unsigned long height, unsigned long width);
 };

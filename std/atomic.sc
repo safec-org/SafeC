@@ -80,4 +80,21 @@ inline void atomic_thread_fence() {
     unsafe { atomic_fence(); }
 }
 
+// ── Typed atomics ─────────────────────────────────────────────────────────────
+struct AtomicInt AtomicInt::new(int v) { struct AtomicInt a; a.v_ = v; return a; }
+int  AtomicInt::load() const { return atomic_load_int(&self.v_); }
+void AtomicInt::store(int v) { atomic_store_int(&self.v_, v); }
+int  AtomicInt::fetch_add(int d) { return atomic_fetch_add_int(&self.v_, d); }
+int  AtomicInt::fetch_sub(int d) { return atomic_fetch_sub_int(&self.v_, d); }
+int  AtomicInt::exchange(int v) { return atomic_exchange_int(&self.v_, v); }
+int  AtomicInt::compare_exchange(&int expected, int desired) { return atomic_cas_int(&self.v_, expected, desired); }
+
+struct AtomicLong AtomicLong::new(long long v) { struct AtomicLong a; a.v_ = v; return a; }
+long long AtomicLong::load() const { return atomic_load_ll(&self.v_); }
+void      AtomicLong::store(long long v) { atomic_store_ll(&self.v_, v); }
+long long AtomicLong::fetch_add(long long d) { return atomic_fetch_add_ll(&self.v_, d); }
+long long AtomicLong::fetch_sub(long long d) { return atomic_fetch_sub_ll(&self.v_, d); }
+long long AtomicLong::exchange(long long v) { return atomic_exchange_ll(&self.v_, v); }
+int       AtomicLong::compare_exchange(&long long expected, long long desired) { return atomic_cas_ll(&self.v_, expected, desired); }
+
 } // namespace std

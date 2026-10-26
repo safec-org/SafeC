@@ -212,12 +212,15 @@ void t_api_registry() {
     ASSERT_TRUE(a.is_open());
     printf("    default API here: %s, %u device(s)\n", audio_api_name(a.api()), a.device_count());
     a.close();
-    ASSERT_FALSE(a.is_open());
-    ASSERT_EQ(a.device_count(), 0);
+    unsafe {   // close() leaves it closed and empty
+        ASSERT_FALSE(a.is_open());
+        ASSERT_EQ(a.device_count(), 0);
+    }
 #if !defined(_WIN32)
     struct Result<Audio, AudioError> bad = Audio::open(AUDIO_API_WASAPI);
     ASSERT_FALSE(bad.ok());
     match (bad.get_err()) { case some(e): ASSERT_EQ(e.code, AUDIO_ERR_UNSUPPORTED); case null: ASSERT_TRUE(0); }
+    bad.drop();
 #endif
 }
 
@@ -340,8 +343,10 @@ void t_dummy_manual() {
     ASSERT_FALSE(s.is_running());
     ASSERT_TRUE(s.last_error().ok());
     s.close();
-    ASSERT_FALSE(s.is_open());
-    ASSERT_EQ(s.state(), AUDIO_STREAM_CLOSED);
+    unsafe {   // a closed stream still answers (close() leaves it in the closed state)
+        ASSERT_FALSE(s.is_open());
+        ASSERT_EQ(s.state(), AUDIO_STREAM_CLOSED);
+    }
     a.close();
 }
 
@@ -499,7 +504,7 @@ void t_dummy_thread() {
     ASSERT_EQ(r.calls, calls);                     // nothing after stop()
     ASSERT_TRUE(s.abort().failed() == 0);          // abort on a stopped stream: a warning
     s.close();
-    s.close();                                     // idempotent
+    unsafe { s.close(); }                          // idempotent (a second close does nothing)
     a.close();
 }
 
@@ -508,22 +513,22 @@ void t_stream_errors() {
     struct AudioStreamParams p = AudioStreamParams::of(AUDIO_DEFAULT_DEVICE, 2);
     struct Rec r = rec_new_();
     unsigned int frames = 256U;
-    struct Result<AudioStream, AudioError> e1 = a.open_stream(null, null, AUDIO_FORMAT_F32, 48000U, &frames, rec_f32, (?&Rec)&r, null);
+    struct Result<AudioStream, AudioError> e1 = a.open_stream(null, null, AUDIO_FORMAT_F32, 48000U, &frames, rec_f32, (?&Rec)&r, null); defer drop(e1);
     match (e1.get_err()) { case some(e): ASSERT_EQ(e.code, AUDIO_ERR_INVALID_PARAM); case null: ASSERT_TRUE(0); }
-    struct Result<AudioStream, AudioError> e2 = a.open_stream((?&AudioStreamParams)&p, null, 0x40U, 48000U, &frames, rec_f32, (?&Rec)&r, null);
+    struct Result<AudioStream, AudioError> e2 = a.open_stream((?&AudioStreamParams)&p, null, 0x40U, 48000U, &frames, rec_f32, (?&Rec)&r, null); defer drop(e2);
     ASSERT_FALSE(e2.ok());
     struct AudioStreamParams nine = AudioStreamParams::of(AUDIO_DEFAULT_DEVICE, 9);
-    struct Result<AudioStream, AudioError> e3 = a.open_stream((?&AudioStreamParams)&nine, null, AUDIO_FORMAT_F32, 48000U, &frames, rec_f32, (?&Rec)&r, null);
+    struct Result<AudioStream, AudioError> e3 = a.open_stream((?&AudioStreamParams)&nine, null, AUDIO_FORMAT_F32, 48000U, &frames, rec_f32, (?&Rec)&r, null); defer drop(e3);
     match (e3.get_err()) {
         case some(e): { ASSERT_EQ(e.code, AUDIO_ERR_INVALID_PARAM); ASSERT_TRUE(audio_strprefix_(&e.message[0], "audio: device has too few channels")); }
         case null: ASSERT_TRUE(0);
     }
     struct AudioStreamParams gone = AudioStreamParams::of(4242U, 1);
-    struct Result<AudioStream, AudioError> e4 = a.open_stream((?&AudioStreamParams)&gone, null, AUDIO_FORMAT_F32, 48000U, &frames, rec_f32, (?&Rec)&r, null);
+    struct Result<AudioStream, AudioError> e4 = a.open_stream((?&AudioStreamParams)&gone, null, AUDIO_FORMAT_F32, 48000U, &frames, rec_f32, (?&Rec)&r, null); defer drop(e4);
     match (e4.get_err()) { case some(e): ASSERT_EQ(e.code, AUDIO_ERR_INVALID_DEVICE); case null: ASSERT_TRUE(0); }
     // Input from the output-only device.
     struct AudioStreamParams outOnly = AudioStreamParams::of(a.device_info(1U).unwrap_or(AudioDeviceInfo::none()).id, 1);
-    struct Result<AudioStream, AudioError> e5 = a.open_stream(null, (?&AudioStreamParams)&outOnly, AUDIO_FORMAT_F32, 48000U, &frames, rec_f32, (?&Rec)&r, null);
+    struct Result<AudioStream, AudioError> e5 = a.open_stream(null, (?&AudioStreamParams)&outOnly, AUDIO_FORMAT_F32, 48000U, &frames, rec_f32, (?&Rec)&r, null); defer drop(e5);
     ASSERT_FALSE(e5.ok());
     struct AudioStream closed = AudioStream::closed();
     ASSERT_EQ(closed.start().code, AUDIO_ERR_INVALID_USE);
@@ -531,11 +536,12 @@ void t_stream_errors() {
     ASSERT_TRUE(closed.stream_time() == 0.0);
     closed.close();
     struct Audio na = Audio::closed();
-    struct Result<AudioStream, AudioError> e6 = na.open_stream((?&AudioStreamParams)&p, null, AUDIO_FORMAT_F32, 48000U, &frames, rec_f32, (?&Rec)&r, null);
+    struct Result<AudioStream, AudioError> e6 = na.open_stream((?&AudioStreamParams)&p, null, AUDIO_FORMAT_F32, 48000U, &frames, rec_f32, (?&Rec)&r, null); defer drop(e6);
     match (e6.get_err()) { case some(e): ASSERT_EQ(e.code, AUDIO_ERR_INVALID_USE); case null: ASSERT_TRUE(0); }
     struct AudioError m = AudioError::make_code(AUDIO_ERR_SYSTEM, "x failed", -42LL);
     ASSERT_STR_EQ(&m.message[0], "x failed (-42)");
     ASSERT_TRUE(m.failed());
+    na.close();
     a.close();
 }
 
@@ -572,6 +578,7 @@ static int alsa_present_() {
     struct Result<Audio, AudioError> r = Audio::open(AUDIO_API_ALSA);
     if (!r.ok()) {
         match (r.get_err()) { case some(e): printf("    SKIP alsa: %s\n", e.message); case null: {} }
+        r.drop();
         return 0;
     }
     struct Audio a = r.unwrap_or(Audio::closed());
@@ -706,6 +713,7 @@ static int jack_up_() {
 #if defined(__linux__) || defined(__APPLE__)
     struct Result<Audio, AudioError> r = Audio::open(AUDIO_API_JACK);
     if (r.ok()) { struct Audio a = r.unwrap_or(Audio::closed()); a.close(); return 1; }
+    r.drop();
     if (g_jack_started_) return 0;
     int has = 0;
     unsafe { has = system("command -v jackd >/dev/null 2>&1") == 0; }
@@ -717,8 +725,9 @@ static int jack_up_() {
     g_jack_started_ = 1;
     for (int i = 0; i < 100; i = i + 1) {
         audio_sleep_us_(50000LL);
-        r = Audio::open(AUDIO_API_JACK);
-        if (r.ok()) { struct Audio a = r.unwrap_or(Audio::closed()); a.close(); return 1; }
+        struct Result<Audio, AudioError> r2 = Audio::open(AUDIO_API_JACK);
+        if (r2.ok()) { struct Audio a = r2.unwrap_or(Audio::closed()); a.close(); return 1; }
+        r2.drop();
     }
     printf("    SKIP jack: jackd didn't come up\n");
 #endif
@@ -784,6 +793,7 @@ void t_jack_audio() {
     struct Result<AudioStream, AudioError> bad = a.open_stream((?&AudioStreamParams)&op, null, AUDIO_FORMAT_F32, rate + 1U,
                                                                &frames, jack_gen, (?&Ramp)&g, (?&AudioStreamOptions)&o1);
     match (bad.get_err()) { case some(e): ASSERT_EQ(e.code, AUDIO_ERR_INVALID_PARAM); case null: ASSERT_TRUE(0); }
+    bad.drop();
     // A generator stream, and a capture stream connected to it: a loopback through the JACK graph.
     struct Result<AudioStream, AudioError> r1 = a.open_stream((?&AudioStreamParams)&op, null, AUDIO_FORMAT_F32, rate, &frames,
                                                               jack_gen, (?&Ramp)&g, (?&AudioStreamOptions)&o1);
@@ -1075,7 +1085,7 @@ void t_midi_dummy() {
     small.close();
     in.close();
     out.close();
-    ASSERT_FALSE(in.is_open());
+    unsafe { ASSERT_FALSE(in.is_open()); }   // close() leaves it closed
     // UNSPECIFIED opens something on any machine.
     struct Result<MidiIn, AudioError> any = MidiIn::open(MIDI_API_UNSPECIFIED, "any", 0UL);
     ASSERT_TRUE(any.ok());
@@ -1090,6 +1100,7 @@ void t_midi_system() {
     struct Result<MidiOut, AudioError> ro = MidiOut::open(MIDI_API_ALSA, "safec_seq_out");
     if (!ro.ok()) {
         match (ro.get_err()) { case some(e): { ASSERT_EQ(e.code, AUDIO_ERR_UNAVAILABLE); printf("    SKIP alsa seq: %s\n", e.message); } case null: {} }
+        ro.drop();
     } else {
         struct MidiOut out = ro.unwrap_or(MidiOut::closed());
         struct MidiIn in = MidiIn::open(MIDI_API_ALSA, "safec_seq_in", 0UL).unwrap_or(MidiIn::closed());

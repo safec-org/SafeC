@@ -98,6 +98,7 @@ static void pool_run_one_(&ThreadPool p, &TaskHeader t) {
         cx.timers = &p.timers;
         context_set_spawn_(&cx, pool_spawn_thunk_, (?&ThreadPool)p);
         done = t.poll_(t, &cx);
+        cx.drop();
     }
     if (done != 0) {
         task_header_finish_(t, aborted);
@@ -222,8 +223,10 @@ void ThreadPool::wait_idle() {
     mutex_unlock(&self.mu);
 }
 
-void ThreadPool::shutdown() {
-    if (self.nthreads == 0) return;
+void ThreadPool::shutdown() { self.drop(); }
+
+void ThreadPool::drop() {
+    if (self.nthreads == 0) { self.timers.drop(); return; }
     mutex_lock(&self.mu);
     self.stopping = 1;
     cond_broadcast(&self.work_cv);
@@ -234,6 +237,7 @@ void ThreadPool::shutdown() {
     cond_destroy(&self.work_cv);
     cond_destroy(&self.done_cv);
     mutex_destroy(&self.mu);
+    self.timers.drop();
 }
 
 int ThreadPool::live_count() {

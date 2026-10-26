@@ -94,7 +94,8 @@ struct TensorArena {
 
     void begin();   // this thread's new tensors go to this arena
     void reset();   // drop every tensor in it, keep the memory
-    void free();
+    void drop();
+    void free() consume;   // = drop()
     // Bytes handed out since the last reset.
     unsigned long used() const;
 
@@ -154,8 +155,9 @@ struct DenseTensor {
     float   at2(unsigned long r, unsigned long c) const;
     void    set1(unsigned long i, float v);
     void    set2(unsigned long r, unsigned long c, float v);
+    void    drop();
 
-    void    free();
+    void    free() consume;   // = drop()
 
     // Must be a scalar (size == 1, e.g. a loss). Seeds grad = 1, walks the
     // graph in reverse topological order, and accumulates gradients into
@@ -861,7 +863,10 @@ void DenseTensor::set2(unsigned long r, unsigned long c, float v) {
 }
 
 generic<E>
-void DenseTensor::free() {
+void DenseTensor::free() { self.drop(); }
+
+generic<E>
+void DenseTensor::drop() {
     unsafe { tensor_free_device_raw_((void*)self); }
     match (self.owner) { case some(o): { return; } case null: { } }   // its TensorArena owns it
     unsafe {

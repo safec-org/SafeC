@@ -23,7 +23,9 @@
 
 namespace std {
 
-void WsMessage::free() {
+void WsMessage::free() { self.drop(); }
+
+void WsMessage::drop() {
     if (self.data != (unsigned char*)0) {
         unsafe { dealloc_raw_((void*)self.data); }
     }
@@ -235,11 +237,11 @@ int WsConn::accept(int listenFd) {
         struct String foundKey = http_header_get(headerBlock.as_ptr(), "Sec-WebSocket-Key");
         if (foundKey.is_empty()) {
             good = 0;
+            foundKey.free();
         } else {
             key.free();
             key = foundKey;
         }
-        if (good == 0) { foundKey.free(); }
     }
     headerBlock.free();
 
@@ -454,9 +456,12 @@ int WsConn::recv_message(&WsMessage out, unsigned long max_len) {
     struct String acc = String::new();
     int msgOp = -1;
     while (1) {
-        struct WsMessage f;
+        struct WsMessage f;   // empty until a frame arrives (a failed read leaves it so)
+        f.opcode = 0;
+        f.data = null;
+        f.len = 0UL;
         int fin = 1;
-        if (!ws_recv_frame_(self, &f, &fin)) { acc.free(); return 0; }
+        if (!ws_recv_frame_(self, &f, &fin)) { f.free(); acc.free(); return 0; }
         if (f.opcode == WS_OPCODE_PING) {
             // Answered automatically, with the same payload (RFC 6455 5.5.3).
             const unsigned char* d = (const unsigned char*)0;
@@ -591,7 +596,9 @@ struct WsConn WsConn::connect_url_tls(const &char url, const ?&TlsConfig cfg, in
     return c;
 }
 
-void WsConn::close() {
+void WsConn::close() { self.drop(); }
+
+void WsConn::drop() {
     self.send_close();
     if (self.fd >= 0) {
         struct TcpStream s = ws_stream_(self);

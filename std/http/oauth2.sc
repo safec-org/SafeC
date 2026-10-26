@@ -110,7 +110,9 @@ struct OAuth2Token OAuth2Token::refresh(const &char tokenHost, unsigned short to
     return t;
 }
 
-void OAuth2Token::free() {
+void OAuth2Token::free() { self.drop(); }
+
+void OAuth2Token::drop() {
     self.accessToken.free();
     self.refreshToken.free();
     self.tokenType.free();

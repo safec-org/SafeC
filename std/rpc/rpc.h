@@ -28,10 +28,11 @@ struct RpcResult {
     ?&heap unsigned char   data;    // heap-owned; empty (null) on failure, response bytes on success
     unsigned long          len;
     struct String          error_message; // meaningful when ok == 0
+    void drop();
 
     // The response bytes (data[0..len]); empty when there are none.
     []const unsigned char bytes() const;
-    void free();
+    void free() consume;   // = drop()
 };
 
 // A server-side method handler: given the raw (already-unframed) request

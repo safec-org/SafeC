@@ -394,11 +394,11 @@ int GuiImage::load_png_n_(const &unsigned char data_ref, unsigned long size) { c
     else if (colorType == 6) { channels = 4; }
     else { unsafe { idat.free(); } return 0; } // palette/gray+alpha not supported
 
-    struct String raw;
+    struct String raw = String::new();   // left untouched when inflating fails
     int ok;
     unsafe { ok = __inflate_zlib((const unsigned char*)idat.data, idat.len, &raw); }
     unsafe { idat.free(); }
-    if (!ok) { return 0; }
+    if (!ok) { raw.drop(); return 0; }
 
     unsigned long expected = (unsigned long)height * (1UL + (unsigned long)width * (unsigned long)channels);
     unsafe {
@@ -515,7 +515,9 @@ void GuiImage::draw(&GuiWindow win, int x, int y) const {
     }
 }
 
-void GuiImage::free() {
+void GuiImage::free() { self.drop(); }
+
+void GuiImage::drop() {
     unsafe {
         if ((void*)self.pixels != (void*)0) { dealloc_raw_((void*)self.pixels); }
         self.pixels = (&heap unsigned char)0;

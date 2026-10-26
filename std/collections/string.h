@@ -1,4 +1,5 @@
 #pragma once
+#include <std/ownership.h>   // std::replace / std::swap, to take a String out of a field
 // SafeC Standard Library — String (mutable, heap-allocated)
 // A growable UTF-8 byte string with rich manipulation methods.
 
@@ -105,7 +106,8 @@ struct String {
 
     // ── Lifecycle ────────────────────────────────────────────────────────────
     struct String  clone() const;
-    void           free();
+    void           drop();                 // frees the buffer (Drop)
+    void           free() consume;         // = drop()
 
     // ── Internal ────────────────────────────────────────────────────────────
     int            reserve_(unsigned long need);

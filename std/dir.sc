@@ -17,7 +17,9 @@ struct DirEntry DirEntry::new() {
     return e;
 }
 
-void DirEntry::free() {
+void DirEntry::free() { self.drop(); }
+
+void DirEntry::drop() {
     self.name.free();
 }
 
@@ -145,7 +147,7 @@ int dir_walk(const &char root, &Vec<struct String> out) {
         match (s) { case some(v): { added.push(v); } case none: { } }
     }
     added.sort(dir_cmp_string_);
-    for (unsigned long i = 0UL; i < added.len; i = i + 1UL) { out.push(*added.at(i)); }
+    for (unsigned long i = 0UL; i < added.len; i = i + 1UL) { out.push(std::replace(added.at(i), String::new())); }
     added.free();
     return ok;
 }

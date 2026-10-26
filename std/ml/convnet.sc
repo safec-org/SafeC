@@ -2438,7 +2438,7 @@ void ConvNet::collect_state(&Vec<&FloatTensor> out) const {
 }
 
 // params, then buffers
-static void cn_free_list_(&Vec<&FloatTensor> v) {
+static void cn_free_list_(struct Vec<&FloatTensor> v) {
     unsigned long i = 0UL;
     while (i < v.length()) {
         &FloatTensor p = *v.at(i);
@@ -2449,9 +2449,11 @@ static void cn_free_list_(&Vec<&FloatTensor> v) {
     v.free();
 }
 
-void ConvNet::free() {
-    cn_free_list_(&self.params);
-    cn_free_list_(&self.buffers);
+void ConvNet::free() { self.drop(); }
+
+void ConvNet::drop() {
+    cn_free_list_(self.params);
+    cn_free_list_(self.buffers);
     self.rngs.free();
     self.layers.free();
 }

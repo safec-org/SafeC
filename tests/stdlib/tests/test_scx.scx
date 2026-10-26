@@ -35,7 +35,10 @@ static struct String initializer(const char* name) {
 }
 
 static void assign(&Holder h, int flag) {
-    if (flag) h.s = <b>{SCX_FIXTURE_TITLE}</b>;
+    if (flag) {
+        std::replace(&h.s, String::new()).drop();
+        h.s = <b>{SCX_FIXTURE_TITLE}</b>;
+    }
 }
 
 void t_elements() {
@@ -64,7 +67,6 @@ void t_expressions() {
     h.s = String::from("unset");
     assign(&h, 0);
     ASSERT_STR_EQ(h.s.as_ptr(), "unset");
-    h.s.free();
     assign(&h, 1);
     ASSERT_STR_EQ(h.s.as_ptr(), "<b>fixture</b>");
     s.free(); h.s.free();

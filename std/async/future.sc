@@ -47,8 +47,7 @@ struct Waker Waker::clone() const {
         case some(f): f(self.data_, self.tag_);
         case null: { }
     }
-    struct Waker w = *self;
-    return w;
+    unsafe { return *self; }   // a bitwise copy: clone_ took the reference it holds
 }
 
 void Waker::drop() {
@@ -90,6 +89,8 @@ struct Context Context::noop() {
     return Context::from_waker(Waker::noop());
 }
 
+void Context::drop() { self.waker.drop(); }
+
 void Context::wake_by_ref() const {
     self.waker.wake_by_ref();
 }
@@ -106,25 +107,27 @@ struct WakerSlot WakerSlot::new() {
 void WakerSlot::register_(const &Waker w) {
     if (self.set != 0) {
         if (self.w.will_wake(w) != 0) return;
-        self.w.drop();
     }
-    self.w = w.clone();
+    std::replace(&self.w, w.clone()).drop();   // the old waker, or the empty one
     self.set = 1;
 }
 
 int WakerSlot::wake() {
     if (self.set == 0) return 0;
     self.set = 0;
-    struct Waker w = self.w;
-    self.w = Waker::empty_();
+    struct Waker w = std::replace(&self.w, Waker::empty_());
     w.wake();
     return 1;
+}
+
+void WakerSlot::drop() {
+    if (self.set != 0) { self.set = 0; self.w.drop(); }
 }
 
 void WakerSlot::clear() {
     if (self.set == 0) return;
     self.set = 0;
-    self.w.drop();
+    std::replace(&self.w, Waker::noop()).drop();
 }
 
 // ── WaitList ───────────────────────────────────────────────────────────────
@@ -156,10 +159,7 @@ int WaitList::contains(int id) const {
 int WaitList::add(int id, const &Waker w) {
     if (self.contains(id) != 0) {
         int slot = waitlist_slot_(id);
-        if (self.w[slot].will_wake(w) == 0) {
-            self.w[slot].drop();
-            self.w[slot] = w.clone();
-        }
+        if (self.w[slot].will_wake(w) == 0) std::replace(&self.w[slot], w.clone()).drop();
         return id;
     }
     int i = 0;
@@ -181,7 +181,7 @@ void WaitList::remove(int id) {
     if (self.contains(id) == 0) return;
     int slot = waitlist_slot_(id);
     self.serial[slot] = 0;
-    self.w[slot].drop();
+    std::replace(&self.w[slot], Waker::noop()).drop();
     self.count = self.count - 1;
 }
 
@@ -194,7 +194,7 @@ int WaitList::wake_one() {
             self.serial[i] = 0;
             self.count = self.count - 1;
             self.next_ = (unsigned int)(i + 1);
-            struct Waker w = self.w[i];
+            struct Waker w = std::replace(&self.w[i], Waker::noop());
             w.wake();
             return 1;
         }
@@ -210,7 +210,7 @@ int WaitList::wake_all() {
         if (self.serial[i] != 0) {
             self.serial[i] = 0;
             self.count = self.count - 1;
-            struct Waker w = self.w[i];
+            struct Waker w = std::replace(&self.w[i], Waker::noop());
             w.wake();
             n = n + 1;
         }
@@ -220,6 +220,15 @@ int WaitList::wake_all() {
 }
 
 int WaitList::len() const { return self.count; }
+
+void WaitList::drop() {
+    int i = 0;
+    while (i < ASYNC_WAITERS) {
+        if (self.serial[i] != 0) { self.serial[i] = 0; self.w[i].drop(); }
+        i = i + 1;
+    }
+    self.count = 0;
+}
 
 // ── YieldNow ───────────────────────────────────────────────────────────────
 

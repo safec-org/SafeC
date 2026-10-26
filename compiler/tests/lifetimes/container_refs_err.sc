@@ -29,6 +29,7 @@ int vec_reserve_field(&struct Vec<struct String> v) {
 int vec_free(struct Vec<int> v) {
     &int r = v.at(0UL);
     v.free();
+    // EXPECT-ERROR: use of a reference borrowed from 'v' after 'v' was dropped
     return *r;                             // EXPECT-ERROR: use of 'r' (a reference into a &heap allocation) after std::dealloc() freed it
 }
 

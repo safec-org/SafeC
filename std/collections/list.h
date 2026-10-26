@@ -40,7 +40,8 @@ struct List {
     unsigned long length() const;
     int           is_empty() const;
     void          clear();
-    void          free();
+    void          drop();
+    void          free() consume;   // = drop()
 
     // cmp: <0, 0, >0 like strcmp; only == 0 matters here
     ?&T           find(const &T key, fn int(const &T, const &T) cmp) const;
@@ -176,7 +177,10 @@ generic<T>
 int List::is_empty() const { return self.len == 0UL; }
 
 generic<T>
-void List::free() {
+void List::free() { self.drop(); }
+
+generic<T>
+void List::drop() {
     self.pool.free_all();
     self.head = null;
     self.tail = null;
@@ -184,7 +188,7 @@ void List::free() {
 }
 
 generic<T>
-void List::clear() { self.free(); }
+void List::clear() { unsafe { self.drop(); } }   // drop in place: drop() leaves it empty
 
 generic<T>
 ?&T List::find(const &T key, fn int(const &T, const &T) cmp) const {

@@ -35,8 +35,9 @@ struct WsMessage {
     int                    opcode;  // one of the WS_OPCODE_* constants above
     ?&heap unsigned char   data;    // heap-owned; empty (null)/0-length for e.g. a bare ping
     unsigned long          len;
+    void drop();
 
-    void free();
+    void free() consume;   // = drop()
 };
 
 struct WsConn {
@@ -128,7 +129,8 @@ struct WsConn {
 
     // Sends a close frame (best-effort — ignores failure, since the peer
     // may already be gone) and closes the socket.
-    void close();
+    void drop();
+    void close() consume;   // = drop()
 };
 
 // ── Server ────────────────────────────────────────────────────────────────

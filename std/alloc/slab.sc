@@ -152,7 +152,9 @@ inline void SlabAllocator::reset() {
     self.build_freelist_();
 }
 
-inline void SlabAllocator::destroy() {
+inline void SlabAllocator::destroy() { self.drop(); }
+
+inline void SlabAllocator::drop() {
     if (self.owned) { unsafe { free((void*)self.base); } }
     self.free_head = (void*)0;
     self.used      = (unsigned long)0;

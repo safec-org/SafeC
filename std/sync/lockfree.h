@@ -36,7 +36,8 @@ struct LFQueue {
     int           is_empty() const;
     int           is_full() const;
     unsigned long length() const;
-    void          destroy();        // frees the buffer if LFQueue::new allocated it
+    void          drop();        // frees the buffer if LFQueue::new allocated it
+    void          destroy() consume;   // = drop()
 };
 
 unsigned long lfq_floor_pow2_(unsigned long n);   // lockfree.sc
@@ -109,7 +110,10 @@ unsigned long LFQueue::length() const {
 }
 
 generic<T>
-void LFQueue::destroy() {
+void LFQueue::destroy() { self.drop(); }
+
+generic<T>
+void LFQueue::drop() {
     if (self.owned && self.buffer.len != 0UL) { unsafe { dealloc_raw_((void*)self.buffer.ptr); } }
     self.buffer = self.buffer[0..0];
     self.cap = 0UL;

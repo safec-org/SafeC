@@ -99,11 +99,12 @@ void t_malformed() {
     struct GuiTypeface t;
     ASSERT_FALSE(t.load_memory(bytes[0..200], 0));
     t.free();
+    struct GuiTypeface t2;
     unsigned char junk[64];
     int i = 0;
     while (i < 64) { junk[i] = (unsigned char)(i * 37); i = i + 1; }
-    ASSERT_FALSE(t.load_memory(junk[0..64UL], GUI_FONT_COPY));
-    t.free();
+    ASSERT_FALSE(t2.load_memory(junk[0..64UL], GUI_FONT_COPY));
+    t2.free();
     // A corrupted copy still loads or fails cleanly, and every glyph either
     // has an outline or not, without crashing.
     struct GuiTypeface c;

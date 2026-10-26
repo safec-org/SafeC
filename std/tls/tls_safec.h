@@ -21,13 +21,16 @@ namespace std {
 struct TlsCert_ {
     struct Vec<unsigned char> der;
     struct X509Parsed         p;
+    void drop();
 };
 
 struct TlsTrust_ {
     struct Vec<struct TlsCert_> certs;
+    void drop();
 };
 
 struct TlsTrust_ tls_trust_new_();
+// Empties t (drops its certificates); t stays usable.
 void tls_trust_free_(&TlsTrust_ t);
 // Adds one DER certificate (parsed; malformed ones are skipped): 1 if added.
 int  tls_trust_add_der_(&TlsTrust_ t, const &unsigned char der, unsigned long len);

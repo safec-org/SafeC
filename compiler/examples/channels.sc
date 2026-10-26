@@ -28,7 +28,10 @@ void* consumer(void* arg) {
 // Demonstrate scoped spawn: thread is guaranteed to join before scope exit
 void scoped_demo(void* ch) {
     // spawn_scoped guarantees the thread joins before this scope exits
-    long long handle = spawn_scoped(producer, ch);
+    // A raw void* argument can't be checked for thread safety: the call
+    // must be in an unsafe block (the channel handle is safe to share).
+    long long handle = 0;
+    unsafe { handle = spawn_scoped(producer, ch); }
 
     // Main thread can receive
     int result = 0;

@@ -66,7 +66,9 @@ inline unsigned long BumpAllocator::remaining() const {
     return self.cap - self.used;
 }
 
-inline void BumpAllocator::destroy() {
+inline void BumpAllocator::destroy() { self.drop(); }
+
+inline void BumpAllocator::drop() {
     if (self.owned) { unsafe { free((void*)self.base); } }
     self.used = (unsigned long)0;
     self.cap  = (unsigned long)0;

@@ -136,7 +136,9 @@ static void norm_heap_end_(?&TensorArena cur) {
 }
 
 static void norm_drop_(&FloatTensor t) {
-    t->free();
+    // A heap tensor: destroyed in place through the reference, then its
+    // memory released (a Box the checker can't see).
+    unsafe { t->free(); }
     unsafe { free((void*)t); }
 }
 
@@ -163,7 +165,9 @@ void LayerNorm::collect_params(&Vec<&FloatTensor> out) const {
 
 void LayerNorm::collect_state(&Vec<&FloatTensor> out) const { self.collect_params(out); }
 
-void LayerNorm::free() {
+void LayerNorm::free() { self.drop(); }
+
+void LayerNorm::drop() {
     norm_drop_(self.gamma);
     norm_drop_(self.beta);
 }
@@ -210,7 +214,9 @@ void AdaLN::collect_params(&Vec<&FloatTensor> out) const {
 
 void AdaLN::collect_state(&Vec<&FloatTensor> out) const { self.collect_params(out); }
 
-void AdaLN::free() {
+void AdaLN::free() { self.drop(); }
+
+void AdaLN::drop() {
     norm_drop_(self.W);
     norm_drop_(self.b);
 }

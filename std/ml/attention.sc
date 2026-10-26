@@ -17,7 +17,9 @@ extern void  free(void* ptr);
 // ── Temporaries ──────────────────────────────────────────────────────────────
 void attn_release_(&FloatTensor t) {
     match (t->owner) { case some(a): { return; } case null: { } }   // its TensorArena owns it
-    t->free();
+    // A heap tensor: destroyed in place through the reference, then its
+    // memory released (a Box the checker can't see).
+    unsafe { t->free(); }
     unsafe { free((void*)t); }
 }
 
@@ -509,7 +511,9 @@ void MultiHeadAttention::collect_params(&Vec<&FloatTensor> out) const {
 
 void MultiHeadAttention::collect_state(&Vec<&FloatTensor> out) const { self.collect_params(out); }
 
-void MultiHeadAttention::free() {
+void MultiHeadAttention::free() { self.drop(); }
+
+void MultiHeadAttention::drop() {
     attn_drop_(self.Wq); attn_drop_(self.Wk); attn_drop_(self.Wv); attn_drop_(self.Wo);
 }
 

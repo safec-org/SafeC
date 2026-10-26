@@ -226,6 +226,7 @@ struct GuiWindowOptions {
 };
 
 struct GuiWindow {
+    impl !Send + !Sync;   // lives on the thread that created it (the UI thread)
     ?&struct GuiWindowState platform; // backend-neutral window state (gui_backend.h); null for an offscreen window or on failure
     &heap unsigned char  pixels;   // width*height*4 bytes, premultiplied RGBA8888
     int                  width;    // buffer size in pixels
@@ -276,7 +277,8 @@ struct GuiWindow {
     void clear(struct GuiColor color);
 
     // Releases the window and its pixel buffer.
-    void destroy();
+    void drop();
+    void destroy() consume;   // = drop()
 
     // ── window management (no-ops for an offscreen window) ───────────────
     void set_title(const &char title);

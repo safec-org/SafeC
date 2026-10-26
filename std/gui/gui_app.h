@@ -68,6 +68,7 @@ struct GuiTimer {
 };
 
 struct GuiApp {
+    impl !Send + !Sync;   // lives on the thread that created it (the UI thread)
     struct Vec<&GuiAppWindow> windows;
     struct Vec<struct GuiTimer> timers;
     unsigned int nextTimer;
@@ -127,7 +128,8 @@ struct GuiApp {
     void set_frame_interval(double ms);
     double frame_interval() const;
     // Closes every window and frees the app's state.
-    void free();
+    void drop();
+    void free() consume;   // = drop()
 };
 
 generic<T>

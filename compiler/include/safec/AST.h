@@ -362,6 +362,10 @@ struct AlignofTypeExpr : Expr {
 // ── fieldcount(type) ──────────────────────────────────────────────────────
 struct FieldCountExpr : Expr {
     TypePtr ofType;
+    // 'needs_drop(T)' (same shape): 1 when T is a must-drop type (see
+    // Sema::isMustDrop), computed by Sema once T is concrete.
+    bool    isNeedsDrop = false;
+    int64_t needsDropValue = 0;
     FieldCountExpr(TypePtr t, SourceLocation l)
         : Expr(ExprKind::FieldCount, l), ofType(std::move(t)) {}
 };
@@ -423,6 +427,7 @@ struct Stmt {
 
 struct CompoundStmt : Stmt {
     std::vector<StmtPtr> body;
+    SourceLocation endLoc;   // the closing '}' (scope end, for ownership diagnostics)
     explicit CompoundStmt(SourceLocation l) : Stmt(StmtKind::Compound, l) {}
 };
 
@@ -722,6 +727,9 @@ struct FunctionDecl : Decl {
     // A static method ('static T make(...);' in the struct body): no
     // 'self', called as 'T::make(...)'. Mangled T_make like any method.
     bool        isStaticMethod = false;
+    // A 'consume' method (declared 'R m(...) consume;' in the struct body)
+    // or drop(): calling it destroys the receiver.
+    bool        isConsume     = false;
     bool        isMustUse     = false;   // [[must_use]] — warn if return discarded
     // True for an out-of-line method definition ('inline T Box::get()...')
     // whose methodOwner names a generic struct *template* — collectFunction
@@ -773,6 +781,15 @@ struct MethodDecl {
     std::vector<ParamDecl>   params;
     bool                     isConst = false;   // const method qualifier
     bool                     isStatic = false;  // 'static' method: no self
+    // 'int close() consume;' — the method takes ownership of (destroys)
+    // *self, like drop(): the caller's value is dropped by the call. See
+    // MemoryFlow.cpp's ownership checking.
+    bool                     isConsume = false;
+    // 'void drop() if (needs_drop(T));' — a generic struct that is a Drop
+    // type only for the instances where the condition holds (a wrapper
+    // that owns something only when its payload does). Shared so
+    // MethodDecl stays copyable.
+    std::shared_ptr<Expr>    dropCond;
     std::vector<GenericParam> genericParams;    // 'generic<T> void m(...);': the method's own
     SourceLocation           loc;
     SourceLocation           startLoc;  // the declaration's first token (tooling)
@@ -785,6 +802,9 @@ struct StructDecl : Decl {
     bool isUnion      = false;
     bool isTaggedUnion = false;
     bool isPacked     = false;   // packed struct — no alignment padding
+    // 'unsafe impl Send + Sync;' / 'impl !Send;' in the body: "Send",
+    // "Sync", "!Send", "!Sync" (see Sema::threadSafety).
+    std::vector<std::string> threadMarkers;
     std::vector<GenericParam> genericParams;
     std::shared_ptr<StructType> type;   // filled by sema
 

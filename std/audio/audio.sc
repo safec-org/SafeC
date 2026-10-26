@@ -319,10 +319,9 @@ struct Result<Audio, AudioError> Audio::open(int api) {
     // first that opened at all (no devices), then dummy.
     int first = audio_default_api();
     struct Result<Audio, AudioError> r = audio_open_api_(first);
-    if (r.ok()) {
-        struct Audio a = r.unwrap_or(Audio::closed());
-        if (a.device_count() > 0U) return r;
-    }
+    int firstHasDevices = 0;
+    match (r.get_ok()) { case some(a): { firstHasDevices = a.device_count() > 0U; } case null: {} }
+    if (firstHasDevices) return r;
     ?&AudioBackendVt_ list[AUDIO_API_COUNT];
     int n = audio_backends_(&list[0], AUDIO_API_COUNT);
     for (int i = 0; i < n; i = i + 1) {
@@ -334,17 +333,16 @@ struct Result<Audio, AudioError> Audio::open(int api) {
         }
         if (api2 == first || api2 == AUDIO_API_DUMMY || !avail) continue;
         struct Result<Audio, AudioError> r2 = audio_open_api_(api2);
-        if (r2.ok()) {
-            struct Audio a2 = r2.unwrap_or(Audio::closed());
-            if (a2.device_count() > 0U) {
-                struct Audio a1 = r.unwrap_or(Audio::closed());
-                a1.close();
-                return r2;
-            }
-            a2.close();
+        int hasDevices = 0;
+        match (r2.get_ok()) { case some(a2): { hasDevices = a2.device_count() > 0U; } case null: {} }
+        if (hasDevices) {
+            r.drop();   // the first API's Audio (opened, no devices)
+            return r2;
         }
+        r2.drop();
     }
     if (r.ok()) return r;
+    r.drop();
     return audio_open_api_(AUDIO_API_DUMMY);
 }
 
@@ -413,7 +411,9 @@ unsigned int Audio::default_input_device() const {
     return AUDIO_DEFAULT_DEVICE;
 }
 
-void Audio::close() {
+void Audio::close() { self.drop(); }
+
+void Audio::drop() {
     ?&AudioHost_ hp = audio_host_of_(self);
     match (hp) {
         case some(h): {
@@ -871,7 +871,9 @@ static struct AudioError audio_stream_halt_(const &AudioStream s, int how) {
 struct AudioError AudioStream::stop() { return audio_stream_halt_(self, AUDIO_CB_STOP); }
 struct AudioError AudioStream::abort() { return audio_stream_halt_(self, AUDIO_CB_ABORT); }
 
-void AudioStream::close() {
+void AudioStream::close() { self.drop(); }
+
+void AudioStream::drop() {
     match (audio_state_of_(self)) {
         case some(st): {
             if (audio_state_load_(st) != AUDIO_STREAM_CLOSED) {

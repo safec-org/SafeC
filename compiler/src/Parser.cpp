@@ -1379,6 +1379,11 @@ std::unique_ptr<FunctionDecl> Parser::parseFunctionDecl(
         consume();
         fn->isConstMethod = true;
     }
+    // 'consume' may be repeated on an out-of-line method definition.
+    if (cur().isIdent("consume") && (peek().is(TK::LBrace) || peek().is(TK::Semicolon))) {
+        consume();
+        fn->isConsume = true;
+    }
     {
         GnuAttrs suffixAttrs;
         if (parseGnuAttributes(suffixAttrs)) {
@@ -1425,6 +1430,31 @@ std::unique_ptr<StructDecl> Parser::parseStructDecl(bool isUnion, bool consumeTr
         // otherwise it's a field declaration.
         // Heuristic: after parsing type + name, check for '('
         auto savedPos = pos_;
+        // Thread-safety markers: 'unsafe impl Send + Sync;' promises the
+        // type is safe to move to / share between threads although its
+        // fields don't show it (a lock wrapping a raw handle);
+        // 'impl !Send;' / 'impl !Sync;' withdraw what the fields would
+        // give (a window that must stay on its UI thread). See
+        // Sema::threadSafety.
+        if ((cur().is(TK::KW_unsafe) && peek().isIdent("impl")) || cur().isIdent("impl")) {
+            bool isUnsafe = cur().is(TK::KW_unsafe);
+            SourceLocation mloc = cur().loc;
+            if (isUnsafe) consume();
+            consume(); // 'impl'
+            do {
+                bool neg = match(TK::Bang);
+                if (!cur().is(TK::Ident)) { diag_.error(cur().loc, "expected 'Send' or 'Sync' after 'impl'"); break; }
+                std::string t = cur().text;
+                consume();
+                if (t != "Send" && t != "Sync")
+                    diag_.error(mloc, "only the marker traits 'Send' and 'Sync' can be implemented explicitly, not '" + t + "'");
+                else if (!neg && !isUnsafe)
+                    diag_.error(mloc, "'impl " + t + "' is a promise the compiler can't check: write 'unsafe impl " + t + "'");
+                sd->threadMarkers.push_back((neg ? "!" : "") + t);
+            } while (match(TK::Plus));
+            expect(TK::Semicolon, "expected ';' after 'impl' marker");
+            continue;
+        }
         // 'generic<T> [static] R m(...);' — a method with its own type
         // parameters; 'static T make(...);' — a static method (no self)
         std::vector<GenericParam> memberGenerics;
@@ -1532,6 +1562,16 @@ std::unique_ptr<StructDecl> Parser::parseStructDecl(bool isUnion, bool consumeTr
             }
             expect(TK::RParen, "expected ')' closing method parameter list");
             if (cur().is(TK::KW_const)) { consume(); md.isConst = true; }
+            // 'consume': the method destroys *self (see MethodDecl::isConsume).
+            if (cur().isIdent("consume")) { consume(); md.isConsume = true; }
+            if (cur().is(TK::KW_if)) {
+                consume();
+                expect(TK::LParen, "expected '(' after 'if' in a method declaration");
+                md.dropCond = std::shared_ptr<Expr>(parseExpr().release());
+                expect(TK::RParen, "expected ')' closing the method's 'if' condition");
+                if (md.name != "drop")
+                    diag_.error(md.loc, "only drop() can have an 'if (...)' condition (when the type is a Drop type)");
+            }
             md.isStatic = staticMember;
             md.genericParams = std::move(memberGenerics);
             if (md.isStatic && md.isConst)
@@ -1904,6 +1944,7 @@ std::unique_ptr<CompoundStmt> Parser::parseCompoundStmt() {
         // variable it refers to.
         if (pendingExtraStmt_) cs->body.push_back(std::move(pendingExtraStmt_));
     }
+    cs->endLoc = cur().loc;
     expect(TK::RBrace, "expected '}'");
     return cs;
 }
@@ -2902,6 +2943,17 @@ ExprPtr Parser::parsePostfixExpr() {
 
 ExprPtr Parser::parsePrimaryExpr() {
     auto loc = cur().loc;
+    // 'needs_drop(T)': a compile-time constant, 1 if T owns something that
+    // must be dropped (for 'if const' in generic code).
+    if (cur().isIdent("needs_drop") && peek().is(TK::LParen)) {
+        consume();
+        consume();
+        auto t = parseType();
+        expect(TK::RParen, "expected ')' after needs_drop type");
+        auto fc = std::make_unique<FieldCountExpr>(std::move(t), loc);
+        fc->isNeedsDrop = true;
+        return fc;
+    }
     switch (cur().kind) {
     case TK::KW_fn_eval:
         // Parsed here (not parseUnaryExpr, unlike 'match'/'_Generic') so

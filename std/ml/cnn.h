@@ -18,8 +18,9 @@ struct FeatureMap {
     unsigned long height;
     unsigned long width;
     int           fromArena; // 1 if data came from a TensorArena (FeatureMap::free leaves it)
+    void drop();
 
-    void free();
+    void free() consume;   // = drop()
 
     // Between TensorArena::begin and tensor_arena_end (std/ml/tensor.h), new
     // feature maps -- the ones these functions return, and every layer's
@@ -73,7 +74,8 @@ struct Conv2D {
     struct FeatureMap forward(const &FeatureMap input) const;
     // relu(layer.forward(input)), in one pass.
     struct FeatureMap relu_forward(const &FeatureMap input) const;
-    void free();
+    void drop();
+    void free() consume;   // = drop()
 
     static struct Conv2D new(unsigned long inChannels, unsigned long outChannels, unsigned long kH, unsigned long kW,
                              unsigned long stride, unsigned long padding);
@@ -96,7 +98,8 @@ struct ResidualBlock {
     int           hasProjection;
 
     struct FeatureMap forward(const &FeatureMap input) const;
-    void free();
+    void drop();
+    void free() consume;   // = drop()
 
     static struct ResidualBlock new(unsigned long inChannels, unsigned long outChannels, unsigned long stride);
 };

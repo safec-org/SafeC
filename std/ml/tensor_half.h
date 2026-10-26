@@ -217,11 +217,11 @@ void tensors_free(&Vec<&DenseTensor<E>> ts) {
         &DenseTensor<E> t = *ts.at(i);
         int onHeap = 1;
         match (t.owner) { case some(o): { onHeap = 0; } case null: { } }
-        t.free();
+        unsafe { t.free(); }   // a heap tensor: destroyed in place, its memory freed below
         if (onHeap) { unsafe { std::free((void*)t); } }
         i = i + 1UL;
     }
-    ts.free();
+    unsafe { ts.free(); }   // the Vec too, in place: the caller doesn't use it again
 }
 
 generic<E>

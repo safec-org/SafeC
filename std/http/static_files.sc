@@ -250,7 +250,10 @@ static struct String sf_etag_(long long size, long long mtime) {
 
 // Does the If-None-Match list contain 'etag' (weak comparison) or "*"?
 static int sf_etag_listed_(const &String list, const &String etag) {
-    if (list.trim().eq_cstr("*")) { return 1; }
+    struct String trimmed = list.trim();
+    int star = trimmed.eq_cstr("*");
+    trimmed.free();
+    if (star) { return 1; }
     struct String items[64];
     unsigned long n = list.split(",", items[0..64]);
     int found = 0;
@@ -261,9 +264,10 @@ static int sf_etag_listed_(const &String list, const &String etag) {
         if (s.eq(etag)) { found = 1; }
         s.free();
         t.free();
-        items[i].free();
+        unsafe { items[i].free(); }   // the first n slots hold Strings
         i = i + 1UL;
     }
+    unsafe { forget(items); }        // each filled slot was freed above
     return found;
 }
 

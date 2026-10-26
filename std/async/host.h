@@ -27,7 +27,8 @@ struct HostPark {
 
     // Creates the mutex and condition variable; destroy() frees them.
     static struct HostPark new();
-    void destroy();
+    void drop();
+    void destroy() consume;   // = drop()
     long long now_ms();
     void park(long long timeout_ms);
     void unpark();
@@ -45,6 +46,7 @@ T block_on(&F fut) {
     struct HostPark park = HostPark::new();
     T r = ex.block_on(&park, fut);
     park.destroy();
+    ex.drop();
     return r;
 }
 

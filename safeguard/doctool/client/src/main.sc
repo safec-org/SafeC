@@ -402,8 +402,7 @@ static void search_render(&Client c, const &String query) {
         dom_set_visible(c.empty, 0);
     }
     html.free(); q.free();
-    for (unsigned long t = 0UL; t < toks.len; t = t + 1UL) { toks.at(t).free(); }
-    toks.free();
+    toks.free();   // and each token
 }
 
 static void search_run(&Client c) {

@@ -188,7 +188,7 @@ void t_list() {
     }
     ASSERT_TRUE(l.find(&three, cmp_int).is_null());
     l.free();
-    ASSERT_TRUE(l.pop_front().is_none());
+    unsafe { ASSERT_TRUE(l.pop_front().is_none()); }   // a dropped List is left empty
 }
 
 void t_map() {
@@ -270,7 +270,7 @@ void t_bst() {
     t.foreach_inorder(bst_visit);             // tree intact after threading
     ASSERT_EQ(g_bst_seen, 10);
     t.free();
-    ASSERT_TRUE(t.min_key().is_null());
+    unsafe { ASSERT_TRUE(t.min_key().is_null()); }    // a dropped BST is left empty
 
     // degenerate (sorted) inserts: iterative ops, no recursion
     struct BST<long long, int, FnOrder<long long>> d = BST::new_with(FnOrder::of(cmp_ll));
@@ -604,6 +604,7 @@ void t_slice_views() {
     ASSERT_EQ(*v.at(2UL), 40);
     struct Vec<int> empty = Vec::new();
     ASSERT_EQ(empty.as_slice().len, 0);
+    empty.drop();
     v.free();
 
     struct Slice<int> sl = Slice::from(arr[0..5]);
@@ -628,8 +629,8 @@ void t_traits() {
     unsafe { xs[0] = 3; xs[1] = 1; xs[2] = 4; xs[3] = 1; xs[4] = 5; }
 
     // Lifo: Vec, Stack, StaticVec
-    struct Vec<int> v = Vec::new();
-    struct Stack<int> st = Stack::new();
+    struct Vec<int> v = Vec::new(); defer drop(v);
+    struct Stack<int> st = Stack::new(); defer drop(st);
     struct StaticVec<int> sv = StaticVec::over(g_trait_sv[0..8]);
     ASSERT_TRUE(lifo_ok(&v, 100));
     ASSERT_TRUE(lifo_ok(&st, 100));
@@ -645,7 +646,7 @@ void t_traits() {
 
     // CountedFifo: Queue, RingBuffer (bytes); MpscQueue, LFQueue and Chan
     // are in test_runtime
-    struct Queue<int> q = Queue::with_cap(2UL);
+    struct Queue<int> q = Queue::with_cap(2UL); defer drop(q);
     ASSERT_TRUE(fifo_ok(&q, xs[0..5]));
     unsigned char bytes[6];
     unsafe {
@@ -658,11 +659,11 @@ void t_traits() {
     }
 
     // Map: HashMap, StrMap, BST, BTree
-    struct HashMap<int, long long> hm = HashMap::new();
+    struct HashMap<int, long long> hm = HashMap::new(); defer drop(hm);
     ASSERT_TRUE(map_ok(&hm, 7, -7, 70LL, -70LL));
-    struct StrMap<int> sm = StrMap::new();
+    struct StrMap<int> sm = StrMap::new(); defer drop(sm);
     ASSERT_TRUE(map_ok(&sm, "seven", "minus seven", 7, -7));
-    struct BST<int, int, Less<int>> bt = BST::new();
+    struct BST<int, int, Less<int>> bt = BST::new(); defer drop(bt);
     ASSERT_TRUE(map_ok(&bt, 7, -7, 70, -70));
     ?&heap BTree<int> btq = alloc(sizeof(struct BTree<int>));
     ASSERT_FALSE(btq.is_null());
@@ -707,7 +708,7 @@ void t_traits() {
     ASSERT_EQ(bd.min_key().default(0), 30);
     ASSERT_EQ(bd.max_key().default(0), 15);
 
-    v.free(); st.free(); q.free(); hm.free(); sm.free(); bt.free(); bd.free();
+    bd.free();
     s.free(); l.free();
     dealloc(btq);
 }
@@ -760,11 +761,7 @@ void t_ref_chains() {
     r.entry(4UL).b.xs.push(8);
     ASSERT_EQ(*r.entries.at(4UL).b.xs.at(0UL), 8);
 
-    for (unsigned long i = 0UL; i < r.entries.len; i = i + 1UL) {
-        &struct ChainEntry e = r.entries.at(i);
-        e.name.free(); e.vals.free(); e.b.xs.free();
-    }
-    r.entries.free();
+    r.entries.free();   // and each entry's strings and lists
     r.index.free();
 }
 

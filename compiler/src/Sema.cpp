@@ -50,6 +50,10 @@ const Sema::TraitDef Sema::builtinTraits_[] = {
     { "Sub",        {"operator-"} },
     { "Mul",        {"operator*"} },
     { "Div",        {"operator/"} },
+    // A type with a destructor: 'void drop();'. Values of a Drop type (and
+    // of every aggregate holding one) must be explicitly dropped or moved
+    // on every path — see the ownership checking in MemoryFlow.cpp.
+    { "Drop",       {"drop"} },
     { "", {} }  // sentinel
 };
 
@@ -69,7 +73,8 @@ void Sema::checkTraitSupertraits() {
         auto &supers = userTraitSupers_[t];
         for (size_t i = 0; i < supers.size();) {
             const std::string &s = supers[i];
-            bool known = userTraits_.count(s) || isBuiltinTrait(s) || s == "Indexed" || s == "Pointer";
+            bool known = userTraits_.count(s) || isBuiltinTrait(s) || s == "Indexed" || s == "Pointer" ||
+                         s == "Send" || s == "Sync";
             if (!known) {
                 diag_.error(userTraitLocs_[t], "unknown supertrait '" + s + "' of trait '" + t + "'");
                 supers.erase(supers.begin() + (long)i);
@@ -120,7 +125,11 @@ std::string Sema::traitMismatch(const TypePtr &ty, const std::string &trait) con
 
     // Primitive numeric types satisfy Numeric/Ord/Eq/Add/Sub/Mul/Div — not
     // user traits, which name methods a primitive doesn't have.
-    if (ty->isArithmetic()) return isBuiltinTrait(trait) ? "" : "-";
+    if (trait == "Send" || trait == "Sync") {
+        std::string why = threadSafety(ty, trait == "Sync");
+        return why;
+    }
+    if (ty->isArithmetic()) return isBuiltinTrait(trait) && trait != "Drop" ? "" : "-";
     // Struct types: check if they have the required operator/method names —
     // whether 'trait' names a builtin trait or a user 'trait Name { ... }'
     // declaration, both are just a list of required method names.
@@ -170,6 +179,189 @@ std::string Sema::traitMismatch(const TypePtr &ty, const std::string &trait) con
         }
     }
     return "-";
+}
+
+// ── Ownership and thread-safety predicates ───────────────────────────────────
+namespace {
+const StructType *canonicalStruct(const std::unordered_map<std::string, TypePtr> &reg, const StructType *st) {
+    if (!st) return nullptr;
+    if (st->isDefined && !st->fields.empty()) return st;
+    auto it = reg.find(st->name);
+    if (it != reg.end() && it->second && it->second->kind == TypeKind::Struct)
+        return static_cast<const StructType *>(it->second.get());
+    return st;
+}
+bool hasMarker(const StructType &st, const char *m) {
+    for (auto &x : st.threadMarkers) if (x == m) return true;
+    return false;
+}
+} // namespace
+
+void Sema::evalDropCond(const std::string &structName, Expr &cond, SourceLocation loc) {
+    checkExpr(cond);
+    auto v = tryConstInt(cond);
+    if (!v) diag_.error(loc, "the condition of 'drop() if (...)' must be a compile-time constant");
+    else if (*v == 0) disabledDrops_.insert(structName);
+}
+
+bool Sema::hasDropMethod(const StructType &st0) const {
+    const StructType &st = *canonicalStruct(typeRegistry_, &st0);
+    if (disabledDrops_.count(st.name)) return false;
+    auto it = methodRegistry_.find(st.name + "::drop");
+    if (it == methodRegistry_.end() || !it->second) return false;
+    const FunctionDecl &f = *it->second;
+    return f.isMethod && !f.isStaticMethod && f.params.size() == 1;
+}
+
+bool Sema::isMustDrop(const TypePtr &t0) const {
+    TypePtr t = t0;
+    while (t && t->kind == TypeKind::Newtype) t = static_cast<NewtypeType &>(*t).base;
+    if (!t) return false;
+    switch (t->kind) {
+    case TypeKind::Struct: {
+        const StructType *st = canonicalStruct(typeRegistry_, static_cast<const StructType *>(t.get()));
+        auto it = mustDropCache_.find(st);
+        if (it != mustDropCache_.end()) return it->second == 1;
+        mustDropCache_[st] = 2;   // a by-value cycle is impossible; guard anyway
+        bool r = hasDropMethod(*st);
+        // A C union's members overlap: which one is live is unknown, so a
+        // union never owns (a tagged union's payload does).
+        if (!r && (!st->isUnion || st->isTaggedUnion))
+            for (auto &f : st->fields)
+                if (isMustDrop(f.type)) { r = true; break; }
+        if (declsCollected_) mustDropCache_[st] = r ? 1 : 0;
+        else mustDropCache_.erase(st);
+        return r;
+    }
+    case TypeKind::Array:    return isMustDrop(static_cast<ArrayType &>(*t).element);
+    case TypeKind::Optional: return isMustDrop(static_cast<OptionalType &>(*t).inner);
+    case TypeKind::Tuple:
+        for (auto &e : static_cast<TupleType &>(*t).elementTypes) if (isMustDrop(e)) return true;
+        return false;
+    default: return false;
+    }
+}
+
+std::string Sema::displayType(const TypePtr &t) const {
+    if (!t) return "?";
+    switch (t->kind) {
+    case TypeKind::Struct: {
+        auto &st = static_cast<const StructType &>(*t);
+        auto it = structInstanceOrigin_.find(st.name);
+        if (it == structInstanceOrigin_.end()) return st.name;
+        std::string s = it->second.first + "<";
+        for (size_t i = 0; i < it->second.second.size(); ++i)
+            s += (i ? ", " : "") + displayType(it->second.second[i]);
+        return s + ">";
+    }
+    case TypeKind::Optional: return "?" + displayType(static_cast<const OptionalType &>(*t).inner);
+    case TypeKind::Array: {
+        auto &a = static_cast<const ArrayType &>(*t);
+        return displayType(a.element) + "[" + (a.size >= 0 ? std::to_string(a.size) : "") + "]";
+    }
+    case TypeKind::Reference: {
+        auto &r = static_cast<const ReferenceType &>(*t);
+        std::string s = t->str();
+        std::string b = r.base ? r.base->str() : "";
+        if (!b.empty() && s.size() >= b.size() && s.compare(s.size() - b.size(), b.size(), b) == 0)
+            return s.substr(0, s.size() - b.size()) + displayType(r.base);
+        return s;
+    }
+    default: return t->str();
+    }
+}
+
+bool Sema::isConsumeMethod(const FunctionDecl *fd) const {
+    if (!fd || !fd->isMethod || fd->isStaticMethod) return false;
+    if (fd->isConsume) return true;
+    const std::string &owner = fd->methodOwner;
+    std::string mname = fd->name.size() > owner.size() + 1 && fd->name.compare(0, owner.size(), owner) == 0
+                            ? fd->name.substr(owner.size() + 1) : fd->name;
+    if (mname == "drop" && fd->params.size() == 1) return true;
+    auto it = methodBodyDecl_.find(owner + "::" + mname);
+    return it != methodBodyDecl_.end() && it->second && it->second->isConsume;
+}
+
+// Send: a value of the type can move to another thread. Sync: a 'const &T'
+// to it can be shared between threads. syncMut: a mutable '&T' can be
+// shared (every write through it is synchronized). Auto-derived from the
+// structure: scalars are Send + Sync (not syncMut); raw pointers are
+// neither; a reference is Send only into static data (const: Sync of the
+// pointee; mutable: syncMut of it; a region-less reference counts as
+// static: it opted out of lifetime tracking); aggregates are what all their members
+// are. Inside a Drop type, raw-pointer and '&heap' fields are the type's
+// own uniquely owned buffers, so they count as their pointee. Explicit
+// markers in the struct body override: 'unsafe impl Send/Sync;' (Sync also
+// gives syncMut: the type synchronizes its own state), 'impl !Send/!Sync;'.
+std::string Sema::threadSafety(const TypePtr &t0, bool sync, bool syncMut, bool inOwner, int depth) const {
+    TypePtr t = t0;
+    while (t && t->kind == TypeKind::Newtype) t = static_cast<NewtypeType &>(*t).base;
+    if (!t) return "-";
+    if (depth > 24) return "";
+    const char *what = syncMut ? "shared mutably between threads" : sync ? "shared between threads"
+                                                                         : "sent to another thread";
+    switch (t->kind) {
+    case TypeKind::Void: case TypeKind::Bool: case TypeKind::Char:
+    case TypeKind::Int8: case TypeKind::Int16: case TypeKind::Int32: case TypeKind::Int64:
+    case TypeKind::UInt8: case TypeKind::UInt16: case TypeKind::UInt32: case TypeKind::UInt64:
+    case TypeKind::Float32: case TypeKind::Float64: case TypeKind::Enum: case TypeKind::Vector:
+        if (syncMut) return "'" + t->str() + "' is plain data: concurrent writes race (use a Mutex or atomics)";
+        return "";
+    case TypeKind::Function: return "";
+    case TypeKind::Pointer: {
+        auto &pt = static_cast<PointerType &>(*t);
+        if (inOwner && !syncMut) {
+            if (!pt.base || pt.base->kind == TypeKind::Void) return "";
+            return threadSafety(pt.base, sync, false, false, depth + 1);
+        }
+        return "raw pointer '" + t->str() + "' can't be " + what + " (nothing guards what it points to)";
+    }
+    case TypeKind::Reference: {
+        auto &rt = static_cast<ReferenceType &>(*t);
+        if (rt.base && rt.base->kind == TypeKind::Function) return "";
+        if (syncMut) return "a reference stored in shared mutable memory can be overwritten concurrently";
+        if (inOwner && rt.region == Region::Heap) return threadSafety(rt.base, sync, false, false, depth + 1);
+        // A region-less ('outliving') reference is SafeC's unchecked escape
+        // from lifetime tracking everywhere (see the memory reference):
+        // treated like a static one here too.
+        if (!sync && rt.region != Region::Static && rt.region != Region::Extern)
+            return "'" + t->str() + "' refers to " +
+                   (rt.region == Region::Stack ? std::string("stack") : rt.region == Region::Arena ? std::string("arena")
+                    : rt.region == Region::Heap ? std::string("heap") : std::string("borrowed")) +
+                   " data that may not outlive the other thread";
+        std::string why = threadSafety(rt.base, true, rt.mut, false, depth + 1);
+        return why.empty() ? "" : "'" + t->str() + "': " + why;
+    }
+    case TypeKind::Slice: {
+        if (syncMut) return "a slice stored in shared mutable memory can be overwritten concurrently";
+        if (!sync) return "slice '" + t->str() + "' is a view of memory that may not outlive the other thread";
+        auto &sl = static_cast<SliceType &>(*t);
+        std::string why = threadSafety(sl.element, true, true, false, depth + 1);
+        return why.empty() ? "" : "'" + t->str() + "': " + why;
+    }
+    case TypeKind::Array: return threadSafety(static_cast<ArrayType &>(*t).element, sync, syncMut, inOwner, depth + 1);
+    case TypeKind::Optional: return threadSafety(static_cast<OptionalType &>(*t).inner, sync, syncMut, inOwner, depth + 1);
+    case TypeKind::Tuple:
+        for (auto &e : static_cast<TupleType &>(*t).elementTypes) {
+            std::string why = threadSafety(e, sync, syncMut, inOwner, depth + 1);
+            if (!why.empty()) return why;
+        }
+        return "";
+    case TypeKind::Struct: {
+        const StructType *st = canonicalStruct(typeRegistry_, static_cast<const StructType *>(t.get()));
+        if (!sync && hasMarker(*st, "!Send")) return "'" + st->name + "' is marked 'impl !Send'";
+        if (sync && hasMarker(*st, "!Sync")) return "'" + st->name + "' is marked 'impl !Sync'";
+        if (!sync && hasMarker(*st, "Send")) return "";
+        if (sync && hasMarker(*st, "Sync")) return "";
+        bool owner = hasDropMethod(*st);
+        for (auto &f : st->fields) {
+            std::string why = threadSafety(f.type, sync, syncMut, owner, depth + 1);
+            if (!why.empty()) return why == "-" ? why : "'" + st->name + "' field '" + f.name + "': " + why;
+        }
+        return "";
+    }
+    default: return "-";
+    }
 }
 
 // ── Scope ─────────────────────────────────────────────────────────────────────
@@ -465,6 +657,11 @@ bool Sema::run() {
     resolveMethodBodyDecls();
     checkTraitSupertraits();
     completeGenericStructInstances();
+    declsCollected_ = true;
+    mustDropCache_.clear();
+    for (auto &pc : pendingDropConds_) evalDropCond(pc.first, *pc.second, pc.second->loc);
+    pendingDropConds_.clear();
+    mustDropCache_.clear();
     for (auto &d : tu_.decls) checkDecl(*d);
 
     // Append monomorphized generic struct instances (before the function
@@ -823,6 +1020,7 @@ void Sema::collectFunction(FunctionDecl &fn) {
         if (dit != methodBodyDecl_.end() && dit->second != &fn &&
             dit->second->genericParams.size() == fn.genericParams.size()) {   // else reported above
             FunctionDecl &d = *dit->second;
+            fn.isConsume = fn.isConsume || d.isConsume;
             // The declaration was resolved when its struct was collected; a
             // typedef declared after the struct only resolves now.
             if (d.returnType) d.returnType = resolveType(d.returnType);
@@ -941,6 +1139,7 @@ void Sema::collectStruct(StructDecl &sd) {
     auto st = std::make_shared<StructType>(sd.name, sd.isUnion);
     st->isDefined = true;
     st->isPacked  = sd.isPacked;
+    st->threadMarkers = sd.threadMarkers;
 
     // Register the struct *before* resolving its fields — a self-referential
     // field like 'struct Node* next;' inside 'struct Node' needs
@@ -1048,6 +1247,10 @@ void Sema::collectStruct(StructDecl &sd) {
     // existing '.h'/'.sc' pairing logic in Scope::define/genFunctionProto
     // already merges the two FunctionDecl nodes' attributes correctly).
     for (auto &md : sd.methodDecls) {
+        if (md.name == "drop" && md.dropCond) {
+            if (declsCollected_) evalDropCond(sd.name, *md.dropCond, md.loc);
+            else pendingDropConds_.push_back({sd.name, md.dropCond});
+        }
         auto synth = std::make_unique<FunctionDecl>(md.name, md.loc);
         synth->returnType    = md.returnType;
         synth->params        = md.params;
@@ -1055,6 +1258,9 @@ void Sema::collectStruct(StructDecl &sd) {
         synth->methodOwner   = sd.name;
         synth->isConstMethod = md.isConst;
         synth->isStaticMethod = md.isStatic;
+        synth->isConsume     = md.isConsume || (md.name == "drop" && md.params.empty() && !md.isStatic);
+        if (md.isConsume && md.isStatic)
+            diag_.error(md.loc, "a static method has no 'self' and can't be 'consume'");
         synth->genericParams = md.genericParams;
         synth->isExtern      = true; // no body here; defined elsewhere and linked
         collectFunction(*synth);
@@ -1836,6 +2042,7 @@ void Sema::checkStmt(Stmt &s, FunctionDecl &fn) {
         bool isNullLike = false, isOptional = false;
         TypePtr nullPayloadTy;
         classifyNullMatchSubject(subjectTy, isNullLike, isOptional, nullPayloadTy);
+        if (nullPayloadTy) nullPayloadTy = resolveType(nullPayloadTy);
         std::unordered_set<int> nullTagsSeen;
         for (auto &arm : ms.arms) {
             resolveMatchArmPatterns(arm.patterns, isTaggedUnion, unionSt,
@@ -1974,6 +2181,11 @@ void Sema::checkStmt(Stmt &s, FunctionDecl &fn) {
 std::optional<int64_t> Sema::tryConstInt(const Expr &e) {
     switch (e.kind) {
     case ExprKind::IntLit: return static_cast<const IntLitExpr &>(e).value;
+    case ExprKind::FieldCount: {
+        auto &fc = static_cast<const FieldCountExpr &>(e);
+        if (!fc.isNeedsDrop || !fc.ofType || fc.ofType->kind == TypeKind::Generic) return std::nullopt;
+        return fc.needsDropValue;
+    }
     case ExprKind::SizeofType: {
         auto &se = static_cast<const SizeofTypeExpr &>(e);
         TypePtr t = resolveType(se.ofType);
@@ -2308,6 +2520,11 @@ TypePtr Sema::checkExpr(Expr &e) {
     case ExprKind::FieldCount: {
         auto &fc = static_cast<FieldCountExpr &>(e);
         fc.ofType = resolveType(fc.ofType);
+        if (fc.isNeedsDrop) {
+            fc.needsDropValue = isMustDrop(fc.ofType) ? 1 : 0;
+            ty = makeInt(32, true);
+            break;
+        }
         if (fc.ofType && fc.ofType->kind == TypeKind::Struct) {
             ty = makeInt(64, false);
         } else {
@@ -3028,6 +3245,56 @@ void Sema::adoptTupleLiteral(ExprPtr &e, const TypePtr &expected) {
     e = std::move(lit);
 }
 
+// What a thread started with spawn/spawn_scoped may be given. The
+// argument is shared with the new thread:
+//   * '&static T' (and 'const &static T'): T must be Sync for a const
+//     reference, and synchronized for writes (a Mutex, atomics, a type marked
+//     'unsafe impl Sync') for a mutable one — static data is reachable from
+//     every thread at once.
+//   * a reference to anything else (a local, heap or arena memory) only
+//     with spawn_scoped: the thread is joined before the referent dies
+//     (checked by the ownership walk, which also keeps this thread off the
+//     referent until the join). A mutable one hands it over exclusively (T
+//     must be Send); a const one shares it for reading (T must be Sync).
+//     spawn's threads are detached-capable, so they may only borrow static
+//     data.
+//   * a raw pointer only inside 'unsafe { }' (nothing can be checked).
+void Sema::checkThreadArg(Expr &arg, const TypePtr &argTy, bool scoped, const char *what) {
+    if (!argTy || argTy->isError() || arg.kind == ExprKind::NullLit) return;
+    TypePtr t = argTy;
+    while (t && t->kind == TypeKind::Newtype) t = static_cast<NewtypeType &>(*t).base;
+    if (t && t->kind == TypeKind::Pointer) {
+        if (!inUnsafeScope())
+            diag_.error(arg.loc, std::string(what) + ": a raw pointer argument can't be checked for thread "
+                                 "safety; pass a reference, or write the call inside 'unsafe { }'");
+        return;
+    }
+    if (!t || t->kind != TypeKind::Reference) return;
+    auto &rt = static_cast<ReferenceType &>(*t);
+    if (rt.base && rt.base->kind == TypeKind::Function) return;
+    std::string tn = displayType(rt.base);
+    if (rt.region == Region::Static || rt.region == Region::Extern) {   // region-less: unchecked, as static
+        std::string why = threadSafety(rt.base, true, rt.mut);
+        if (!why.empty() && why != "-")
+            diag_.error(arg.loc, std::string(what) + ": the thread would share '" + tn + "' (static data) with every "
+                                 "other thread through a " + (rt.mut ? "mutable" : "const") + " reference, but it is not " +
+                                 (rt.mut ? "safe to write concurrently" : "Sync") + ": " + why +
+                                 (rt.mut ? "; or hand a local to spawn_scoped" : ""));
+        return;
+    }
+    if (!scoped) {
+        diag_.error(arg.loc, std::string(what) + ": the argument '" + argTy->str() + "' refers to data the thread may "
+                             "outlive (a spawned thread isn't joined by its scope): pass static data, or use "
+                             "spawn_scoped and join it before the data goes away");
+        return;
+    }
+    std::string why = threadSafety(rt.base, rt.mut ? false : true);
+    if (!why.empty() && why != "-")
+        diag_.error(arg.loc, std::string(what) + ": '" + tn + "' can't be " +
+                             (rt.mut ? "handed to another thread (it is not Send): " : "shared with another thread (it is not Sync): ") +
+                             why);
+}
+
 TypePtr Sema::checkSpawn(SpawnExpr &e) {
     // Check the function expression — must be &static reference to a function
     TypePtr fnTy = checkExpr(*e.fnExpr);
@@ -3047,15 +3314,7 @@ TypePtr Sema::checkSpawn(SpawnExpr &e) {
     }
     // Check the argument expression
     TypePtr argTy = checkExpr(*e.argExpr);
-    // ── Spawn region isolation: reject mutable non-static refs ──────────────
-    if (argTy && argTy->kind == TypeKind::Reference) {
-        auto &ref = static_cast<ReferenceType &>(*argTy);
-        if (ref.mut && ref.region != Region::Static) {
-            diag_.error(e.argExpr->loc,
-                "spawn argument must not pass mutable non-static reference "
-                "(region isolation violation)");
-        }
-    }
+    checkThreadArg(*e.argExpr, argTy, /*scoped=*/false, "spawn");
     // spawn returns a pthread_t (represented as signed i64)
     return makeInt(64, true);  // pthread_t handle (long long)
 }
@@ -3256,6 +3515,7 @@ TypePtr Sema::checkMatchExpr(MatchExpr &e) {
     bool isNullLike = false, isOptional = false;
     TypePtr nullPayloadTy;
     classifyNullMatchSubject(subjectTy, isNullLike, isOptional, nullPayloadTy);
+    if (nullPayloadTy) nullPayloadTy = resolveType(nullPayloadTy);
     if (e.arms.empty()) {
         diag_.error(e.loc, "match expression must have at least one arm");
         return makeError();
@@ -3676,6 +3936,52 @@ TypePtr Sema::checkCall(CallExpr &e) {
             return e.type;
         }
         // ── Channel built-ins ───────────────────────────────────────────────
+        // ── forget(x): give up a value of Drop type without dropping it ──────
+        // The ownership checker treats it as a move into nowhere; it
+        // compiles to nothing. Leaking can break what a value's drop()
+        // guarantees (a lock released, a scoped thread joined), so it is an
+        // explicit, auditable 'unsafe' operation.
+        // ── drop(x): run x's destructor glue ────────────────────────────────
+        // x.drop() for a type with a drop() method; for an aggregate, drop
+        // every member that owns something (fields, elements, a present
+        // optional's value); nothing for a type that owns nothing. This is
+        // how generic code drops a T it owns, whatever T is.
+        if (ident.name == "drop" && !lookup("drop")) {
+            if (e.args.size() != 1)
+                diag_.error(e.loc, "drop expects 1 argument (the value to drop)");
+            for (auto &a : e.args) checkExpr(*a);
+            std::function<bool(const TypePtr &, int)> hasTaggedOwner = [&](const TypePtr &t0, int d) -> bool {
+                TypePtr t = t0;
+                while (t && t->kind == TypeKind::Newtype) t = static_cast<NewtypeType &>(*t).base;
+                if (!t || d > 16 || !isMustDrop(t)) return false;
+                if (t->kind == TypeKind::Struct) {
+                    auto &st = static_cast<const StructType &>(*t);
+                    if (hasDropMethod(st)) return false;
+                    if (st.isTaggedUnion) return true;
+                    for (auto &f : st.fields) if (hasTaggedOwner(f.type, d + 1)) return true;
+                    return false;
+                }
+                if (t->kind == TypeKind::Array) return hasTaggedOwner(static_cast<ArrayType &>(*t).element, d + 1);
+                if (t->kind == TypeKind::Optional) return hasTaggedOwner(static_cast<OptionalType &>(*t).inner, d + 1);
+                if (t->kind == TypeKind::Tuple)
+                    for (auto &x : static_cast<TupleType &>(*t).elementTypes) if (hasTaggedOwner(x, d + 1)) return true;
+                return false;
+            };
+            if (e.args.size() == 1 && e.args[0]->type && hasTaggedOwner(e.args[0]->type, 0))
+                diag_.error(e.loc, "drop(): which variant of a tagged union holds a value is only known at run "
+                                   "time; 'match' it and drop the payload");
+            e.type = makeVoid();
+            return e.type;
+        }
+        if (ident.name == "forget" && !lookup("forget")) {
+            if (e.args.size() != 1)
+                diag_.error(e.loc, "forget expects 1 argument (the value to leak)");
+            for (auto &a : e.args) checkExpr(*a);
+            if (!inUnsafeScope())
+                diag_.error(e.loc, "forget() leaks its argument without dropping it: write it inside 'unsafe { }'");
+            e.type = makeVoid();
+            return e.type;
+        }
         if (ident.name == "chan_create") {
             // chan_create(capacity) → void* (opaque channel handle)
             if (e.args.size() != 1)
@@ -3689,6 +3995,14 @@ TypePtr Sema::checkCall(CallExpr &e) {
             if (e.args.size() != 2)
                 diag_.error(e.loc, "chan_send expects 2 arguments (channel, value_ptr)");
             for (auto &a : e.args) checkExpr(*a);
+            // The value moves to whichever thread receives it: it must be Send.
+            if (e.args.size() == 2 && e.args[1]->type && e.args[1]->type->kind == TypeKind::Reference) {
+                auto &rt = static_cast<ReferenceType &>(*e.args[1]->type);
+                std::string why = threadSafety(rt.base, false);
+                if (!why.empty() && why != "-")
+                    diag_.error(e.args[1]->loc, "chan_send: a value of type '" + displayType(rt.base) +
+                                                    "' can't be sent to another thread (it is not Send): " + why);
+            }
             e.type = makeBool();
             return e.type;
         }
@@ -3715,16 +4029,9 @@ TypePtr Sema::checkCall(CallExpr &e) {
             // Region isolation: mutable non-static refs are still rejected.
             if (e.args.size() != 2)
                 diag_.error(e.loc, "spawn_scoped expects 2 arguments (function, arg)");
-            for (auto &a : e.args) {
-                TypePtr argTy = checkExpr(*a);
-                if (argTy && argTy->kind == TypeKind::Reference) {
-                    auto &ref = static_cast<ReferenceType &>(*argTy);
-                    if (ref.mut && ref.region != Region::Static) {
-                        diag_.error(a->loc,
-                            "spawn_scoped argument must not pass mutable non-static "
-                            "reference (region isolation violation)");
-                    }
-                }
+            for (size_t i = 0; i < e.args.size(); ++i) {
+                TypePtr argTy = checkExpr(*e.args[i]);
+                if (i == 1) checkThreadArg(*e.args[i], argTy, /*scoped=*/true, "spawn_scoped");
             }
             e.type = makeInt(64, true);
             return e.type;

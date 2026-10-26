@@ -125,7 +125,7 @@ static void w_lora_(&Dataset d) {
     tc.epochs = 2UL; tc.device = g_dev;
     struct TrainReport rep = module_fit(&ft, TRAIN_LOSS_CE, &opt, d, &tc);
     g_loss = rep.lastEpochLoss;
-    ft.detach(); opt.free(); base.free();
+    ft.detach(); drop(ft); opt.free(); base.free();
 }
 
 static void w_conv_(&Dataset d) {

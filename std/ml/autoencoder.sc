@@ -105,7 +105,9 @@ struct Autoencoder Autoencoder::new(unsigned long inDim, const &AutoencoderConfi
     return loss;
 }
 
-void Autoencoder::free() {
+void Autoencoder::free() { self.drop(); }
+
+void Autoencoder::drop() {
     self.enc.free();
     self.dec.free();
 }
@@ -198,7 +200,9 @@ static &FloatTensor vae_kl_(const &FloatTensor mu, const &FloatTensor logvar, fl
     return self.decode(z, none);
 }
 
-void Vae::free() {
+void Vae::free() { self.drop(); }
+
+void Vae::drop() {
     self.enc.free(); self.muHead.free(); self.logvarHead.free(); self.dec.free();
 }
 
@@ -361,7 +365,9 @@ static void vq_count_use_(&VqVae v, const &FloatTensor idx) {
 
 &FloatTensor VqVae::reconstruct(const &FloatTensor x) { return self.decode(self.encode(x)); }
 
-void VqVae::free() {
+void VqVae::free() { self.drop(); }
+
+void VqVae::drop() {
     self.enc.free();
     self.dec.free();
     self.codebook->free();
@@ -412,7 +418,9 @@ struct ConvAutoencoder ConvAutoencoder::new(struct ConvNet enc, struct ConvNet d
     return loss;
 }
 
-void ConvAutoencoder::free() {
+void ConvAutoencoder::free() { self.drop(); }
+
+void ConvAutoencoder::drop() {
     self.enc.free();
     self.dec.free();
 }
@@ -484,7 +492,9 @@ static &FloatTensor cvae_dec_in_(const &ConvVae v, const &FloatTensor z, const &
     return self.decode(z, none);
 }
 
-void ConvVae::free() {
+void ConvVae::free() { self.drop(); }
+
+void ConvVae::drop() {
     self.enc.free(); self.muHead.free(); self.logvarHead.free(); self.dec.free();
 }
 

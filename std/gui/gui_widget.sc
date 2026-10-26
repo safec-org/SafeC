@@ -226,8 +226,7 @@ static &Widget __w_self(&Widget w) {
 
 static &Widget __widget_new_text(int kind, const &char text) {
     &Widget w = __widget_new(kind);
-    w.text.free();
-    w.text = String::from(text);
+    std::replace(&w.text, String::from(text)).drop();
     return w;
 }
 
@@ -316,8 +315,7 @@ static &Widget __widget_new_text(int kind, const &char text) {
 }
 &Widget Widget::textinput(const &char placeholder) {
     &Widget w = __widget_new(WIDGET_TEXTINPUT);
-    w.placeholder.free();
-    w.placeholder = String::from(placeholder);
+    std::replace(&w.placeholder, String::from(placeholder)).drop();
     return w;
 }
 &Widget Widget::textarea() {
@@ -553,18 +551,16 @@ void Widget::invalidate() { __w_mark(self); }
     return __w_self(self);
 }
 &Widget Widget::set_text(const &char text) {
-    self.text.free();
-    self.text = String::from(text);
+    std::replace(&self.text, String::from(text)).drop();
     if (self.caret > self.text.len) { self.caret = self.text.len; }
     if (self.anchor > self.text.len) { self.anchor = self.text.len; }
     __w_mark(self);
     return __w_self(self);
 }
-&Widget Widget::set_name(const &char name) { self.name.free(); self.name = String::from(name); return __w_self(self); }
-&Widget Widget::set_tooltip(const &char text) { self.tooltip.free(); self.tooltip = String::from(text); return __w_self(self); }
+&Widget Widget::set_name(const &char name) { std::replace(&self.name, String::from(name)).drop(); return __w_self(self); }
+&Widget Widget::set_tooltip(const &char text) { std::replace(&self.tooltip, String::from(text)).drop(); return __w_self(self); }
 &Widget Widget::set_placeholder(const &char text) {
-    self.placeholder.free();
-    self.placeholder = String::from(text);
+    std::replace(&self.placeholder, String::from(text)).drop();
     __w_mark(self);
     return __w_self(self);
 }
@@ -656,9 +652,7 @@ int Widget::is_checked() const { return self.checked; }
     return __w_self(self);
 }
 void Widget::clear_items() {
-    unsigned long i = 0UL;
-    while (i < self.items.len) { self.items.at(i).free(); i = i + 1UL; }
-    self.items.clear();
+    self.items.clear();   // and each item
     self.selected = -1;
     self.hotIndex = -1;
     __w_mark(self);
@@ -723,12 +717,11 @@ const &char Widget::node_text(int node) const {
         int r = 0;
         while (r < self.rowCount) {
             unsigned long c = 0UL;
-            while (c < oldCols) { cells.push(*self.cells.at((unsigned long)r * oldCols + c)); c = c + 1UL; }
+            while (c < oldCols) { cells.push(std::replace(self.cells.at((unsigned long)r * oldCols + c), String::new())); c = c + 1UL; }
             cells.push(String::new());
             r = r + 1;
         }
-        self.cells.free();
-        self.cells = cells;
+        std::replace(&self.cells, cells).drop();
     }
     struct WidgetColumn col;
     col.title = String::from(title);
@@ -759,9 +752,7 @@ const &char Widget::cell_text(int row, int col) const {
 }
 int Widget::row_count() const { return self.rowCount; }
 void Widget::clear_rows() {
-    unsigned long i = 0UL;
-    while (i < self.cells.len) { self.cells.at(i).free(); i = i + 1UL; }
-    self.cells.clear();
+    self.cells.clear();   // and each cell
     self.rowCount = 0;
     self.selected = -1;
     __w_mark(self);
@@ -796,8 +787,7 @@ unsigned long Widget::selection_end() const { return self.anchor < self.caret ? 
 struct GuiColor Widget::get_color() const { return self.color; }
 
 &Widget Widget::set_shortcut(const &char shortcut) {
-    self.shortcut.free();
-    self.shortcut = String::from(shortcut);
+    std::replace(&self.shortcut, String::from(shortcut)).drop();
     return __w_self(self);
 }
 
@@ -1781,8 +1771,7 @@ static void __w_focus_step(&GuiUi ui, int backwards) {
 }
 
 static void __w_show_tip(&GuiUi ui, &Widget target) {
-    ui.tip.text.free();
-    unsafe { ui.tip.text = String::from((const char*)target.tooltip.data); }
+    unsafe { std::replace(&ui.tip.text, String::from((const char*)target.tooltip.data)).drop(); }
     int mw = 0; int mh = 0;
     __w_measure(ui, ui.tip, &mw, &mh);
     int ww = 0; int wh = 0;
@@ -2072,7 +2061,9 @@ int GuiUi::dispatch(&GuiEvent ev) {
     return 0;
 }
 
-void GuiUi::free() {
+void GuiUi::free() { self.drop(); }
+
+void GuiUi::drop() {
     self.close_popups();
     unsigned long i = 0UL;
     while (i < self.overlays.len) { &Widget o = *self.overlays.at(i); o.open = 0; i = i + 1UL; }
@@ -2097,7 +2088,7 @@ static void __w_mb_closed(&Widget dlg, int result, ?&Erased data) {
         case some(user): user(dlg, result, dlg.mbUserData_);
         case null: { }
     }
-    dlg.free();
+    unsafe { dlg.free(); }   // a heap widget: destroyed in place, the UI no longer references it
 }
 
 void gui_message_box_raw_(&GuiUi ui, const &char title, const &char text, int buttons,
@@ -2184,7 +2175,9 @@ int Widget::dispatch_event(&GuiEvent ev) {
     return r;
 }
 
-void Widget::free() {
+void Widget::free() { self.drop(); }
+
+void Widget::drop() {
     __w_ui_forget(self);
     unsigned long i = 0UL;
     while (i < self.children.len) {
@@ -2201,18 +2194,12 @@ void Widget::free() {
     self.shortcut.free();
     self.colStretch.free();
     self.rowStretch.free();
+    self.items.free();   // and each item
     i = 0UL;
-    while (i < self.items.len) { self.items.at(i).free(); i = i + 1UL; }
-    self.items.free();
+    self.nodes.free();   // and each node's text
     i = 0UL;
-    while (i < self.nodes.len) { self.nodes.at(i).text.free(); i = i + 1UL; }
-    self.nodes.free();
-    i = 0UL;
-    while (i < self.tableCols.len) { self.tableCols.at(i).title.free(); i = i + 1UL; }
-    self.tableCols.free();
-    i = 0UL;
-    while (i < self.cells.len) { self.cells.at(i).free(); i = i + 1UL; }
-    self.cells.free();
+    self.tableCols.free();   // and each column's title
+    self.cells.free();   // and each cell
     match (self.contextMenu) {
         case some(m): {
             m.owner = null;

@@ -64,7 +64,7 @@ struct Poll<int> Handler::poll(&Context cx) {
     while (ends_header(&self.buf[0], self.have) == 0 && self.have < 512UL) {
         self.rd = timeout(self.c.read(self.buf[self.have..512]), 1000LL);
         AWAIT_INTO(1, self.n, self.rd);
-        if (self.n.default(0LL) <= 0LL) { self.c.close(); ASYNC_RETURN(0); }   // timed out, EOF or error
+        if (self.n.default(0LL) <= 0LL) { std::replace(&self.c, AsyncTcpStream::from_fd(-1)).close(); ASYNC_RETURN(0); }   // timed out, EOF or error
         self.have = self.have + (unsigned long)self.n.default(0LL);
     }
     {
@@ -78,7 +78,7 @@ struct Poll<int> Handler::poll(&Context cx) {
     }
     self.wr = self.c.write_all(self.buf[0..self.have]);
     AWAIT_INTO(2, self.ok, self.wr);
-    self.c.close();
+    std::replace(&self.c, AsyncTcpStream::from_fd(-1)).close();   // drop() closes nothing again
     g_served = g_served + 1;
     ASYNC_RETURN(self.ok);
     ASYNC_END;
@@ -130,19 +130,30 @@ struct Poll<int> Server::poll(&Context cx) {
             struct Handler h;
             h.st = ASYNC_INIT;
             h.id = self.accepted + 1;
-            h.c = self.ev.left;
-            self.handlers[self.slot] = AsyncTask::new(h);
+            h.c = std::replace(&self.ev.left, AsyncTcpStream::from_fd(-1));   // the connection moves to its handler
+            struct AsyncTask<struct Handler, int> t = AsyncTask::new(h);
+            if (self.busy[self.slot] != 0) std::replace(&self.handlers[self.slot], t).drop();   // the finished one it replaces
+            else self.handlers[self.slot] = t;
             self.busy[self.slot] = 1;
-            async_spawn(cx, &self.handlers[self.slot]);
+            drop(async_spawn(cx, &self.handlers[self.slot]));                  // detached: busy[] tracks it
         }
         self.accepted = self.accepted + 1;
     }
-    self.l.close();
+    unsafe { self.l.close(); }   // early, in place: drop() closes nothing again
     ASYNC_RETURN(self.accepted);
     ASYNC_END;
 }
 
-void Server::drop() { if (self.st == 1) self.next.drop(); self.l.close(); self.st = ASYNC_DONE; }
+void Server::drop() {
+    if (self.st == 1) self.next.drop();
+    if (self.st == 2) self.y.drop();
+    self.ev.drop();   // which == 0 until the first connection
+    for (int i = 0; i < HANDLERS; i = i + 1) {
+        if (self.busy[i] != 0) { self.handlers[i].drop(); self.busy[i] = 0; }   // finished by now
+    }
+    self.l.close();
+    self.st = ASYNC_DONE;
+}
 
 // ── clients ────────────────────────────────────────────────────────────────
 
@@ -180,7 +191,7 @@ struct Poll<int> Client::poll(&Context cx) {
         if (self.n <= 0LL) break;                               // HTTP/1.0: closed at the end
         self.have = self.have + (unsigned long)self.n;
     }
-    self.s.close();
+    std::replace(&self.s, AsyncTcpStream::from_fd(-1)).close();   // drop() closes nothing again
     // "HTTP/1.0 200"
     if (self.have < 12UL || self.buf[9] != (unsigned char)50 || self.buf[10] != (unsigned char)48 ||
         self.buf[11] != (unsigned char)48) ASYNC_RETURN(0);
@@ -257,7 +268,7 @@ struct Poll<int> PrimeJob::poll(&Context cx) {
     ASYNC_END;
 }
 
-void PrimeJob::drop() { self.st = ASYNC_DONE; }
+void PrimeJob::drop() { if (self.st == 1) self.y.drop(); self.st = ASYNC_DONE; }
 
 // ── main: wait for every client, then stop the server and the stats ────────
 
@@ -295,7 +306,12 @@ struct Poll<int> Main::poll(&Context cx) {
     ASYNC_END;
 }
 
-void Main::drop() { if (self.st == 1) self.all.drop(); self.st = ASYNC_DONE; }
+void Main::drop() {
+    if (self.st == 1) self.all.drop();
+    if (self.st == 2) self.primes.drop();
+    for (int i = 0; i < CLIENTS; i = i + 1) self.clients[i].drop();   // idempotent
+    self.st = ASYNC_DONE;
+}
 
 static struct Runtime rt;
 static struct ThreadPool pool;
@@ -310,20 +326,22 @@ int main() {
     g_stop = CancelToken::new();
     g_primes = Oneshot::new();
 
+    struct AsyncTcpListener l = AsyncTcpListener::bind((unsigned short)0);
+    if (l.fd < 0) { printf("async_demo: cannot listen\n"); l.close(); return 1; }
     struct Server srv;
     srv.st = ASYNC_INIT;
-    srv.l = AsyncTcpListener::bind((unsigned short)0);
-    if (srv.l.fd < 0) { printf("async_demo: cannot listen\n"); return 1; }
+    srv.l = l;
+    srv.ev.which = 0;
     for (int i = 0; i < HANDLERS; i = i + 1) srv.busy[i] = 0;
     unsigned short port = srv.l.local_port();
     printf("async_demo: serving on 127.0.0.1:%d\n", (int)port);
     server_task = AsyncTask::new(srv);
-    rt.spawn(&server_task);
+    drop(rt.spawn(&server_task));
 
     struct Stats st;
     st.st = ASYNC_INIT;
     stats_task = AsyncTask::new(st);
-    rt.spawn(&stats_task);
+    drop(rt.spawn(&stats_task));
 
     pool = ThreadPool::new();
     pool.start(2);
@@ -331,7 +349,7 @@ int main() {
     pj.st = ASYNC_INIT;
     pj.limit = 200000;
     prime_task = AsyncTask::new(pj);
-    pool.spawn(&prime_task);
+    drop(pool.spawn(&prime_task));
 
     struct Main m;
     m.st = ASYNC_INIT;
@@ -345,6 +363,7 @@ int main() {
     }
 
     int ok = rt.block_on(&m);   // the clients, then the pool's answer
+    m.drop();
     rt.run();                   // the server and the stats notice the cancellation
     pool.shutdown();
     printf("async_demo: %d/%d clients ok, %d requests served, server accepted %d\n",

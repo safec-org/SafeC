@@ -144,7 +144,8 @@ struct GuiPath {
     int  is_empty() const;
     unsigned long length() const;   // number of segments
     void clear();
-    void free();
+    void drop();
+    void free() consume;   // = drop()
 };
 
 } // namespace std

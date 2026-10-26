@@ -39,7 +39,8 @@ struct SseStream {
     int comment(const &char text);
     // "retry: ms" — the client's reconnection delay.
     int retry(int ms);
-    void close();
+    void drop();
+    void close() consume;   // = drop()
 };
 
 struct SseEvent {
@@ -47,8 +48,9 @@ struct SseEvent {
     struct String data;    // data: lines joined with '\n'
     struct String id;      // the last event id seen (sticky, as EventSource)
     int           retry;   // retry: value from this event, -1 if none
+    void drop();
 
-    void free();
+    void free() consume;   // = drop()
 };
 
 struct SseParser {
@@ -67,7 +69,8 @@ struct SseParser {
     // The next complete event (1, 'out' filled — free it) or 0 if more
     // input is needed. Comment lines and events without data are skipped.
     int  next(&SseEvent out);
-    void free();
+    void drop();
+    void free() consume;   // = drop()
 };
 
 struct SseClient {
@@ -89,7 +92,8 @@ struct SseClient {
     // Blocks for the next event: 1 with 'out' filled, 0 once the stream
     // ended or failed.
     int  next(&SseEvent out);
-    void close();
+    void drop();
+    void close() consume;   // = drop()
 };
 
 } // namespace std

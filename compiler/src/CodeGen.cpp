@@ -1771,6 +1771,99 @@ void CodeGen::genReturn(ReturnStmt &s, FnEnv &env) {
     builder_.CreateBr(env.returnBB);
 }
 
+static TypePtr stripNewtypeCG(TypePtr t) {
+    while (t && t->kind == TypeKind::Newtype) t = static_cast<NewtypeType &>(*t).base;
+    return t;
+}
+
+bool CodeGen::needsDropGlue(const TypePtr &t0, int depth) {
+    TypePtr t = stripNewtypeCG(t0);
+    if (!t || depth > 16) return false;
+    switch (t->kind) {
+    case TypeKind::Struct: {
+        auto &st = static_cast<const StructType &>(*t);
+        if (auto *f = mod_->getFunction(st.name + "_drop"); f && f->arg_size() == 1) return true;
+        if (st.isUnion) return false;
+        for (auto &f : st.fields) if (needsDropGlue(f.type, depth + 1)) return true;
+        return false;
+    }
+    case TypeKind::Array: return static_cast<const ArrayType &>(*t).size > 0 &&
+                                 needsDropGlue(static_cast<const ArrayType &>(*t).element, depth + 1);
+    case TypeKind::Optional: return needsDropGlue(static_cast<const OptionalType &>(*t).inner, depth + 1);
+    case TypeKind::Tuple:
+        for (auto &e : static_cast<const TupleType &>(*t).elementTypes) if (needsDropGlue(e, depth + 1)) return true;
+        return false;
+    default: return false;
+    }
+}
+
+void CodeGen::emitDropGlue(llvm::Value *addr, const TypePtr &t0, FnEnv &env, int depth) {
+    TypePtr t = stripNewtypeCG(t0);
+    if (!needsDropGlue(t, depth)) return;
+    switch (t->kind) {
+    case TypeKind::Struct: {
+        auto &st = static_cast<const StructType &>(*t);
+        if (auto *f = mod_->getFunction(st.name + "_drop"); f && f->arg_size() == 1) {
+            builder_.CreateCall(f, {addr});
+            return;
+        }
+        auto *sty = lowerType(t);
+        for (auto &f : st.fields) {
+            if (!needsDropGlue(f.type, depth + 1)) continue;
+            auto *fp = builder_.CreateStructGEP(sty, addr, (unsigned)f.index, "drop.f");
+            emitDropGlue(fp, f.type, env, depth + 1);
+        }
+        return;
+    }
+    case TypeKind::Tuple: {
+        auto &tt = static_cast<const TupleType &>(*t);
+        auto *sty = lowerType(t);
+        for (size_t i = 0; i < tt.elementTypes.size(); ++i) {
+            if (!needsDropGlue(tt.elementTypes[i], depth + 1)) continue;
+            auto *fp = builder_.CreateStructGEP(sty, addr, (unsigned)i, "drop.e");
+            emitDropGlue(fp, tt.elementTypes[i], env, depth + 1);
+        }
+        return;
+    }
+    case TypeKind::Optional: {
+        auto &ot = static_cast<const OptionalType &>(*t);
+        auto *sty = lowerType(t);
+        auto *has = builder_.CreateLoad(llvm::Type::getInt1Ty(ctx_),
+                                        builder_.CreateStructGEP(sty, addr, 1, "drop.has"), "drop.present");
+        auto *fn = builder_.GetInsertBlock()->getParent();
+        auto *yes = llvm::BasicBlock::Create(ctx_, "drop.some", fn);
+        auto *done = llvm::BasicBlock::Create(ctx_, "drop.done", fn);
+        builder_.CreateCondBr(has, yes, done);
+        builder_.SetInsertPoint(yes);
+        emitDropGlue(builder_.CreateStructGEP(sty, addr, 0, "drop.val"), ot.inner, env, depth + 1);
+        builder_.CreateBr(done);
+        builder_.SetInsertPoint(done);
+        return;
+    }
+    case TypeKind::Array: {
+        auto &at = static_cast<const ArrayType &>(*t);
+        auto *aty = lowerType(t);
+        auto *i64 = llvm::Type::getInt64Ty(ctx_);
+        auto *fn = builder_.GetInsertBlock()->getParent();
+        auto *pre = builder_.GetInsertBlock();
+        auto *body = llvm::BasicBlock::Create(ctx_, "drop.elem", fn);
+        auto *done = llvm::BasicBlock::Create(ctx_, "drop.elems.done", fn);
+        builder_.CreateBr(body);
+        builder_.SetInsertPoint(body);
+        auto *idx = builder_.CreatePHI(i64, 2, "drop.i");
+        idx->addIncoming(llvm::ConstantInt::get(i64, 0), pre);
+        auto *ep = builder_.CreateInBoundsGEP(aty, addr, {llvm::ConstantInt::get(i64, 0), idx}, "drop.ep");
+        emitDropGlue(ep, at.element, env, depth + 1);
+        auto *next = builder_.CreateAdd(idx, llvm::ConstantInt::get(i64, 1), "drop.next");
+        idx->addIncoming(next, builder_.GetInsertBlock());
+        builder_.CreateCondBr(builder_.CreateICmpULT(next, llvm::ConstantInt::get(i64, (uint64_t)at.size)), body, done);
+        builder_.SetInsertPoint(done);
+        return;
+    }
+    default: return;
+    }
+}
+
 void CodeGen::emitDefers(FnEnv &env, bool isErrorPath) {
     // Walk registration positions newest-first: at position p, first join
     // any spawn_scoped threads started after the first p defers were
@@ -2423,6 +2516,7 @@ llvm::Value *CodeGen::genExpr(Expr &e, FnEnv &env) {
     }
     case ExprKind::FieldCount: {
         auto &fc = static_cast<FieldCountExpr &>(e);
+        if (fc.isNeedsDrop) return llvm::ConstantInt::get(llvm::Type::getInt32Ty(ctx_), fc.needsDropValue);
         if (fc.ofType && fc.ofType->kind == TypeKind::Struct) {
             auto &st = static_cast<StructType &>(*fc.ofType);
             return llvm::ConstantInt::get(llvm::Type::getInt64Ty(ctx_),
@@ -2984,7 +3078,7 @@ llvm::Value *CodeGen::genBinary(BinaryExpr &e, FnEnv &env) {
         // of failing through genLValue's "not addressable" default case.
         llvm::Value *lhs = e.left->isLValue ? genLValue(*e.left, env) : nullptr;
         if (!lhs) {
-            lhs = builder_.CreateAlloca(lowerType(e.left->type), nullptr, "opovl.lhs.tmp");
+            lhs = createEntryAlloca(env, lowerType(e.left->type), "opovl.lhs.tmp");
             builder_.CreateStore(genExpr(*e.left, env), lhs);
         }
         auto *rhs = genExpr(*e.right, env);
@@ -3565,6 +3659,26 @@ llvm::Value *CodeGen::genCall(CallExpr &e, FnEnv &env) {
             builder_.SetInsertPoint(doneBB);
             return ok;
         }
+        // drop(x): x's drop glue (see emitDropGlue); nothing for a type
+        // that owns nothing.
+        if (ident.name == "drop" && e.args.size() == 1 && !e.callee->type) {
+            Expr &a = *e.args[0];
+            llvm::Value *addr = nullptr;
+            if (a.isLValue) addr = genLValue(a, env);
+            else {
+                auto *v = genExpr(a, env);
+                auto *slot = createEntryAlloca(env, lowerType(a.type), "drop.tmp");
+                builder_.CreateStore(v, slot);
+                addr = slot;
+            }
+            if (needsDropGlue(a.type)) emitDropGlue(addr, a.type, env);
+            return llvm::ConstantInt::get(llvm::Type::getInt32Ty(ctx_), 0);
+        }
+        // forget(x): no code; x's side effects (a call) still happen.
+        if (ident.name == "forget" && e.args.size() == 1 && !e.callee->type) {
+            genExpr(*e.args[0], env);
+            return llvm::ConstantInt::get(llvm::Type::getInt32Ty(ctx_), 0);
+        }
         if (ident.name == "chan_close" && e.args.size() == 1) {
             auto *PtrTy  = llvm::PointerType::get(ctx_, 0);
             auto *VoidTy = llvm::Type::getVoidTy(ctx_);
@@ -3621,7 +3735,7 @@ llvm::Value *CodeGen::genCall(CallExpr &e, FnEnv &env) {
             selfPtr = genLValue(*e.methodBase, env);
         } else {
             // Base is a value expression — allocate temp storage
-            selfPtr = builder_.CreateAlloca(lowerType(e.methodBase->type), nullptr, "self.tmp");
+            selfPtr = createEntryAlloca(env, lowerType(e.methodBase->type), "self.tmp");
             builder_.CreateStore(genExpr(*e.methodBase, env), selfPtr);
         }
         args.push_back(selfPtr);
@@ -3780,7 +3894,7 @@ llvm::Value *CodeGen::genCall(CallExpr &e, FnEnv &env) {
             auto *argTy = args[i]->getType();
             auto *st = llvm::dyn_cast<llvm::StructType>(argTy);
             if (st && dl.getTypeAllocSize(st) > 16 && !isHomogeneousFPAggregate(st)) {
-                auto *slot = builder_.CreateAlloca(st, nullptr, "indirect.tmp");
+                auto *slot = createEntryAlloca(env, st, "indirect.tmp");
                 builder_.CreateStore(args[i], slot);
                 args[i] = slot;
             }
@@ -4121,7 +4235,7 @@ llvm::Value *CodeGen::genSlice(SliceExpr &e, FnEnv &env) {
     auto *sliceLen = builder_.CreateSub(endVal, startVal, "slice.len");
 
     // Construct {T*, i64} struct
-    auto *alloca = builder_.CreateAlloca(sliceST, nullptr, "slice.tmp");
+    auto *alloca = createEntryAlloca(env, sliceST, "slice.tmp");
     builder_.CreateStore(slicePtr,
         builder_.CreateStructGEP(sliceST, alloca, 0));
     builder_.CreateStore(sliceLen,

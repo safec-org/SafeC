@@ -193,6 +193,15 @@ These are not implemented, and the error is a parse or name error:
   suite; on a few `EXPECT-ERROR` tests there that need aliasing seen only
   through a recursive call (`calls_err.sc`, `recursive_fresh_err.sc`),
   scc reports a subset of safec's diagnostics.
+- **Ownership and thread safety**: scc compiles the `Drop` forms — `drop()`
+  and `consume` methods, conditional `void drop() if (cond);`, `drop(x)`
+  (drop glue: `T::drop()`, else each owning field and constant-length array
+  element; an optional's payload is not dropped), `needs_drop(T)` and
+  `forget(x)` — and parses the `unsafe impl Send/Sync;` / `impl !Send;`
+  markers. It doesn't run safec's ownership checks (leaks, use after drop or
+  move, double drops, borrowed drops) or its Send/Sync checks: every type
+  satisfies `Send` and `Sync`, so programs safec rejects for those reasons
+  compile.
 - **Undefined functions**: a function that is declared but never defined,
   and isn't in the runtime, is a compile error (`undefined function 'f'`)
   when the program calls it. Natively that would be a link error.

@@ -52,7 +52,7 @@ int main() {
                 a.open_stream((?&AudioStreamParams)&op, null, AUDIO_FORMAT_F32, d.preferred_sample_rate, &frames, count_cb,
                               (?&Count)&c, (?&AudioStreamOptions)&o);
             match (sr.get_err()) { case some(e): printf("    %s: %s\n", mode == 1 ? "exclusive" : "shared", e.message); case null: {} }
-            if (!sr.ok()) { check(mode == 1, "shared-mode stream opens"); continue; }
+            if (!sr.ok()) { sr.drop(); check(mode == 1, "shared-mode stream opens"); continue; }
             struct AudioStream s = sr.unwrap_or(std::AudioStream::closed());
             printf("    %s: %u frames, latency %ld\n", mode == 1 ? "exclusive" : "shared", frames, s.latency());
             struct AudioError e = s.start();
@@ -82,7 +82,7 @@ int main() {
                               di.preferred_sample_rate, &frames, count_cb, (?&Count)&c, null);
             match (sr.get_err()) { case some(e): printf("    %s: %s\n", duplex ? "duplex" : "input", e.message); case null: {} }
             check(sr.ok(), duplex ? "duplex stream opens (render + capture endpoints)" : "input stream opens");
-            if (!sr.ok()) continue;
+            if (!sr.ok()) { sr.drop(); continue; }
             struct AudioStream s = sr.unwrap_or(std::AudioStream::closed());
             check(s.start().ok(), "stream starts");
             long long t0 = std::audio_now_ns_();

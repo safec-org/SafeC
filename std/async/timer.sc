@@ -72,6 +72,8 @@ int TimerQueue::advance(long long now_ms) {
 
 long long TimerQueue::now_ms() const { return self.now_ms_; }
 
+void TimerQueue::drop() { self.overflow.drop(); }
+
 long long TimerQueue::next_deadline() const {
     unsigned long next = timerq_next_tick_(&self.wheel);
     long long d = next == 0UL ? -1LL : self.origin_ms + (long long)next;
@@ -132,7 +134,7 @@ static void sleep_fire_(?&Sleep sp) {
             s.id = 0;
             if (s.has_waker != 0) {
                 s.has_waker = 0;
-                struct Waker w = s.waker;
+                struct Waker w = std::replace(&s.waker, Waker::noop());
                 w.wake();
             }
         }
@@ -179,14 +181,13 @@ struct Poll<Unit> Sleep::poll(&Context cx) {
             if (self.deadline <= tq.now_ms_) {
                 if (self.id != 0) { tq.cancel_locked_(self.id); self.id = 0; }
                 if (self.ovf_id != 0) { tq.overflow.remove(self.ovf_id); self.ovf_id = 0; }
-                if (self.has_waker != 0) { self.has_waker = 0; self.waker.drop(); }
+                if (self.has_waker != 0) { self.has_waker = 0; std::replace(&self.waker, Waker::noop()).drop(); }
                 self.fired = 1;
                 tq.lock.unlock();
                 return Poll::ready(UNIT);
             }
             if (self.has_waker == 0 || self.waker.will_wake(&cx.waker) == 0) {
-                if (self.has_waker != 0) self.waker.drop();
-                self.waker = cx.waker.clone();
+                std::replace(&self.waker, cx.waker.clone()).drop();   // the old waker, or the empty one
                 self.has_waker = 1;
             }
             int busy = 0;
@@ -217,16 +218,19 @@ void Sleep::drop() {
             if (self.id != 0 && self.fired == 0) tq.cancel_locked_(self.id);
             self.id = 0;
             if (self.ovf_id != 0) { tq.overflow.remove(self.ovf_id); self.ovf_id = 0; }
-            if (self.has_waker != 0) { self.has_waker = 0; self.waker.drop(); }
+            self.has_waker = 0;
             self.fired = 1;
             tq.lock.unlock();
         }
         case null: { self.fired = 1; }
     }
+    self.waker.drop();   // a dropped Waker is empty: reset() may reuse it
 }
 
 void Sleep::reset(long long ms) {
-    self.drop();
+    // Drop in place (unregisters it; drop() is idempotent), then rearm the
+    // same, still pinned, Sleep.
+    unsafe { self.drop(); }
     self.duration_ms = ms < 0LL ? 0LL : ms;
     self.armed = 0;
     self.fired = 0;

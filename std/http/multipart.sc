@@ -26,14 +26,6 @@ static long long mp_find_(const char* hay, unsigned long n, unsigned long from, 
     return -1LL;
 }
 
-static void mp_part_free_(&MultipartPart p) {
-    p.name.free();
-    p.filename.free();
-    p.content_type.free();
-    p.headers.free();
-    p.data.free();
-}
-
 struct MultipartForm MultipartForm::parse(const &char content_type, const &unsigned char body,
                                           unsigned long len, ?&int ok) {
     struct MultipartForm f;
@@ -152,13 +144,10 @@ const ?&char MultipartForm::value(const &char name) const {
     return null;
 }
 
-void MultipartForm::free() {
-    unsigned long i = 0UL;
-    while (i < self.parts.length()) {
-        mp_part_free_(self.parts.at(i));
-        i = i + 1UL;
-    }
-    self.parts.free();
+void MultipartForm::free() { self.drop(); }
+
+void MultipartForm::drop() {
+    self.parts.drop();   // and each part
 }
 
 struct MultipartBuilder MultipartBuilder::new() {
@@ -240,7 +229,9 @@ void MultipartBuilder::finish() {
     self.body.push("--\r\n");
 }
 
-void MultipartBuilder::free() {
+void MultipartBuilder::free() { self.drop(); }
+
+void MultipartBuilder::drop() {
     self.boundary.free();
     self.body.free();
 }

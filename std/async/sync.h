@@ -27,6 +27,7 @@ namespace std {
 // ── AsyncMutex ─────────────────────────────────────────────────────────────
 
 struct AsyncMutex {
+    unsafe impl Sync;   // state changes under its spinlock
     int             locked;
     struct WaitList waiters;
     struct Spinlock lk;
@@ -50,6 +51,7 @@ struct MutexLock {
 // ── AsyncSemaphore ─────────────────────────────────────────────────────────
 
 struct AsyncSemaphore {
+    unsafe impl Sync;   // state changes under its spinlock
     long long       permits;
     struct WaitList waiters;
     struct Spinlock lk;
@@ -78,6 +80,7 @@ struct SemAcquire {
 // permit (tokio::sync::Notify).
 
 struct AsyncNotify {
+    unsafe impl Sync;   // state changes under its spinlock
     int             permit;
     int             generation;   // bumped by notify_waiters
     int             pending_one;  // notify_one()s handed to woken waiters
@@ -108,6 +111,7 @@ struct Notified {
 #define CANCEL_DEPTH 4
 
 struct CancelToken {
+    unsafe impl Sync;   // state changes under its spinlock
     int             cancelled;    // atomic
     ?&CancelToken   parent;
     struct WaitList waiters;
@@ -153,14 +157,14 @@ generic<F: Future, T>
 struct Poll<?T> Cancellable::poll(&Context cx) {
     struct Poll<Unit> pc = self.c.poll(cx);
     if (pc.ready_ != 0) {
-        self.inner.drop();
+        unsafe { self.inner.drop(); }   // in place, early: a Future's drop() is idempotent
         self.finished = 1;
         ?T none = null;
         return Poll::ready(none);
     }
     struct Poll<T> p = self.inner.poll(cx);
     if (p.ready_ != 0) {
-        self.c.drop();
+        unsafe { self.c.drop(); }   // in place, early: a Future's drop() is idempotent
         self.finished = 1;
         ?T v = p.value;
         return Poll::ready(v);

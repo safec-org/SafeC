@@ -23,8 +23,8 @@
 
 extern void free(void* ptr);
 
-static void tensor_drop(&FloatTensor t) {
-    t->free();
+static void tensor_drop(&FloatTensor t) {   // a heap tensor: destroyed in place, then freed
+    unsafe { t->free(); }
     unsafe { free((void*)t); }
 }
 
@@ -99,7 +99,7 @@ void t_every_module() {
     ASSERT_TRUE(module_contract_(&ln, x8, 8UL, "build/test_ml_modules_ln.bin"));
 
     struct LoraConfig lc = LoraConfig::default(2UL);
-    struct LoraMlp lora = LoraMlp::attach(&mlp, &lc);
+    struct LoraMlp lora = LoraMlp::attach(&mlp, &lc); defer drop(lora);
     rng.fill_normal(*lora.B.at(0UL), (float)0.0, (float)0.1);
     ASSERT_TRUE(module_contract_(&lora, x8, 3UL, "build/test_ml_modules_lora.bin"));
     ASSERT_EQ(model_param_count(&lora), 2UL * (8UL + 16UL) + 2UL * (16UL + 3UL));

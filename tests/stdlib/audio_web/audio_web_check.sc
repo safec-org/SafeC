@@ -35,7 +35,7 @@ int test_open(int frames_wanted) {
     g_synth.calls = 0;
     g_synth.status = 0U;
     struct Result<Audio, AudioError> r = std::Audio::open(AUDIO_API_UNSPECIFIED);
-    if (!r.ok()) return -1;
+    if (!r.ok()) { r.drop(); return -1; }
     g_audio = r.unwrap_or(std::Audio::closed());
     if (g_audio.api() != AUDIO_API_WEBAUDIO) return -2;
     if (g_audio.device_count() != 1U) return -3;
@@ -48,7 +48,7 @@ int test_open(int frames_wanted) {
     struct Result<AudioStream, AudioError> sr =
         g_audio.open_stream((?&AudioStreamParams)&op, null, AUDIO_FORMAT_F32, 48000U, &frames, render,
                             (?&Synth)&g_synth, null);
-    if (!sr.ok()) return -5;
+    if (!sr.ok()) { sr.drop(); return -5; }
     g_stream = sr.unwrap_or(std::AudioStream::closed());
     if (g_stream.start().failed()) return -6;
     if (!g_stream.is_running()) return -7;
@@ -71,7 +71,7 @@ int test_open_input() {
     g_in_sum = 0.0;
     g_in_calls = 0;
     struct Result<Audio, AudioError> r = std::Audio::open(AUDIO_API_WEBAUDIO);
-    if (!r.ok()) return -1;
+    if (!r.ok()) { r.drop(); return -1; }
     g_audio = r.unwrap_or(std::Audio::closed());
     if (g_audio.default_input_device() == AUDIO_DEFAULT_DEVICE) return -2;
     struct AudioStreamParams ip = std::AudioStreamParams::of(g_audio.default_input_device(), 1);
@@ -79,7 +79,7 @@ int test_open_input() {
     struct Result<AudioStream, AudioError> sr =
         g_audio.open_stream(null, (?&AudioStreamParams)&ip, AUDIO_FORMAT_I16, 48000U, &frames, capture,
                             (?&Synth)&g_synth, null);
-    if (!sr.ok()) return -3;
+    if (!sr.ok()) { sr.drop(); return -3; }
     g_stream = sr.unwrap_or(std::AudioStream::closed());
     if (g_stream.start().failed()) return -4;
     return (int)frames;
@@ -109,7 +109,7 @@ int test_close() {
 __attribute__((export_name("test_midi_open")))
 int test_midi_open() {
     struct Result<MidiIn, AudioError> ri = std::MidiIn::open(MIDI_API_UNSPECIFIED, "check", 0UL);
-    if (!ri.ok()) return -1;
+    if (!ri.ok()) { ri.drop(); return -1; }
     g_in = ri.unwrap_or(std::MidiIn::closed());
     if (g_in.api() != MIDI_API_WEBMIDI) return -2;
     if (g_in.port_count() != 1U) return -3;
@@ -120,7 +120,7 @@ int test_midi_open() {
     if (g_in.open_port(0U, "in").failed()) return -5;
     if (!g_in.open_virtual_port("v").failed()) return -6;      // a port is open already
     struct Result<MidiOut, AudioError> ro = std::MidiOut::open(MIDI_API_WEBMIDI, "check");
-    if (!ro.ok()) return -7;
+    if (!ro.ok()) { ro.drop(); return -7; }
     g_out = ro.unwrap_or(std::MidiOut::closed());
     if (g_out.open_virtual_port("v").code != AUDIO_ERR_UNSUPPORTED) return -8;
     if (g_out.open_port(0U, "out").failed()) return -9;

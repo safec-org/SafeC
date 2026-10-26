@@ -99,7 +99,9 @@ int Dir::next(&DirEntry out) {
     return 0;
 }
 
-void Dir::close() {
+void Dir::close() { self.drop(); }
+
+void Dir::drop() {
     unsafe {
         struct DirWin32_* h = (struct DirWin32_*)(void*)self;
         FindClose(h->handle);

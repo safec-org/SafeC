@@ -41,6 +41,7 @@ static int guarded_(int which) {
         struct Reactor re = Reactor::new();
         r = re.init();
         re.close_();
+        drop(re);   // its (empty) registration tables
     } else if (which == 1) {
         r = tcp_listen_nb((unsigned short)0);
     } else {

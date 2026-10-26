@@ -320,7 +320,9 @@ void TlsfAllocator::dealloc(?&heap void ptr_ref) {
     }
 }
 
-inline void TlsfAllocator::destroy() {
+inline void TlsfAllocator::destroy() { self.drop(); }
+
+inline void TlsfAllocator::drop() {
     if (self.owned) { unsafe { free((void*)self.base); } }
     self.cap = (unsigned long)0;
 }

@@ -42,6 +42,8 @@
 #pragma once
 #include <std/erased.h>
 #include <std/sync/spinlock.h>
+#include <std/ownership.h>
+#include <std/panic.h>
 #include <std/dsp/timer_wheel.h>
 
 typedef int Unit;     // the output of a future that produces nothing: Rust's ()
@@ -78,8 +80,12 @@ struct Poll {
     static struct Poll<T> pending();
     int is_ready() const;
     int is_pending() const;
-    // The value if Ready, null if Pending.
-    ?T  take() const;
+    // The value if Ready, null if Pending. Consumes the Poll.
+    ?T  take() consume;
+    // The value; panics if Pending. Consumes the Poll.
+    T   unwrap() consume;
+    // A Poll owns its value when T owns something.
+    void drop() if (needs_drop(T));
 };
 
 // ── Waker ──────────────────────────────────────────────────────────────────
@@ -120,7 +126,7 @@ struct Waker {
     // A waker that wakes nothing, with no hooks: an empty WakerSlot's.
     static struct Waker empty_();
 
-    void wake();                         // wake_by_ref(), then drop()
+    void wake() consume;                 // wake_by_ref(), then drop()
     void wake_by_ref() const;
     struct Waker clone() const;
     void drop();
@@ -169,6 +175,7 @@ struct WakerSlot {
     int  wake();
     // Release it without waking.
     void clear();
+    void drop();   // clear(): a slot owns the waker it holds
 };
 
 // ── WaitList ───────────────────────────────────────────────────────────────
@@ -201,6 +208,10 @@ struct WaitList {
     // Wake (and remove) every waiter. Returns how many.
     int  wake_all();
     int  len() const;
+    // Releases every registered waker (without waking it). A WaitList owns
+    // the waker clones registered in it, so whatever holds one (a mutex, a
+    // channel, a timer queue) drops it.
+    void drop();
 };
 
 // ── TimerQueue ─────────────────────────────────────────────────────────────
@@ -208,6 +219,7 @@ struct WaitList {
 // the queue's role are described in std/async/timer.h). Declared here
 // because Context points at one.
 struct TimerQueue {
+    unsafe impl Sync;   // changes under 'lock'
     struct TimerWheel wheel;     // tick = 1 ms since origin_ms
     long long         origin_ms; // clock value of tick 0
     long long         now_ms_;   // the time the queue was last advanced to
@@ -242,6 +254,9 @@ struct TimerQueue {
     // Internal, with 'lock' held: wait in 'overflow' for a free slot (0 =
     // that is full too), and leave it.
     int       overflow_locked_(long long deadline_ms, const &Waker w, int id);
+    // Releases the wakers of Sleeps still waiting for a wheel slot. Every
+    // Sleep must be dropped before its queue is.
+    void      drop();
 };
 
 // ── Context ────────────────────────────────────────────────────────────────
@@ -271,6 +286,9 @@ struct Context {
     static struct Context noop();
 
     void wake_by_ref() const;    // waker.wake_by_ref(): "poll me again soon"
+    // Releases the waker. A Context owns its waker (a Drop value), so the
+    // executor that made one drops it after the poll.
+    void drop();
 };
 
 // ── Leaf futures ───────────────────────────────────────────────────────────
@@ -303,11 +321,26 @@ struct YieldNow {
     void drop();
 };
 
+// If 'p' is Ready, moves its value into the slot *dst (whose old contents
+// are not dropped: an empty slot) and returns 1; else drops 'p', returns 0.
+// For a combinator storing a child's output.
+generic<T>
+int poll_take_into_(struct Poll<T> p, &T dst) {
+    if (p.ready_ == 0) { p.drop(); return 0; }
+    *dst = p.unwrap();
+    return 1;
+}
+
 generic<T> struct Poll<T> Poll::ready(T v) { struct Poll<T> p; p.ready_ = 1; p.value = v; return p; }
 generic<T> struct Poll<T> Poll::pending() { struct Poll<T> p; p.ready_ = 0; return p; }
 generic<T> int Poll::is_ready() const { return self.ready_; }
 generic<T> int Poll::is_pending() const { return self.ready_ == 0 ? 1 : 0; }
-generic<T> ?T Poll::take() const { if (self.ready_ == 0) return null; return self.value; }
+generic<T> ?T Poll::take() { if (self.ready_ == 0) return null; return self.value; }
+generic<T> T Poll::unwrap() {
+    if (self.ready_ == 0) panic_at("Poll::unwrap: the future is still pending", "future.h", 0);
+    return self.value;
+}
+generic<T> void Poll::drop() { if (self.ready_ != 0) drop(self.value); }
 
 generic<T>
 int TimerQueue::add_locked_(long long deadline_ms, fn void(?&T) cb, ?&T ctx) {

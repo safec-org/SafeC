@@ -245,13 +245,10 @@ void HttpHeaders::set(const &char name, const &char value) {
         &HttpHeaderField f = self.fields.at(i);
         if (http_name_eq(f.name.as_ptr(), name)) {
             if (!done) {
-                f.value.free();
-                f.value = String::from(value);
+                std::replace(&f.value, String::from(value)).drop();
                 done = 1;
             } else {
-                f.name.free();
-                f.value.free();
-                self.fields.remove(i);
+                drop(self.fields.remove(i));
                 continue;
             }
         }
@@ -266,9 +263,7 @@ unsigned long HttpHeaders::remove(const &char name) {
     while (i < self.fields.length()) {
         &HttpHeaderField f = self.fields.at(i);
         if (http_name_eq(f.name.as_ptr(), name)) {
-            f.name.free();
-            f.value.free();
-            self.fields.remove(i);
+            drop(self.fields.remove(i));
             n = n + 1UL;
             continue;
         }
@@ -278,14 +273,7 @@ unsigned long HttpHeaders::remove(const &char name) {
 }
 
 void HttpHeaders::clear() {
-    unsigned long i = 0UL;
-    while (i < self.fields.length()) {
-        &HttpHeaderField f = self.fields.at(i);
-        f.name.free();
-        f.value.free();
-        i = i + 1UL;
-    }
-    self.fields.clear();
+    self.fields.clear();   // and each field's strings
 }
 
 void HttpHeaders::write_to(&String out) const {
@@ -325,7 +313,9 @@ struct HttpHeaders HttpHeaders::clone() const {
     return h;
 }
 
-void HttpHeaders::free() {
+void HttpHeaders::free() { self.drop(); }
+
+void HttpHeaders::drop() {
     self.clear();
     self.fields.free();
 }

@@ -41,7 +41,8 @@ struct SparseTensor {
     void  fill(float v);          // every stored value
     void  backward();             // the values must be a scalar loss's graph: forwards to values.backward()
     void  zero_grad();
-    void  free();
+    void  drop();
+    void  free() consume;   // = drop()
 
     int  device() const;
     int  place(int device);       // values and indices together; 1 on success

@@ -30,6 +30,7 @@
 namespace std {
 
 struct ThreadPool {
+    unsafe impl Sync;   // shared with its workers; state changes under 'mu'
     unsigned long long mu;         // guards the queue, live, the flags
     unsigned long long work_cv;    // signalled when a task is queued (or on shutdown)
     unsigned long long done_cv;    // broadcast when a task finishes
@@ -47,33 +48,42 @@ struct ThreadPool {
     static struct ThreadPool new();
     // Start 'n' worker threads (1..ASYNC_POOL_MAX_THREADS). 0 on success.
     int  start(int n);
-    generic<F, T> struct JoinHandle<T> spawn(&AsyncTask<F, T> task);
+    // F and T must be Send: the task runs (and finishes) on a worker thread.
+    generic<F: Send, T: Send> struct JoinHandle<T> spawn(&AsyncTask<F, T> task);
     int  spawn_raw_(?&TaskHeader t);
     // Run 'fut' as a task on the pool and wait (this thread blocks) for its
     // value. Call from outside the pool's workers.
-    generic<F: Future, T> T block_on(F fut);
+    generic<F: Future + Send, T: Send> T block_on(F fut);
     // Block until the task behind 'hdr' is done.
     void wait_task_(&TaskHeader hdr);
     // Block until every spawned task has finished.
     void wait_idle();
     // Stop the workers (after their current poll) and join them. Tasks
     // still queued or waiting are abandoned, not dropped.
-    void shutdown();
+    void drop();
+    void shutdown() consume;   // = drop()
     int  live_count();
 };
 
-generic<F, T>
+generic<F: Send, T: Send>
 struct JoinHandle<T> ThreadPool::spawn(&AsyncTask<F, T> task) {
     self.spawn_raw_(&task.hdr);
     return join_handle_for_(task);
 }
 
-generic<F: Future, T>
+generic<F: Future + Send, T: Send>
 T ThreadPool::block_on(F fut) {
     struct AsyncTask<F, T> t = AsyncTask::new(fut);
     self.spawn_raw_(&t.hdr);
     self.wait_task_(&t.hdr);
-    return t.out[0];
+    ?T out = t.take();
+    t.drop();
+    match (out) {
+        case some(v): return v;
+        case none: { }
+    }
+    panic_at("ThreadPool::block_on: the task was aborted", "pool.h", 0);
+    unsafe { return *(T*)(void*)&t.out[0]; }   // unreachable: panic_at doesn't return
 }
 
 } // namespace std

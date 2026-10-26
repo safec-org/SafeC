@@ -80,7 +80,8 @@ struct AesCtx {
     // is done being used, before it goes out of scope, so the key
     // material doesn't linger readable in memory (e.g. in a stack frame
     // reused by a later, unrelated function, or in a crash dump).
-    void destroy();
+    void drop();
+    void destroy() consume;   // = drop()
 };
 
 } // namespace std

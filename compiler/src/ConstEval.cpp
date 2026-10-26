@@ -860,6 +860,7 @@ std::optional<ConstValue> ConstEvalEngine::evalExprF(const Expr &e, Frame &frame
     }
     case ExprKind::FieldCount: {
         auto &fc = static_cast<const FieldCountExpr &>(e);
+        if (fc.isNeedsDrop) return ConstValue::mkInt(fc.needsDropValue);
         if (fc.ofType && fc.ofType->kind == TypeKind::Struct) {
             auto &st = static_cast<const StructType &>(*fc.ofType);
             return ConstValue::mkInt(static_cast<int64_t>(st.fields.size()));

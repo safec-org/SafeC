@@ -115,13 +115,15 @@ struct GuiFont GuiFont::default() {
             }
             py = py + 1;
         }
-        unsafe { dealloc_raw_((void*)tmp.pixels); }
+        tmp.drop();   // no platform window: frees the pixel buffer
         cp = cp + 1;
     }
     return f;
 }
 
-void GuiFont::free() {
+void GuiFont::free() { self.drop(); }
+
+void GuiFont::drop() {
     unsafe {
         if ((void*)self.bitmap != (void*)0) { dealloc_raw_((void*)self.bitmap); }
         self.bitmap = (&heap unsigned char)0;
