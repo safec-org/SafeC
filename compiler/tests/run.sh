@@ -18,6 +18,13 @@ FAIL=0
 while IFS= read -r -d '' t; do
     name="${t#"$HERE"/}"
     ll="$OUT/$(echo "$name" | tr '/' '_').ll"
+    # '// REQUIRES-HOST: <uname -s>' (e.g. Linux): a test of the host's own
+    # system headers, run only there.
+    host="$(sed -n 's|^// REQUIRES-HOST: *||p' "$t" | head -1)"
+    if [[ -n "$host" && "$host" != "$(uname -s)" ]]; then
+        echo "  [SKIP] $name (host is not $host)"
+        continue
+    fi
     if grep -q 'EXPECT-ERROR:' "$t"; then
         # Negative test: must be rejected with exactly the expected errors.
         if "$SAFEC_BIN" "$t" --emit-llvm -o "$ll" >"$OUT/err.txt" 2>&1; then
