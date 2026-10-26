@@ -165,6 +165,7 @@ int main(int argc, char** argv) {
         unsafe { printf("\n%d tokens\n", g_ntok); }
         return 0;
     }
+    if (dump == 2) { g_check_only = 1; }
     int ok = scc_compile_main(f);
     write_diags();
     if (ok == 0) { return 1; }

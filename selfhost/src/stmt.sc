@@ -235,6 +235,7 @@ void check_static_assert(int s) {
 
 void check_stmt(int s) {
     if (s == 0) { return; }
+    g_tyloc = s;
     int k = g_node[s].kind;
     if (k == S_BLOCK) { check_block(s); return; }
     if (k == S_MULTI) { check_block_list(s); return; }

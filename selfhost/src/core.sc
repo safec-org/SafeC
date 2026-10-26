@@ -28,6 +28,10 @@ void scc_preprocess(int main_file) {
     pp_finish();
 }
 
+// 1: stop after semantic analysis (scc --check): no code, so no 'main'
+// or definitions of declared functions are needed
+int g_check_only = 0;
+
 int scc_compile_main(int main_file) {
     dbg("pp\n");
     scc_preprocess(main_file);
@@ -39,6 +43,7 @@ int scc_compile_main(int main_file) {
     sema_program();
     dbg("gen\n");
     if (g_nerrors > 0) { return 0; }
+    if (g_check_only == 1) { return 1; }
     gen_module();
     if (g_nerrors > 0) { return 0; }
     return 1;

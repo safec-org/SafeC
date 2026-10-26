@@ -622,6 +622,7 @@ extern int S_runtime;
 extern int S_wild;
 
 extern int g_rt_file;
+extern int g_check_only;
 
 // ── util.sc ──────────────────────────────────────────────────────────────────
 void util_init();

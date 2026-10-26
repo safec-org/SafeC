@@ -71,3 +71,5 @@ int func_ret(int f);
 int func_nparams(int f);
 int func_param(int f, int i);
 int deref_struct(int t);
+extern int g_tyloc;
+extern int g_ce_struct;

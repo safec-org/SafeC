@@ -20,8 +20,10 @@ ap.add_argument("--safec", default=os.environ.get("SAFEC", "safec"))
 ap.add_argument("--node", default=os.environ.get("NODE", "node"))
 ap.add_argument("-v", action="store_true")
 ap.add_argument("--json", default=None, help="write per-test results here")
+ap.add_argument("--no-ctests", action="store_true", help="skip compiler/tests")
 ap.add_argument("files", nargs="*")
 args = ap.parse_args()
+CTESTS = os.path.join(os.path.dirname(ROOT), "compiler", "tests")
 
 files = args.files or sorted(
     os.path.join(HERE, d, f) for d in ("docs", "corpus", "neg")
@@ -50,6 +52,8 @@ if os.environ.get("SAFEC_HOME") and not os.path.exists(stdlib):
 results = []
 counts = {"pass": 0, "fail": 0}
 cats = {}
+ctest_files = [] if (args.files or args.no_ctests) else sorted(
+    os.path.join(d, f) for d, _, fs in os.walk(CTESTS) for f in fs if f.endswith(".sc"))
 for f in files:
     name = os.path.relpath(f, HERE)
     src = open(f, encoding="utf-8").read()
@@ -109,8 +113,52 @@ for f in files:
             elif n_ok:
                 print("   safec out: %r rc=%s" % (n_out[:300], n_rc))
                 print("   scc   out: %r rc=%s" % (s_out[:300], s_rc))
+# compiler/tests: the C++ compiler's regression tests, compile-only.  Both
+# compilers must agree on accept/reject; for '// EXPECT-ERROR:' tests scc's
+# diagnostics are also checked against the directives (filecheck.py rules).
+sys.path.insert(0, CTESTS)
+if ctest_files:
+    import io, contextlib, filecheck
+for f in ctest_files:
+    name = os.path.join("ctests", os.path.relpath(f, CTESTS))
+    src = open(f, encoding="utf-8").read()
+    neg = "EXPECT-ERROR:" in src
+    m = re.search(r"^// SAFEC-ARGS: *(.*)$", src, re.M)
+    extra = m.group(1).split() if m else []
+    rc, _, n_diag = run([args.safec, f, "--emit-llvm", "-o", os.path.join(tmp, "ct.ll")] + extra)
+    n_ok = rc == 0
+    if args.scc_wasm:
+        rc, _, s_diag = run([args.node, cli, "--scc", args.scc_wasm, f, "-o", os.path.join(tmp, "ct.wasm")])
+    else:
+        rc, _, s_diag = run([args.scc, "--check", f])
+    s_ok = rc == 0
+    why = ""
+    exact = False
+    if n_ok != s_ok:
+        why = "accept/reject differs (safec %s, scc %s)" % ("ok" if n_ok else "rejects", "ok" if s_ok else "rejects")
+    elif neg:
+        ef = os.path.join(tmp, "ct.err")
+        open(ef, "w").write(s_diag)
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            bad = filecheck.check_errors(f, ef)
+        exact = not bad
+    ok = why == ""
+    counts["pass" if ok else "fail"] += 1
+    c = cats.setdefault("ctests", [0, 0, 0, 0])
+    c[0] += 1; c[1] += ok
+    if neg and not n_ok and not s_ok: c[2] += 1; c[3] += exact
+    results.append({"test": name, "ok": ok, "why": why, "expected_errors_match": exact if neg else None})
+    if not ok or args.v:
+        print("%-4s %s %s" % ("ok" if ok else "FAIL", name, why))
+        if not ok and args.v:
+            print("   safec: " + " | ".join(errors(n_diag)[:3]))
+            print("   scc:   " + " | ".join(errors(s_diag)[:3]))
 for cat, (n, p, rej, same) in sorted(cats.items()):
-    extra = " (both rejected %d, same first error %d)" % (rej, same) if rej else ""
+    if cat == "ctests":
+        extra = " (EXPECT-ERROR tests rejected by both %d, scc matches every directive %d)" % (rej, same) if rej else ""
+    else:
+        extra = " (both rejected %d, same first error %d)" % (rej, same) if rej else ""
     print("%-8s %d/%d pass%s" % (cat, p, n, extra))
 print("TOTAL    %d/%d pass" % (counts["pass"], counts["pass"] + counts["fail"]))
 if args.json:

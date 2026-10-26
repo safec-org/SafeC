@@ -177,6 +177,7 @@ void constraint_error(int node, int t, int trn, int gp) {
     msg_lit("' for generic parameter '");
     msg_str(gp);
     msg_lit("'");
+    if (g_ce_struct != 0) { msg_lit(" of struct '"); msg_str(g_ce_struct); msg_lit("'"); }
     if (str_eq_lit(why, "-") == 0) { msg_lit(" ("); msg_str(why); msg_lit(")"); }
     error_node(node);
 }

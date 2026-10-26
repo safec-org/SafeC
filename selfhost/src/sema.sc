@@ -450,6 +450,11 @@ int g_nsinst = 0;
 
 void collect_struct_members(int sd, int node);
 
+int g_tyloc = 0;   // node a type error is reported at (the declaration being checked)
+int g_ce_struct = 0;   // constraint_error: "... of struct 'S'"
+int trait_mismatch(int t, int trn);
+void constraint_error(int node, int t, int trn, int gp);
+
 int instantiate_struct(int tmpl_node, int mark) {
     int na = g_ntyl - mark;
     // existing instance?
@@ -501,6 +506,25 @@ int instantiate_struct(int tmpl_node, int mark) {
         j = j + 1;
     }
     int name = intern_tmp();
+    // bounds: 'generic<T: Shape> struct Holder'
+    j = 0;
+    while (j < na) {
+        int gpj = g_list[g_node[gp].list + j];
+        int bl = g_node[gpj].b;
+        int q = 0;
+        while (bl != 0 && q < g_node[bl].nlist) {
+            int trn = g_node[g_list[g_node[bl].list + q]].sid;
+            if (trait_mismatch(g_tyl[mark + j], trn) == 1) {
+                g_ce_struct = g_node[tmpl_node].sid;
+                int loc = g_tyloc;
+                if (loc == 0) { loc = tmpl_node; }
+                constraint_error(loc, g_tyl[mark + j], trn, g_node[gpj].sid);
+                g_ce_struct = 0;
+            }
+            q = q + 1;
+        }
+        j = j + 1;
+    }
     int kind = SD_STRUCT;
     if ((g_node[tmpl_node].flags & NF_UNION) != 0) { kind = SD_UNION; }
     int sd = new_sdef(kind, name, tmpl_node);
@@ -768,6 +792,196 @@ int self_type(int sd, int fnode) {
     return ty_ref(g_sdef[sd].ty, R_STACK, 0, fl);
 }
 
+// ── out-of-line method definitions vs. their struct-body declarations ───────
+// the declaration of method 'name' in struct sd's body, or 0
+int body_decl(int sd, int name) {
+    int sn = g_sdef[sd].node;
+    if (sn == 0) { return 0; }
+    int i = 0;
+    while (i < g_node[sn].nlist) {
+        int m = g_list[g_node[sn].list + i];
+        if (g_node[m].kind == D_FUNC && g_node[m].sid == name) { return m; }
+        i = i + 1;
+    }
+    return 0;
+}
+
+int ngparams(int fnode) {
+    if (g_node[fnode].b == 0) { return 0; }
+    return g_node[g_node[fnode].b].nlist;
+}
+
+// t's spelling with every "const " removed, interned
+int bare_type_sid(int t) {
+    msg_reset();
+    msg_type(t);
+    tmp_reset();
+    int i = 0;
+    while (i < g_msg_len) {
+        if (i + 6 <= g_msg_len && g_msg[i] == 'c' && g_msg[i + 1] == 'o' && g_msg[i + 2] == 'n' && g_msg[i + 3] == 's' &&
+            g_msg[i + 4] == 't' && g_msg[i + 5] == ' ') { i = i + 6; continue; }
+        tmp_char((int)g_msg[i]);
+        i = i + 1;
+    }
+    return intern_tmp();
+}
+
+int fn_type_in_pattern_env(int fnode) {
+    int saved = g_nenv;
+    int gpn = g_node[fnode].b;
+    int i = 0;
+    while (gpn != 0 && i < g_node[gpn].nlist) {
+        int gs = g_node[g_list[g_node[gpn].list + i]].sid;
+        env_push(gs, ty_generic(gs));
+        i = i + 1;
+    }
+    int ft = func_type_from_node(fnode, 0);
+    g_nenv = saved;
+    return ft;
+}
+
+void def_mismatch(int def, int sd, int name) {
+    msg_reset();
+    msg_lit("definition of '");
+    msg_str(g_sdef[sd].sid);
+    msg_lit("::");
+    msg_str(name);
+    msg_lit("' doesn't match its declaration in the struct body: ");
+    int i = 0;
+    while (i < g_tmp_len) { msg_char((int)g_tmp[i]); i = i + 1; }
+    error_node(def);
+}
+
+void check_method_def(int sd, int def) {
+    int name = g_node[def].sid;
+    int d = body_decl(sd, name);
+    if (d == 0 || d == def) { return; }
+    if (ngparams(d) != ngparams(def)) {
+        msg_reset();
+        msg_lit("'");
+        msg_str(g_sdef[sd].sid);
+        msg_lit("::");
+        msg_str(name);
+        msg_lit("' is declared with ");
+        msg_int((long)ngparams(d));
+        msg_lit(" type parameter(s) in the struct body but defined with ");
+        msg_int((long)ngparams(def));
+        error_node(def);
+        return;
+    }
+    int ds = (g_node[d].flags & NF_SMETHOD) != 0;
+    int fs = (g_node[def].flags & NF_SMETHOD) != 0;
+    if (ds == 1) { fs = 1; }   // a definition of a static method is static
+    if (ds != fs) { tmp_reset(); tmp_lit("it is declared as an instance method"); def_mismatch(def, sd, name); return; }
+    int dc = (g_node[d].flags & NF_MCONST) != 0;
+    int fc = (g_node[def].flags & NF_MCONST) != 0;
+    if (dc != fc) {
+        tmp_reset();
+        if (dc == 1) { tmp_lit("it is declared const"); } else { tmp_lit("it is not declared const"); }
+        def_mismatch(def, sd, name);
+        return;
+    }
+    if (g_node[d].nlist != g_node[def].nlist) {
+        tmp_reset();
+        tmp_lit("it is declared with ");
+        tmp_int((long)g_node[d].nlist);
+        tmp_lit(" parameter(s)");
+        def_mismatch(def, sd, name);
+        return;
+    }
+    int dt = fn_type_in_pattern_env(d);
+    int ft = fn_type_in_pattern_env(def);
+    if (g_ty[dt].base != 0 && g_ty[ft].base != 0 && bare_type_sid(g_ty[dt].base) != bare_type_sid(g_ty[ft].base)) {
+        msg_reset();
+        msg_type(g_ty[dt].base);
+        tmp_reset();
+        tmp_lit("it is declared to return '");
+        int q = 0;
+        while (q < g_msg_len) { tmp_char((int)g_msg[q]); q = q + 1; }
+        tmp_lit("'");
+        def_mismatch(def, sd, name);
+        return;
+    }
+    int i = 0;
+    while (i < g_ty[dt].nlist && i < g_ty[ft].nlist) {
+        int a = g_tyl[g_ty[dt].list + i];
+        int b = g_tyl[g_ty[ft].list + i];
+        if (bare_type_sid(a) != bare_type_sid(b)) {
+            // "parameter N is declared 'A', defined 'B'"
+            int sa = 0;
+            int sb = 0;
+            msg_reset(); msg_type(a); tmp_reset();
+            int q = 0;
+            while (q < g_msg_len) { tmp_char((int)g_msg[q]); q = q + 1; }
+            sa = intern_tmp();
+            msg_reset(); msg_type(b); tmp_reset();
+            q = 0;
+            while (q < g_msg_len) { tmp_char((int)g_msg[q]); q = q + 1; }
+            sb = intern_tmp();
+            tmp_reset();
+            tmp_lit("parameter ");
+            tmp_int((long)(i + 1));
+            tmp_lit(" is declared '");
+            tmp_str(sa);
+            tmp_lit("', defined '");
+            tmp_str(sb);
+            tmp_lit("'");
+            def_mismatch(def, sd, name);
+            return;
+        }
+        i = i + 1;
+    }
+}
+
+// a bare name that names no struct, typedef or generic template, looked
+// through references, pointers, arrays, optionals and function types; 0 if none
+int unknown_name(int t) {
+    if (t == 0) { return 0; }
+    int k = g_ty[t].kind;
+    if (k == TY_STRUCT) {
+        int sd = g_ty[t].n;
+        if (g_sdef[sd].node == 0 && g_sdef[sd].tmpl == 0 && g_sdef[sd].kind == SD_STRUCT) { return g_sdef[sd].sid; }
+        return 0;
+    }
+    if (k == TY_REF || k == TY_PTR || k == TY_ARRAY || k == TY_OPT) { return unknown_name(g_ty[t].base); }
+    if (k == TY_FN) {
+        int n = unknown_name(g_ty[t].base);
+        int i = 0;
+        while (n == 0 && i < g_ty[t].nlist) { n = unknown_name(g_tyl[g_ty[t].list + i]); i = i + 1; }
+        return n;
+    }
+    return 0;
+}
+
+// "unknown type 'X' in the declaration of 'S::f'" for struct-body methods
+void check_body_decl_types() {
+    int i = 0;
+    while (i < g_ntop) {
+        int n = g_top[i];
+        i = i + 1;
+        if (g_node[n].kind != D_STRUCT || g_node[n].b != 0) { continue; }
+        int j = 0;
+        while (j < g_node[n].nlist) {
+            int m = g_list[g_node[n].list + j];
+            j = j + 1;
+            if (g_node[m].kind != D_FUNC || g_node[m].b != 0) { continue; }
+            int ft = func_type_from_node(m, 0);
+            int bad = unknown_name(ft);
+            if (bad != 0) {
+                msg_reset();
+                msg_lit("unknown type '");
+                msg_str(bad);
+                msg_lit("' in the declaration of '");
+                msg_str(g_node[n].sid);
+                msg_lit("::");
+                msg_str(g_node[m].sid);
+                msg_lit("'");
+                error_node(m);
+            }
+        }
+    }
+}
+
 // registers a method (declaration or definition) of struct sd
 int add_method(int sd, int fnode) {
     int name = g_node[fnode].sid;
@@ -907,6 +1121,7 @@ void register_global_name(int sid, int ns, int kind, int idx) {
 }
 
 void collect_function(int n) {
+    g_tyloc = n;
     int name = g_node[n].sid;
     int owner = g_node[n].d;
     if ((g_node[n].flags & NF_METHOD) != 0 && owner != 0) {
@@ -926,6 +1141,7 @@ void collect_function(int n) {
             error_node(n);
             return;
         }
+        if (g_node[n].a != 0) { check_method_def(sd, n); }
         int f = add_method(sd, n);
         finish_method_type(f);
         return;
@@ -996,6 +1212,7 @@ void collect_enum(int n) {
 }
 
 void collect_global(int n) {
+    g_tyloc = n;
     int name = g_node[n].sid;
     int q = name;
     if (g_node[n].op != 0) { q = str_concat3(g_node[n].op, "::", name); }
@@ -1067,6 +1284,7 @@ void sema_collect() {
         }
         i = i + 1;
     }
+    check_body_decl_types();
 }
 
 // ── constant evaluation (integers) ───────────────────────────────────────────
@@ -1088,6 +1306,18 @@ void const_error(int e) {
     msg_reset();
     msg_lit("expression is not a valid compile-time constant expression");
     error_node(e);
+}
+
+// the integer part of the double with bit pattern b (|value| < 2^63)
+long f64_bits_trunc(long b) {
+    long ex = ((b >> 52) & 2047L) - 1023L;
+    if (ex < 0L) { return 0L; }
+    if (ex > 62L) { return 0L; }
+    long m = (b & 4503599627370495L) | 4503599627370496L;
+    long v = 0L;
+    if (ex >= 52L) { v = m << (ex - 52L); } else { v = m >> (52L - ex); }
+    if (b < 0L) { v = 0L - v; }
+    return v;
 }
 
 int sema_const_int(int e) {
@@ -1129,8 +1359,17 @@ int sema_const_int(int e) {
         return 0;
     }
     if (k == E_CAST) {
-        if (sema_const_int(g_node[e].a) == 0) { return 0; }
         int t = resolve_type(g_node[e].c);
+        // a newtype folds like its base type
+        if (g_ty[t].kind == TY_NEWTYPE) { t = g_sdef[g_ty[t].n].base; }
+        int fe = g_node[e].a;
+        int fneg = 0;
+        if (g_node[fe].kind == E_UNARY && g_node[fe].op == T_MINUS && g_node[g_node[fe].a].kind == E_FLOAT) { fneg = 1; fe = g_node[fe].a; }
+        if (g_node[fe].kind == E_FLOAT && ty_is_int(t) == 1) {
+            // (int)2.5: truncate the literal's double toward zero
+            g_cval = f64_bits_trunc(g_node[fe].ival);
+            if (fneg == 1) { g_cval = 0L - g_cval; }
+        } else if (sema_const_int(g_node[e].a) == 0) { return 0; }
         if (ty_is_int(t) == 1) {
             int bits = ty_bits(t);
             if (bits < 64) {
