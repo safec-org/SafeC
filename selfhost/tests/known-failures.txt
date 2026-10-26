@@ -5,6 +5,6 @@
 
 # SIMD vector types are not supported
 ctests/simd/vector_align.sc
-# a safec (C++ compiler) bug, not scc's: '!x' passed to a variadic function
-# is emitted as an unpromoted i1, so printf("%d", !x) prints 254 natively
-examples/stdlib_complete.sc
+# safec's import of the host's C headers through clang (<complex.h> here):
+# scc has no C header import, only the shims in selfhost/include
+ctests/cheaders/complex_float128.sc
