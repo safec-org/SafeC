@@ -106,7 +106,7 @@
 
 namespace std {
 
-extern void* memmove(void* d, const void* s, size_t n);
+extern unsigned char* memmove(unsigned char* d, const unsigned char* s, size_t n);
 
 // SHA-256("HelloRetryRequest"), the ServerHello.random of a HelloRetryRequest.
 static unsigned char t13_hrr_random_[32] = {
@@ -568,7 +568,7 @@ static int t13_next_record_(&TlsStream s, &T13_ t, &unsigned int type, &unsigned
 static void t13_consume_(&T13_ t, unsigned long total) {
     unsafe {
         if (t.rlen > total) {
-            memmove((void*)&t.rbuf[0], (const void*)((unsigned char*)&t.rbuf[0] + total), t.rlen - total);
+            memmove((unsigned char*)&t.rbuf[0], (const unsigned char*)((unsigned char*)&t.rbuf[0] + total), t.rlen - total);
         }
     }
     t.rlen = t.rlen - total;
@@ -629,7 +629,7 @@ int tls_key_from_pem_(&TlsKey_ k, const &char pem, &TlsError e) {
         }
         case null: { }
     }
-    unsafe { if (der.len > 0UL) { mem_zero_secure_raw_((void*)vptr_(&der), der.len); } }
+    unsafe { if (der.len > 0UL) { mem_zero_secure_raw_((unsigned char*)vptr_(&der), der.len); } }
     der.free();
     if (!ok) {
         tls_fail_(e, TLS_ERR_CONFIG, "unsupported private key (RSA 1024-4096 bits, EC P-256 or P-384)");
@@ -1592,8 +1592,8 @@ static int t13_drain_hs_(&TlsStream s, &T13_ t, int post) {
 // ── backend entry points ──────────────────────────────────────────────────────
 
 static int t13_alloc_(&TlsStream s) {
-    void* mem = alloc_zeroed_raw_(sizeof(struct T13_));
-    if (mem == (void*)0) { return tls_fail_(&s.err, TLS_ERR_NO_MEMORY, "out of memory"); }
+    unsigned char* mem = alloc_zeroed_raw_(sizeof(struct T13_));
+    if (mem == (unsigned char*)0) { return tls_fail_(&s.err, TLS_ERR_NO_MEMORY, "out of memory"); }
     unsafe { s.impl_ = (?&heap TlsImpl_)mem; }
     unsafe {
         struct T13_* t = (struct T13_*)mem;
@@ -1665,8 +1665,8 @@ int tls_safec_acceptor_(&TlsAcceptor a, const &TlsServerConfig cfg, &TlsError e)
         tls_fail_(e, TLS_ERR_UNAVAILABLE, "the SafeC TLS backend implements TLS 1.3 only");
         return TLS_ERR_UNAVAILABLE;
     }
-    void* mem = alloc_zeroed_raw_(sizeof(struct T13Acc_));
-    if (mem == (void*)0) { tls_fail_(e, TLS_ERR_NO_MEMORY, "out of memory"); return TLS_ERR_NO_MEMORY; }
+    unsigned char* mem = alloc_zeroed_raw_(sizeof(struct T13Acc_));
+    if (mem == (unsigned char*)0) { tls_fail_(e, TLS_ERR_NO_MEMORY, "out of memory"); return TLS_ERR_NO_MEMORY; }
     unsafe {
         struct T13Acc_* acc = (struct T13Acc_*)mem;
         acc->refs = 1;
@@ -1904,7 +1904,7 @@ void tls_safec_free_(&TlsStream s) {
         tls_der_list_free_(&t.peer_chain);
         t.cr_context.free();
         if (t.acc != (struct T13Acc_*)0) { t13_acc_unref_(t.acc); }
-        mem_zero_secure_raw_((void*)tp, sizeof(struct T13_));
+        mem_zero_secure_raw_((unsigned char*)tp, sizeof(struct T13_));
         dealloc(tp);
     }
     s.impl_ = null;

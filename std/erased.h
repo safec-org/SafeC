@@ -15,8 +15,8 @@
 //
 // Erasing (T -> Erased) is a cast inside 'unsafe' in that constructor;
 // nothing outside it ever turns an Erased back into a T. An Erased is never
-// constructed: it only appears behind a reference. This replaces C's
-// 'void* userdata' everywhere in std.
+// constructed: it only appears behind a reference. This replaces
+// C's untyped userdata pointer everywhere in std.
 
 namespace std {
 

@@ -14,17 +14,17 @@
 
 namespace std {
 
-extern void* memcpy(void* dst, const void* src, size_t n);
+extern unsigned char* memcpy(unsigned char* dst, const unsigned char* src, size_t n);
 
 static unsigned int __f32_bits(float v) {
     unsigned int bits = 0U;
-    unsafe { memcpy((void*)&bits, (const void*)&v, 4UL); }
+    unsafe { memcpy((unsigned char*)&bits, (const unsigned char*)&v, 4UL); }
     return bits;
 }
 
 static float __bits_f32(unsigned int bits) {
     float v = 0.0f;
-    unsafe { memcpy((void*)&v, (const void*)&bits, 4UL); }
+    unsafe { memcpy((unsigned char*)&v, (const unsigned char*)&bits, 4UL); }
     return v;
 }
 
@@ -179,11 +179,11 @@ static int half_detect_() {
     return caps;
 }
 #elif defined(__aarch64__) && defined(__APPLE__) && !defined(__SAFEC_FREESTANDING__)
-extern int sysctlbyname(const char* name, void* oldp, size_t* oldlenp, void* newp, size_t newlen);
+extern int sysctlbyname(const char* name, int* oldp, size_t* oldlenp, int* newp, size_t newlen);   // an int value
 static int half_sysctl_(const char* name) {
     int v = 0;
     size_t len = sizeof(int);
-    unsafe { if (sysctlbyname(name, (void*)&v, &len, (void*)0, 0UL) != 0) return 0; }
+    unsafe { if (sysctlbyname(name, &v, &len, (int*)0, 0UL) != 0) return 0; }
     return v != 0;
 }
 static int half_detect_() {
@@ -252,8 +252,8 @@ const &char half_cpu_features_name() {
 #define HC_GRAIN     65536UL
 
 struct HcJob_ {
-    const void* src;
-    void*       dst;
+    const unsigned char* src;   // the op says the element types
+    unsigned char*       dst;
     int         op;
     int         caps;
 };
@@ -429,7 +429,7 @@ static void hc_range_(&HcJob_ j, unsigned long lo, unsigned long hi) {
     }
 }
 
-static void hc_run_(const void* src, void* dst, unsigned long n, int op) {
+static void hc_run_(const unsigned char* src, unsigned char* dst, unsigned long n, int op) {
     struct HcJob_ j;
     j.src = src;
     j.dst = dst;
@@ -440,7 +440,7 @@ static void hc_run_(const void* src, void* dst, unsigned long n, int op) {
 }
 
 void f32_to_fp16_bulk_n_(const &float src, &unsigned short dst, unsigned long n) {
-    unsafe { hc_run_((const void*)src, (void*)dst, n, HC_F32_FP16); }
+    unsafe { hc_run_((const unsigned char*)src, (unsigned char*)dst, n, HC_F32_FP16); }
 }
 
 void f32_to_fp16_bulk([]const float src_s, []unsigned short dst_s) {
@@ -455,7 +455,7 @@ void f32_to_fp16_bulk([]const float src_s, []unsigned short dst_s) {
 }
 
 void fp16_to_f32_bulk_n_(const &unsigned short src, &float dst, unsigned long n) {
-    unsafe { hc_run_((const void*)src, (void*)dst, n, HC_FP16_F32); }
+    unsafe { hc_run_((const unsigned char*)src, (unsigned char*)dst, n, HC_FP16_F32); }
 }
 
 void fp16_to_f32_bulk([]const unsigned short src_s, []float dst_s) {
@@ -470,7 +470,7 @@ void fp16_to_f32_bulk([]const unsigned short src_s, []float dst_s) {
 }
 
 void f32_to_bf16_bulk_n_(const &float src, &unsigned short dst, unsigned long n) {
-    unsafe { hc_run_((const void*)src, (void*)dst, n, HC_F32_BF16); }
+    unsafe { hc_run_((const unsigned char*)src, (unsigned char*)dst, n, HC_F32_BF16); }
 }
 
 void f32_to_bf16_bulk([]const float src_s, []unsigned short dst_s) {
@@ -485,7 +485,7 @@ void f32_to_bf16_bulk([]const float src_s, []unsigned short dst_s) {
 }
 
 void bf16_to_f32_bulk_n_(const &unsigned short src, &float dst, unsigned long n) {
-    unsafe { hc_run_((const void*)src, (void*)dst, n, HC_BF16_F32); }
+    unsafe { hc_run_((const unsigned char*)src, (unsigned char*)dst, n, HC_BF16_F32); }
 }
 
 void bf16_to_f32_bulk([]const unsigned short src_s, []float dst_s) {
@@ -500,7 +500,7 @@ void bf16_to_f32_bulk([]const unsigned short src_s, []float dst_s) {
 }
 
 void fp16_to_bf16_bulk_n_(const &unsigned short src, &unsigned short dst, unsigned long n) {
-    unsafe { hc_run_((const void*)src, (void*)dst, n, HC_FP16_BF16); }
+    unsafe { hc_run_((const unsigned char*)src, (unsigned char*)dst, n, HC_FP16_BF16); }
 }
 
 void fp16_to_bf16_bulk([]const unsigned short src_s, []unsigned short dst_s) {
@@ -515,7 +515,7 @@ void fp16_to_bf16_bulk([]const unsigned short src_s, []unsigned short dst_s) {
 }
 
 void bf16_to_fp16_bulk_n_(const &unsigned short src, &unsigned short dst, unsigned long n) {
-    unsafe { hc_run_((const void*)src, (void*)dst, n, HC_BF16_FP16); }
+    unsafe { hc_run_((const unsigned char*)src, (unsigned char*)dst, n, HC_BF16_FP16); }
 }
 
 void bf16_to_fp16_bulk([]const unsigned short src_s, []unsigned short dst_s) {

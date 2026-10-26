@@ -15,7 +15,7 @@ static unsigned long g_last_block = 0UL;
 
 // Every block is preceded by an 8-byte header holding its size, so realloc
 // knows how much to copy; blocks are 16-byte aligned.
-?&void malloc(size_t size) {
+?&unsigned char malloc(size_t size) {
     unsigned long start = (g_heap_top + 15UL) & ~15UL;
     unsigned long total = 16UL + (((unsigned long)size + 15UL) & ~15UL);
     if (start + total > (unsigned long)BM_HEAP_SIZE) { return null; }
@@ -24,11 +24,11 @@ static unsigned long g_last_block = 0UL;
         *hdr = size;
         g_last_block = start;
         g_heap_top = start + total;
-        return (?&void)&g_heap[start + 16UL];
+        return (?&unsigned char)&g_heap[start + 16UL];
     }
 }
 
-void free(?&void p) {
+void free(?&unsigned char p) {
     if (p.is_null()) { return; }
     unsafe {
         unsigned long off = (unsigned long)p - (unsigned long)&g_heap[0];
@@ -36,7 +36,7 @@ void free(?&void p) {
     }
 }
 
-&void memcpy(&void dst, const &void src, size_t n) {
+&unsigned char memcpy(&unsigned char dst, const &unsigned char src, size_t n) {
     unsafe {
         &unsigned char d = (&unsigned char)dst;
         const &unsigned char s = (const &unsigned char)src;
@@ -46,7 +46,7 @@ void free(?&void p) {
     return dst;
 }
 
-&void memmove(&void dst, const &void src, size_t n) {
+&unsigned char memmove(&unsigned char dst, const &unsigned char src, size_t n) {
     unsafe {
         &unsigned char d = (&unsigned char)dst;
         const &unsigned char s = (const &unsigned char)src;
@@ -61,7 +61,7 @@ void free(?&void p) {
     return dst;
 }
 
-&void memset(&void p, int v, size_t n) {
+&unsigned char memset(&unsigned char p, int v, size_t n) {
     unsafe {
         &unsigned char d = (&unsigned char)p;
         unsigned long i = 0UL;
@@ -70,7 +70,7 @@ void free(?&void p) {
     return p;
 }
 
-int memcmp(const &void a, const &void b, size_t n) {
+int memcmp(const &unsigned char a, const &unsigned char b, size_t n) {
     unsafe {
         const &unsigned char x = (const &unsigned char)a;
         const &unsigned char y = (const &unsigned char)b;
@@ -83,8 +83,8 @@ int memcmp(const &void a, const &void b, size_t n) {
     return 0;
 }
 
-?&void calloc(size_t count, size_t size) {
-    ?&void p = malloc(count * size);
+?&unsigned char calloc(size_t count, size_t size) {
+    ?&unsigned char p = malloc(count * size);
     match (p) {
         case null: { }
         case some(b): { memset(b, 0, count * size); }
@@ -92,11 +92,11 @@ int memcmp(const &void a, const &void b, size_t n) {
     return p;
 }
 
-?&void realloc(?&void p, size_t size) {
+?&unsigned char realloc(?&unsigned char p, size_t size) {
     match (p) {
         case null: { return malloc(size); }
         case some(src): {
-            ?&void q = malloc(size);
+            ?&unsigned char q = malloc(size);
             match (q) {
                 case null: { return null; }
                 case some(dst): {
@@ -120,10 +120,11 @@ size_t strlen(const &char s) {
 
 // No console: diagnostics are dropped; abort() parks the CPU where the
 // emulator's harness detects it.
-int fprintf(?&void stream, const &char fmt, ...) { return 0; }
+struct BmFile_ { char opaque_; };   // C's FILE: never a real stream here
+int fprintf(?&BmFile_ stream, const &char fmt, ...) { return 0; }
 int printf(const &char fmt, ...) { return 0; }
-?&void stderr = null;
-?&void stdout = null;
+?&BmFile_ stderr = null;
+?&BmFile_ stdout = null;
 
 volatile int g_aborted = 0;
 void abort() {

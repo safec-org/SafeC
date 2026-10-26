@@ -11,7 +11,6 @@
 #include <std/mem.h>
 #include <std/math.h>
 #include <std/collections/vec.h>
-extern void* memset(void* ptr, int val, size_t n);
 
 namespace std {
 
@@ -32,7 +31,7 @@ void __gui_canvas_dash(&Vec<float> pts, &Vec<int> cont, const &float dash, int n
 
 static struct GuiPaint __gui_paint_base(int kind) {
     struct GuiPaint p;
-    unsafe { memset((void*)&p, 0, sizeof(struct GuiPaint)); }
+    safe_memset_obj(&p, 0);
     p.kind = kind;
     p.color = GuiColor::rgba((unsigned char)0, (unsigned char)0, (unsigned char)0, (unsigned char)255);
     p.nstops = 0;

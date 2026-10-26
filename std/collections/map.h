@@ -297,7 +297,7 @@ generic<K, V>
 generic<K, V>
 void HashMap::clear() {
     if (self.cap != 0UL) {
-        unsafe { safe_memset_raw_((void*)self.states, 0, self.cap); }
+        unsafe { safe_memset_raw_((unsigned char*)self.states, 0, self.cap); }
     }
     self.len = 0UL;
     self.tombstones = 0UL;

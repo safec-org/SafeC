@@ -23,16 +23,20 @@
 
 namespace std {
 
-extern void* FindFirstFileA(const char* pattern, void* find_data);
-extern int   FindNextFileA(void* handle, void* find_data);
-extern int   FindClose(void* handle);
-extern int   GetFileAttributesExA(const char* path, int info_level, void* info);
-extern int   CreateDirectoryA(const char* path, void* security);
+// A find HANDLE and the (never passed) SECURITY_ATTRIBUTES are opaque;
+// WIN32_FIND_DATAA / WIN32_FILE_ATTRIBUTE_DATA are read as bytes.
+struct Win32Find_ { char opaque_; };
+struct Win32SecAttrs_ { char opaque_; };
+extern Win32Find_* FindFirstFileA(const char* pattern, unsigned char* find_data);
+extern int   FindNextFileA(Win32Find_* handle, unsigned char* find_data);
+extern int   FindClose(Win32Find_* handle);
+extern int   GetFileAttributesExA(const char* path, int info_level, unsigned char* info);
+extern int   CreateDirectoryA(const char* path, Win32SecAttrs_* security);
 extern int   RemoveDirectoryA(const char* path);
 extern int   DeleteFileA(const char* path);
 
 struct DirWin32_ {
-    void* handle;
+    Win32Find_* handle;
     int   pending;   // find_data already holds an unread entry (from FindFirstFileA)
     unsigned char find_data[320];
 };
@@ -67,25 +71,25 @@ static long long dir_filetime_ns_(const &unsigned char b, unsigned long off) {
     struct DirWin32_* h;
     unsafe {
         h = (struct DirWin32_*)alloc_raw_((unsigned long)sizeof(struct DirWin32_));
-        h->handle = FindFirstFileA(pattern.as_ptr(), (void*)&h->find_data[0]);
+        h->handle = FindFirstFileA(pattern.as_ptr(), &h->find_data[0]);
     }
     pattern.free();
     unsafe {
-        if (h->handle == (void*)(long long)-1) {
+        if (h->handle == (Win32Find_*)(long long)-1) {   // INVALID_HANDLE_VALUE
             dealloc(h);
             return (?&Dir)null;
         }
         h->pending = 1;
-        return (?&Dir)(void*)h;
+        return (?&Dir)h;
     }
 }
 
 int Dir::next(&DirEntry out) {
     unsafe {
-        struct DirWin32_* h = (struct DirWin32_*)(void*)self;
+        struct DirWin32_* h = (struct DirWin32_*)self;
         for (;;) {
             if (!h->pending) {
-                if (FindNextFileA(h->handle, (void*)&h->find_data[0]) == 0) { return 0; }
+                if (FindNextFileA(h->handle, &h->find_data[0]) == 0) { return 0; }
             }
             h->pending = 0;
             const char* name = (const char*)&h->find_data[SAFEC_FIND_NAME_OFF];
@@ -103,7 +107,7 @@ void Dir::close() { self.drop(); }
 
 void Dir::drop() {
     unsafe {
-        struct DirWin32_* h = (struct DirWin32_*)(void*)self;
+        struct DirWin32_* h = (struct DirWin32_*)self;
         FindClose(h->handle);
         dealloc(h);
     }
@@ -115,7 +119,7 @@ int file_stat(const &char path, &FileStat out) {
     out.mtime_ns = 0LL;
     unsigned char buf[36];
     int ok;
-    unsafe { ok = GetFileAttributesExA(path, 0, (void*)&buf[0]); }   // GetFileExInfoStandard
+    unsafe { ok = GetFileAttributesExA(path, 0, &buf[0]); }   // GetFileExInfoStandard
     if (ok == 0) { return 0; }
     out.kind = dir_kind_from_attrs_((unsigned int)dir_le_(&buf[0], 0UL, 4UL));
     out.size = (long long)((dir_le_(&buf[0], 28UL, 4UL) << 32UL) | dir_le_(&buf[0], 32UL, 4UL));
@@ -125,7 +129,7 @@ int file_stat(const &char path, &FileStat out) {
 
 int dir_create(const &char path) {
     int ok;
-    unsafe { ok = CreateDirectoryA(path, (void*)0); }
+    unsafe { ok = CreateDirectoryA(path, (Win32SecAttrs_*)0); }
     if (ok != 0) { return 1; }
     return path_kind(path) == DIR_DIR ? 1 : 0;
 }

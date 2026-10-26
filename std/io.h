@@ -19,10 +19,10 @@ void print_uint(unsigned long long v);
 void print_float(double v);
 void print_hex(unsigned long long v);
 void print_oct(unsigned long long v);
-void print_ptr_raw_(const void* p);
+void print_ptr_raw_(const unsigned char* p);
 // Print the address a reference points at ("(nil)" for null).
 generic<T>
-void print_ptr(const ?&T p) { unsafe { print_ptr_raw_((const void*)p); } }
+void print_ptr(const ?&T p) { unsafe { print_ptr_raw_((const unsigned char*)p); } }
 void println_int(long long v);
 void println_uint(unsigned long long v);
 void println_float(double v);

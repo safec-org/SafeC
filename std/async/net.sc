@@ -14,86 +14,86 @@ namespace std {
 // (BSD/macOS sockets from io_nb.h already have SO_NOSIGPIPE).
 
 #ifdef _WIN32
-extern int recv(unsigned long long fd, void* buf, int count, int flags);
-extern int send(unsigned long long fd, const void* buf, int count, int flags);
+extern int recv(unsigned long long fd, unsigned char* buf, int count, int flags);
+extern int send(unsigned long long fd, const unsigned char* buf, int count, int flags);
 extern int closesocket(unsigned long long fd);
-extern int getsockname(unsigned long long fd, void* addr, int* len);
-extern int getpeername(unsigned long long fd, void* addr, int* len);
-extern int getsockopt(unsigned long long fd, int level, int name, void* val, int* len);
+extern int getsockname(unsigned long long fd, unsigned char* addr, int* len);
+extern int getpeername(unsigned long long fd, unsigned char* addr, int* len);
+extern int getsockopt(unsigned long long fd, int level, int name, unsigned char* val, int* len);
 #define ASYNC_SOL_SOCKET_ 0xffff
 #define ASYNC_SO_ERROR_   0x1007
 
-static long long async_raw_read_(int fd, void* buf, unsigned long n) {
+static long long async_raw_read_(int fd, unsigned char* buf, unsigned long n) {
     unsafe { return (long long)recv((unsigned long long)fd, buf, (int)n, 0); }
 }
-static long long async_raw_write_(int fd, const void* buf, unsigned long n) {
+static long long async_raw_write_(int fd, const unsigned char* buf, unsigned long n) {
     unsafe { return (long long)send((unsigned long long)fd, buf, (int)n, 0); }
 }
 int async_sock_close(int fd) {
     unsafe { return closesocket((unsigned long long)fd); }
 }
-static int async_getsockname_(int fd, void* addr, &int len) {
+static int async_getsockname_(int fd, unsigned char* addr, &int len) {
     unsafe { return getsockname((unsigned long long)fd, addr, (int*)len); }
 }
-static int async_getpeername_(int fd, void* addr, &int len) {
+static int async_getpeername_(int fd, unsigned char* addr, &int len) {
     unsafe { return getpeername((unsigned long long)fd, addr, (int*)len); }
 }
 static int async_so_error_(int fd) {
     int err = 0;
     int len = 4;
-    unsafe { getsockopt((unsigned long long)fd, ASYNC_SOL_SOCKET_, ASYNC_SO_ERROR_, (void*)&err, &len); }
+    unsafe { getsockopt((unsigned long long)fd, ASYNC_SOL_SOCKET_, ASYNC_SO_ERROR_, (unsigned char*)&err, &len); }
     return err;
 }
 #else
-extern ssize_t read(int fd, void* buf, size_t count);
-extern ssize_t write(int fd, const void* buf, size_t count);
+extern ssize_t read(int fd, unsigned char* buf, size_t count);
+extern ssize_t write(int fd, const unsigned char* buf, size_t count);
 extern int close(int fd);
 extern int pipe(int* fds);
-extern int getsockname(int fd, void* addr, unsigned int* len);
-extern int getpeername(int fd, void* addr, unsigned int* len);
-extern int getsockopt(int fd, int level, int name, void* val, unsigned int* len);
+extern int getsockname(int fd, unsigned char* addr, unsigned int* len);
+extern int getpeername(int fd, unsigned char* addr, unsigned int* len);
+extern int getsockopt(int fd, int level, int name, unsigned char* val, unsigned int* len);
 #ifdef __linux__
 #define ASYNC_SOL_SOCKET_ 1
 #define ASYNC_SO_ERROR_   4
-extern ssize_t send(int fd, const void* buf, size_t count, int flags);
-static long long async_raw_write_(int fd, const void* buf, unsigned long n) {
+extern ssize_t send(int fd, const unsigned char* buf, size_t count, int flags);
+static long long async_raw_write_(int fd, const unsigned char* buf, unsigned long n) {
     unsafe { return (long long)send(fd, buf, (size_t)n, 0x4000); }   // MSG_NOSIGNAL
 }
 #else
 #define ASYNC_SOL_SOCKET_ 0xffff
 #define ASYNC_SO_ERROR_   0x1007
-static long long async_raw_write_(int fd, const void* buf, unsigned long n) {
+static long long async_raw_write_(int fd, const unsigned char* buf, unsigned long n) {
     unsafe { return (long long)write(fd, buf, (size_t)n); }
 }
 #endif
-static long long async_raw_read_(int fd, void* buf, unsigned long n) {
+static long long async_raw_read_(int fd, unsigned char* buf, unsigned long n) {
     unsafe { return (long long)read(fd, buf, (size_t)n); }
 }
 int async_sock_close(int fd) {
     unsafe { return close(fd); }
 }
-static int async_getsockname_(int fd, void* addr, &int len) {
+static int async_getsockname_(int fd, unsigned char* addr, &int len) {
     unsafe { return getsockname(fd, addr, (unsigned int*)len); }
 }
-static int async_getpeername_(int fd, void* addr, &int len) {
+static int async_getpeername_(int fd, unsigned char* addr, &int len) {
     unsafe { return getpeername(fd, addr, (unsigned int*)len); }
 }
 static int async_so_error_(int fd) {
     int err = 0;
     unsigned int len = 4U;
-    unsafe { getsockopt(fd, ASYNC_SOL_SOCKET_, ASYNC_SO_ERROR_, (void*)&err, &len); }
+    unsafe { getsockopt(fd, ASYNC_SOL_SOCKET_, ASYNC_SO_ERROR_, (unsigned char*)&err, &len); }
     return err;
 }
 #endif
 
 long long async_sock_read(int fd, []unsigned char buf) {
     if (buf.len == 0UL) return 0LL;
-    unsafe { return async_raw_read_(fd, (void*)&buf[0], buf.len); }
+    unsafe { return async_raw_read_(fd, (unsigned char*)&buf[0], buf.len); }
 }
 
 long long async_sock_write(int fd, []const unsigned char buf) {
     if (buf.len == 0UL) return 0LL;
-    unsafe { return async_raw_write_(fd, (const void*)&buf[0], buf.len); }
+    unsafe { return async_raw_write_(fd, (const unsigned char*)&buf[0], buf.len); }
 }
 
 unsigned short async_sock_local_port(int fd) {
@@ -103,7 +103,7 @@ unsigned short async_sock_local_port(int fd) {
     int i = 0;
     while (i < 16) { sa[i] = (unsigned char)0; i = i + 1; }
     int len = 16;
-    unsafe { if (async_getsockname_(fd, (void*)&sa[0], &len) != 0) return (unsigned short)0; }
+    unsafe { if (async_getsockname_(fd, (unsigned char*)&sa[0], &len) != 0) return (unsigned short)0; }
     return (unsigned short)(((unsigned int)sa[2] << 8) | (unsigned int)sa[3]);
 }
 
@@ -112,7 +112,7 @@ static int async_sock_connected_(int fd) {
     unsigned char sa[16];
     int len = 16;
     int rc;
-    unsafe { rc = async_getpeername_(fd, (void*)&sa[0], &len); }
+    unsafe { rc = async_getpeername_(fd, (unsigned char*)&sa[0], &len); }
     if (rc == 0) return 1;
     if (async_so_error_(fd) != 0) return -1;
     return 0;
@@ -281,7 +281,7 @@ void IoDriver::on_ready_(int fd, int filter) {
         unsigned char junk[64];
         long long n = 1LL;
         while (n > 0LL) {
-            unsafe { n = async_raw_read_(fd, (void*)&junk[0], 64UL); }
+            unsafe { n = async_raw_read_(fd, (unsigned char*)&junk[0], 64UL); }
         }
         async_store_(&self.wake_pending, 0);
         return;
@@ -334,7 +334,7 @@ void IoDriver::unpark() {
     if (self.wake_wr < 0) return;
     if (async_xchg_(&self.wake_pending, 1) != 0) return;
     unsigned char one = (unsigned char)1;
-    unsafe { write(self.wake_wr, (const void*)&one, (size_t)1); }   // a pipe: not send()
+    unsafe { write(self.wake_wr, (const unsigned char*)&one, (size_t)1); }   // a pipe: not send()
 #endif
 }
 

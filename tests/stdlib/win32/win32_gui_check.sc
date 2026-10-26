@@ -11,26 +11,30 @@
 #include <std/gui/gui_gpu.h>
 #include <std/collections/string.h>
 
-extern int PostMessageA(void* hwnd, unsigned int msg, unsigned long long wparam, long long lparam);
-extern void* GetDC(void* hwnd);
-extern int ReleaseDC(void* hwnd, void* dc);
-extern unsigned int GetPixel(void* dc, int x, int y);
-extern int GetClientRect(void* hwnd, &int rect);
-extern int SetWindowPos(void* hwnd, void* after, int x, int y, int cx, int cy, unsigned int flags);
+struct Hwnd_ { char opaque_; };     // HWND
+struct Hdc_ { char opaque_; };      // HDC
+struct Hmodule_ { char opaque_; };  // HMODULE
+struct ProcT_ { char opaque_; };    // a FARPROC, only compared with null
+extern int PostMessageA(Hwnd_* hwnd, unsigned int msg, unsigned long long wparam, long long lparam);
+extern Hdc_* GetDC(Hwnd_* hwnd);
+extern int ReleaseDC(Hwnd_* hwnd, Hdc_* dc);
+extern unsigned int GetPixel(Hdc_* dc, int x, int y);
+extern int GetClientRect(Hwnd_* hwnd, &int rect);
+extern int SetWindowPos(Hwnd_* hwnd, Hwnd_* after, int x, int y, int cx, int cy, unsigned int flags);
 extern int GdiFlush();
-extern int GetWindowTextA(void* hwnd, char* buf, int n);
+extern int GetWindowTextA(Hwnd_* hwnd, char* buf, int n);
 extern int strcmp(const char* a, const char* b);
 extern int printf(const char* fmt, ...);
-extern void* GetModuleHandleA(const char* name);
-extern void* GetProcAddress(void* module, const char* name);
+extern Hmodule_* GetModuleHandleA(const char* name);
+extern ProcT_* GetProcAddress(Hmodule_* module, const char* name);
 
-static void* g_hwnd = (void*)0;
+static Hwnd_* g_hwnd = (Hwnd_*)0;
 
 // 0x00RRGGBB at client (x, y).
 static unsigned int pixel_at(int x, int y) {
     unsafe {
         GdiFlush();
-        void* dc = GetDC(g_hwnd);
+        Hdc_* dc = GetDC(g_hwnd);
         unsigned int c = GetPixel(dc, x, y);      // COLORREF 0x00BBGGRR
         ReleaseDC(g_hwnd, dc);
         return ((c & 0xFFu) << 16) | (c & 0xFF00u) | ((c >> 16) & 0xFFu);
@@ -53,7 +57,7 @@ void t_win32_gui() {
         struct GuiWindow win = GuiWindow::create("win32 check", 160, 100);
         ASSERT_FALSE(win.platform.is_null());
         if (win.platform.is_null()) return;
-        g_hwnd = (void*)win.native_handle();
+        g_hwnd = (Hwnd_*)win.native_handle();
         int rc[4];
         GetClientRect(g_hwnd, &rc[0]);
         ASSERT_EQ(rc[2] - rc[0], 160);                 // the client area is the requested size
@@ -113,10 +117,10 @@ void t_win32_gui() {
 
 static int g_c1 = 0;
 static int g_c2 = 0;
-static void click1(&Widget w, ?&void d) { g_c1 = g_c1 + 1; }
-static void click2(&Widget w, ?&void d) { g_c2 = g_c2 + 1; }
+static void click1(&Widget w, ?&Erased d) { g_c1 = g_c1 + 1; }
+static void click2(&Widget w, ?&Erased d) { g_c2 = g_c2 + 1; }
 
-static void click_at(&GuiApp app, void* hwnd, int x, int y, &int counter, int want) {
+static void click_at(&GuiApp app, Hwnd_* hwnd, int x, int y, &int counter, int want) {
     unsafe {
         PostMessageA(hwnd, 0x0201u, 1ULL, lp(x, y));                   // WM_LBUTTONDOWN
         PostMessageA(hwnd, 0x0202u, 0ULL, lp(x, y));                   // WM_LBUTTONUP
@@ -134,14 +138,14 @@ void t_win32_multi() {
         if (ow1.is_null() || ow2.is_null()) return;
         &GuiWindow w1 = (struct GuiWindow*)ow1;
         &GuiWindow w2 = (struct GuiWindow*)ow2;
-        void* h1 = (void*)w1.native_handle();
-        void* h2 = (void*)w2.native_handle();
+        Hwnd_* h1 = (Hwnd_*)w1.native_handle();
+        Hwnd_* h2 = (Hwnd_*)w2.native_handle();
         ASSERT_TRUE(h1 != h2);
         &Widget r1 = Widget::vstack().set_padding(10);
-        &Widget b1 = Widget::button("One").on_click(click1, (?&void)null);
+        &Widget b1 = Widget::button("One").on_click(click1, (?&Erased)null);
         r1.add_child(b1);
         &Widget r2 = Widget::vstack().set_padding(10);
-        &Widget b2 = Widget::button("Two").on_click(click2, (?&void)null);
+        &Widget b2 = Widget::button("Two").on_click(click2, (?&Erased)null);
         r2.add_child(b2);
         app.set_root(w1, r1);
         app.set_root(w2, r2);
@@ -181,7 +185,7 @@ void t_win32_gpu() {
         struct GuiWindow win = GuiWindow::create_with(&o);
         ASSERT_FALSE(win.platform.is_null());
         if (win.platform.is_null()) return;
-        g_hwnd = (void*)win.native_handle();
+        g_hwnd = (Hwnd_*)win.native_handle();
         struct GuiEvent ev;
         while (win.poll_event(&ev)) { }
         if (!gui_window_uses_gpu(&win)) {
@@ -201,7 +205,7 @@ void t_win32_gpu() {
         unsigned int blue = pixel_at(105, 65);
         // Wine composites the swap chain into the window GDI reads from;
         // Windows' DWM keeps flip-model frames out of GetPixel's reach.
-        int wine = GetProcAddress(GetModuleHandleA("ntdll.dll"), "wine_get_version") != (void*)0 ? 1 : 0;
+        int wine = GetProcAddress(GetModuleHandleA("ntdll.dll"), "wine_get_version") != (ProcT_*)0 ? 1 : 0;
         if (wine) {
             ASSERT_EQ(red, 0xFF0000U);
             ASSERT_EQ(blue, 0x0080FFU);
@@ -214,7 +218,7 @@ void t_win32_gpu() {
             ASSERT_EQ(pixel_at(53, 43), 0x00FF00U);   // the partial update
             ASSERT_EQ(pixel_at(20, 20), 0xFF0000U);   // and the rest of the frame
         }
-        SetWindowPos(g_hwnd, (void*)0, 0, 0, 260, 180, 0x0002U | 0x0004U);   // NOMOVE | NOZORDER
+        SetWindowPos(g_hwnd, (Hwnd_*)0, 0, 0, 260, 180, 0x0002U | 0x0004U);   // NOMOVE | NOZORDER
         ASSERT_TRUE(wait_event(&win, GUI_EVENT_RESIZE, &ev));
         win.fill_rect(0, 0, win.width, win.height, GuiColor::rgb((unsigned char)0, (unsigned char)0, (unsigned char)255));
         win.present();

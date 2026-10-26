@@ -27,7 +27,6 @@
 #include <std/gui/gui_backend.h>
 #include <std/gui/gui_fb.h>
 #include <std/mem.h>
-extern void* memset(void* ptr, int val, size_t n);
 
 namespace std {
 
@@ -84,7 +83,7 @@ static int __gui_fb_create(&GuiWindowState st, const &GuiWindowOptions opts) {
     unsafe {
         struct GuiFbPlatform* p = (struct GuiFbPlatform*)alloc_zeroed_raw_(sizeof(struct GuiFbPlatform));
         if (p == (struct GuiFbPlatform*)0) { return 0; }
-        st.native = (void*)p;
+        st.native = (?&Erased)p;
         st.key = (unsigned long long)(unsigned long)p;
     }
     st.scale = 1.0;

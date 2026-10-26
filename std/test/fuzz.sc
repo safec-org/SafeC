@@ -5,9 +5,9 @@
 
 namespace std {
 
-extern void* malloc(size_t size);
-extern void  free(void* ptr);
-extern void* memcpy(void* d, const void* s, size_t n);
+extern unsigned char* malloc(size_t size);
+extern void  free(unsigned char* ptr);
+extern unsigned char* memcpy(unsigned char* d, const unsigned char* s, size_t n);
 
 // ── XorShift64 PRNG ───────────────────────────────────────────────────────────
 static unsigned long fuzz_rng_(unsigned long* state) {
@@ -41,7 +41,7 @@ void FuzzTarget::run([]const unsigned char corpus_s) {
     unsafe {
         unsigned char* buf = (unsigned char*)malloc(corpus_size);
         if (buf == (unsigned char*)0) { return; }
-        memcpy((void*)buf, (const void*)corpus, corpus_size);
+        memcpy((unsigned char*)buf, (const unsigned char*)corpus, corpus_size);
 
         // Call target on the original corpus first.
         fn void([]const unsigned char) fuzz_fn = self.func;
@@ -63,7 +63,7 @@ void FuzzTarget::run([]const unsigned char corpus_s) {
                 buf[pos] = (unsigned char)(fuzz_rng_((unsigned long*)&state) & (unsigned long)0xFF);
             } else if (mut == (unsigned long)2) {
                 // Restore to original corpus.
-                memcpy((void*)buf, (const void*)corpus, corpus_size);
+                memcpy((unsigned char*)buf, (const unsigned char*)corpus, corpus_size);
             } else {
                 // Overwrite two adjacent bytes.
                 buf[pos] = (unsigned char)(fuzz_rng_((unsigned long*)&state) & (unsigned long)0xFF);
@@ -81,7 +81,7 @@ void FuzzTarget::run([]const unsigned char corpus_s) {
             i = i + (unsigned long)1;
         }
 
-        free((void*)buf);
+        free((unsigned char*)buf);
     }
 }
 

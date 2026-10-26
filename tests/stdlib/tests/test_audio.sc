@@ -17,10 +17,11 @@
 extern int printf(const char* fmt, ...);
 extern int system(const char* cmd);
 extern int setenv(const char* name, const char* value, int overwrite);
-extern void* fopen(const char* path, const char* mode);
-extern unsigned long fread(void* buf, unsigned long size, unsigned long n, void* f);
-extern unsigned long fwrite(const void* buf, unsigned long size, unsigned long n, void* f);
-extern int fclose(void* f);
+struct TestFile_ { char opaque_; };   // C's FILE, opaque
+extern TestFile_* fopen(const char* path, const char* mode);
+extern unsigned long fread(unsigned char* buf, unsigned long size, unsigned long n, TestFile_* f);
+extern unsigned long fwrite(const unsigned char* buf, unsigned long size, unsigned long n, TestFile_* f);
+extern int fclose(TestFile_* f);
 extern int access(const char* path, int mode);
 
 static float absf_(float v) { return v < (float)0.0 ? -v : v; }
@@ -264,7 +265,7 @@ struct Rec {
 
 static struct Rec rec_new_() {
     struct Rec r;
-    unsafe { safe_memset_raw_((void*)&r, 0, sizeof(struct Rec)); }
+    unsafe { safe_memset_raw_((unsigned char*)&r, 0, sizeof(struct Rec)); }
     return r;
 }
 
@@ -555,19 +556,19 @@ static void alsa_test_config_() {
     int ok = 0;
     unsafe { ok = access("/usr/share/alsa/alsa.conf", 4) == 0; }
     if (!ok) return;
-    void* f = (void*)0;
+    TestFile_* f = (TestFile_*)0;
     unsafe { f = fopen("/tmp/safec_audio_test_in.raw", "wb"); }
-    if (f == (void*)0) return;
+    if (f == (TestFile_*)0) return;
     short ramp[4096];
     for (int i = 0; i < 4096; i = i + 1) ramp[i] = (short)i;
-    unsafe { fwrite((const void*)&ramp[0], 2UL, 4096UL, f); fclose(f); }
+    unsafe { fwrite((const unsigned char*)&ramp[0], 2UL, 4096UL, f); fclose(f); }
     unsafe { f = fopen("/tmp/safec_audio_test.conf", "wb"); }
-    if (f == (void*)0) return;
+    if (f == (TestFile_*)0) return;
     const char* conf = "</usr/share/alsa/alsa.conf>\n"
                        "pcm.safec_capture_test {\n type file\n slave.pcm null\n file \"/dev/null\"\n"
                        " infile \"/tmp/safec_audio_test_in.raw\"\n format raw\n}\n";
     unsafe {
-        fwrite((const void*)conf, 1UL, audio_strlen_(conf), f);
+        fwrite((const unsigned char*)conf, 1UL, audio_strlen_(conf), f);
         fclose(f);
         setenv("ALSA_CONFIG_PATH", "/tmp/safec_audio_test.conf", 1);
     }
@@ -587,14 +588,14 @@ static int alsa_present_() {
 }
 
 static long file_size_(const &char path) {
-    void* f = (void*)0;
+    TestFile_* f = (TestFile_*)0;
     unsafe { f = fopen(path, "rb"); }
-    if (f == (void*)0) return -1L;
+    if (f == (TestFile_*)0) return -1L;
     unsigned char buf[4096];
     long total = 0L;
     while (1) {
         unsigned long n = 0UL;
-        unsafe { n = fread((void*)&buf[0], 1UL, 4096UL, f); }
+        unsafe { n = fread((unsigned char*)&buf[0], 1UL, 4096UL, f); }
         if (n == 0UL) break;
         total = total + (long)n;
     }

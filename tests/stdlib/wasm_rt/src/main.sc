@@ -12,41 +12,41 @@ static int cmp_int(const &int a, const &int b) { return *a - *b; }
 
 static int check_heap() {
     // Reuse: a freed block of a class comes back for the next allocation.
-    void* a = malloc(100U);
-    void* b = malloc(100U);
-    if (a == (void*)0 || b == (void*)0 || a == b) { return 1; }
+    unsigned char* a = malloc(100U);
+    unsigned char* b = malloc(100U);
+    if (a == (unsigned char*)0 || b == (unsigned char*)0 || a == b) { return 1; }
     free(a);
-    void* c = malloc(90U);
+    unsigned char* c = malloc(90U);
     if (c != a) { return 2; }
     if (malloc_usable_size(c) < 90U) { return 3; }
     free(b); free(c);
     free(c);                       // double free is ignored
-    void* d = malloc(100U);
-    void* e = malloc(100U);
+    unsigned char* d = malloc(100U);
+    unsigned char* e = malloc(100U);
     if (d == e) { return 4; }
     free(d); free(e);
     // Growth: far more than the initial memory, in a loop that frees, so
     // reuse keeps it bounded.
     for (int round = 0; round < 64; round = round + 1) {
-        void* big = malloc(1048576U);   // 1 MiB
-        if (big == (void*)0) { return 5; }
+        unsigned char* big = malloc(1048576U);   // 1 MiB
+        if (big == (unsigned char*)0) { return 5; }
         unsafe { ((unsigned char*)big)[1048575] = (unsigned char)round; }
         free(big);
     }
-    void* huge = malloc(20U * 1048576U);    // grows memory past 20 MiB
-    if (huge == (void*)0) { return 6; }
+    unsigned char* huge = malloc(20U * 1048576U);    // grows memory past 20 MiB
+    if (huge == (unsigned char*)0) { return 6; }
     unsafe { ((unsigned char*)huge)[20U * 1048576U - 1U] = (unsigned char)1; }
     free(huge);
     // realloc keeps contents.
     unsafe {
         char* s = (char*)malloc(8U);
-        memcpy((void*)s, (const void*)"abcdefg", 8U);
-        s = (char*)realloc((void*)s, 5000U);
+        memcpy((unsigned char*)s, (const unsigned char*)"abcdefg", 8U);
+        s = (char*)realloc((unsigned char*)s, 5000U);
         if (strcmp(s, "abcdefg") != 0) { return 7; }
-        free((void*)s);
+        free((unsigned char*)s);
         int* z = (int*)calloc(16U, 4U);
         for (int i = 0; i < 16; i = i + 1) { if (z[i] != 0) { return 8; } }
-        free((void*)z);
+        free((unsigned char*)z);
     }
     return 0;
 }
@@ -60,7 +60,7 @@ static int check_strings() {
         if (strchr(s, '/') != s + 4 || strrchr(s, '/') != s + 7 || strchr(s, 'z') != (char*)0) { return 23; }
         if (strstr(s, "file") != s + 8 || strstr(s, "nope") != (char*)0) { return 24; }
         if (strspn("aaab", "a") != 3U || strcspn("abc,d", ",") != 3U) { return 25; }
-        if (memchr((const void*)s, (int)'.', 15U) != (void*)(s + 12)) { return 26; }
+        if (memchr((const unsigned char*)s, (int)'.', 15U) != (unsigned char*)(s + 12)) { return 26; }
         if (strtoll("-42x", (char**)0, 10) != -42LL || strtoull("0x1F", (char**)0, 0) != 31ULL) { return 27; }
         if (atoi("  17") != 17) { return 28; }
         double d = strtod("-1.25e2", (char**)0);
@@ -68,34 +68,38 @@ static int check_strings() {
     }
     // std on top of them.
     struct String t = String::from("Hello, wasm");
+    defer t.drop();
     if (!t.contains("wasm") || t.index_of(",") != 5LL) { return 30; }
     struct String u = t.to_upper();
+    defer u.drop();
     if (!u.eq_cstr("HELLO, WASM")) { return 31; }
-    long long n = String::from("12345").parse_int((?&int)null);
+    struct String num = String::from("12345");
+    long long n = num.parse_int((?&int)null);
+    num.drop();
     if (n != 12345LL) { return 32; }
-    t.free(); u.free();
     return 0;
 }
 
 static int check_sort_map_json() {
     struct Vec<int> v = Vec::new();
+    defer v.drop();
     int vals[7] = { 5, 3, 9, 1, 7, 2, 8 };
     for (int i = 0; i < 7; i = i + 1) { v.push(vals[i]); }
     v.sort(cmp_int);
     for (unsigned long i = 1UL; i < v.len; i = i + 1UL) { if (*v.at(i - 1UL) > *v.at(i)) { return 40; } }
-    v.free();
     // HashMap growth goes through checked size arithmetic (__multi3).
     struct HashMap<int, long long> m = HashMap::new();
+    defer m.drop();
     for (int i = 0; i < 500; i = i + 1) { m.insert(i, (long long)i * 3LL); }
     ?&long long got = m.get(321);
     match (got) { case some(x): { if (*x != 963LL) { return 41; } } case null: { return 42; } }
-    m.free();
     int ok = 0;
     struct Value doc = json_parse("[{\"u\":\"/a.html#x\",\"t\":\"Title\"},{\"u\":\"/b\",\"n\":2}]", &ok);
+    defer doc.drop();
     if (!ok || doc.array_len() != 2UL) { return 43; }
     struct String back = value_to_json(&doc);
+    defer back.drop();
     if (!back.contains("\"t\":\"Title\"")) { return 44; }
-    doc.free(); back.free();
     // __multi3 directly: (2^40 + 3) * (2^30 + 5).
     unsigned long long r[2];
     __multi3(&r[0], 1099511627779ULL, 0ULL, 1073741829ULL, 0ULL);

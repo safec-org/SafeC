@@ -2057,31 +2057,35 @@ StmtPtr Parser::parseStaticAssertStmt() {
     return std::make_unique<StaticAssertStmt>(std::move(cond), std::move(msg), loc);
 }
 
-// 'T x = malloc_defer(n);' desugars to two statements: 'T x = alloc_raw_(n);'
-// followed by 'defer { dealloc_raw_(x); }' (the type-erased forms behind
-// the generic std::alloc/std::dealloc) — malloc_defer isn't a real callable
-// (no FunctionDecl backs it anywhere), it's pure parser sugar recognized
-// only in this one position (a var-decl initializer), so that a heap
-// allocation and its guaranteed cleanup are written as a single visible
-// statement instead of two easily-desynced ones. Declares the variable's
-// type as whatever alloc_raw_() returns (void*) — so callers write 'auto p = malloc_defer(n);' (auto
-// infers void* automatically), 'void* p = malloc_defer(n);', or a nullable
-// reference ('?&heap T p = malloc_defer(n);', the usual raw-to-'?&T'
-// conversion); no special-casing is needed here for any of them.
+// 'T x = malloc_defer(n);' desugars to two statements: 'T x = std::alloc(n);'
+// followed by 'defer { std::dealloc(x); }' (std/mem.h's generic allocator,
+// which takes T from the declared type) — malloc_defer isn't a real
+// callable (no FunctionDecl backs it anywhere), it's pure parser sugar
+// recognized only in this one position (a var-decl initializer), so that a
+// heap allocation and its guaranteed cleanup are written as a single
+// visible statement instead of two easily-desynced ones. 'auto x =
+// malloc_defer(n);' (no type to take T from) and 'void* x = ...' use the
+// type-erased forms behind them, alloc_raw_/dealloc_raw_, instead: auto
+// then infers alloc_raw_'s byte pointer (unsigned char*).
 static void desugarMallocDefer(ExprPtr &initExpr, const std::string &varName,
-                                SourceLocation loc, StmtPtr &pendingExtraStmt) {
+                                SourceLocation loc, StmtPtr &pendingExtraStmt,
+                                const TypePtr &declType = nullptr) {
     if (!initExpr || initExpr->kind != ExprKind::Call) return;
     auto &call = static_cast<CallExpr &>(*initExpr);
     if (!call.callee || call.callee->kind != ExprKind::Ident) return;
     auto &calleeIdent = static_cast<IdentExpr &>(*call.callee);
     if (calleeIdent.name != "malloc_defer" || call.args.size() != 1) return;
 
-    auto allocCallee = std::make_unique<IdentExpr>("alloc_raw_", loc);
+    bool voidPtr = declType && declType->isPointer() &&
+                   static_cast<const PointerType &>(*declType).base &&
+                   static_cast<const PointerType &>(*declType).base->isVoid();
+    bool typed = declType && !voidPtr;
+    auto allocCallee = std::make_unique<IdentExpr>(typed ? "std::alloc" : "alloc_raw_", loc);
     std::vector<ExprPtr> allocArgs;
     allocArgs.push_back(std::move(call.args[0]));
     initExpr = std::make_unique<CallExpr>(std::move(allocCallee), std::move(allocArgs), loc);
 
-    auto deallocCallee = std::make_unique<IdentExpr>("dealloc_raw_", loc);
+    auto deallocCallee = std::make_unique<IdentExpr>(typed ? "std::dealloc" : "dealloc_raw_", loc);
     std::vector<ExprPtr> deallocArgs;
     deallocArgs.push_back(std::make_unique<IdentExpr>(varName, loc));
     auto deallocCall = std::make_unique<CallExpr>(std::move(deallocCallee),
@@ -2140,7 +2144,7 @@ StmtPtr Parser::parseVarDeclStmt(bool isConst, bool isStatic) {
     if (match(TK::Eq)) init = parseAssignExpr();
 
     auto mkDecl = [&](std::string n, TypePtr t, ExprPtr i, SourceLocation l) {
-        desugarMallocDefer(i, n, l, pendingExtraStmt_);
+        desugarMallocDefer(i, n, l, pendingExtraStmt_, t);
         auto vs = std::make_unique<VarDeclStmt>(std::move(n), std::move(t), std::move(i), l);
         vs->isConst  = isConst && leadingConstMakesObjectConst(vs->declType);
         vs->isStatic = isStatic;

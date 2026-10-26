@@ -52,7 +52,7 @@ generic<T>
 int Stack::reserve(unsigned long n) {
     if (n <= self.cap) return 1;
     ?&heap T grown = null;
-    unsafe { grown = (?&heap T)realloc_buf_raw_((void*)self.data, checked_mul_size(n, sizeof(T))); }
+    unsafe { grown = (?&heap T)realloc_buf_raw_((unsigned char*)self.data, checked_mul_size(n, sizeof(T))); }
     if (grown.is_null()) return 0;
     self.data = grown;
     self.cap = n;

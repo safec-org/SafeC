@@ -27,45 +27,55 @@
 #include <std/gui/gui_backend.h>
 #include <std/gui/gui_gpu.h>
 #include <std/mem.h>
-extern void* memset(void* ptr, int val, size_t n);
-extern void* memcpy(void* dst, const void* src, size_t n);
 
 namespace std {
 
-extern void* objc_getClass(const char* name);
-extern void* sel_registerName(const char* name);
-extern void* objc_msgSend(void* recv, void* op);
-extern void* objc_autoreleasePoolPush();
-extern void  objc_autoreleasePoolPop(void* pool);
-extern void* dlopen(const char* path, int mode);
-extern void* dlsym(void* handle, const char* name);
+// Opaque Objective-C runtime types: an object ('id'; a Class too), a
+// selector (SEL), an autorelease pool token; a dlopen() handle and a
+// symbol looked up in one (untyped until cast to its signature).
+struct ObjcId_   { char opaque_; };
+struct ObjcSel_  { char opaque_; };
+struct ObjcPool_ { char opaque_; };
+struct MtlLib_   { char opaque_; };
+typedef ?fn void() MtlSym_;
+
+extern ObjcId_*  objc_getClass(const char* name);
+extern ObjcSel_* sel_registerName(const char* name);
+extern ObjcId_*  objc_msgSend(ObjcId_* recv, ObjcSel_* op);
+extern ObjcPool_* objc_autoreleasePoolPush();
+extern void      objc_autoreleasePoolPop(ObjcPool_* pool);
+extern MtlLib_*  dlopen(const char* path, int mode);
+extern MtlSym_   dlsym(MtlLib_* handle, const char* name);
 
 struct GuiMtlCGSize { double w; double h; };
 
-typedef fn void*() MtlCreateDevice_;
-typedef fn void*(void*, void*) MtlMsg0;
-typedef fn void*(void*, void*, void*) MtlMsg1;
-typedef fn void(void*, void*) MtlVoid0;
-typedef fn void(void*, void*, void*) MtlVoid1;
-typedef fn void(void*, void*, unsigned long) MtlVoidULong;
-typedef fn void(void*, void*, signed char) MtlVoidBool;
-typedef fn void(void*, void*, double) MtlVoidDouble;
-typedef fn void(void*, void*, struct GuiMtlCGSize) MtlVoidSize;
-typedef fn void*(void*, void*, void*, void*, void**) MtlNewLibrary;       // newLibraryWithSource:options:error:
-typedef fn void*(void*, void*, void*, void**) MtlNewPipeline;             // newRenderPipelineStateWithDescriptor:error:
-typedef fn void*(void*, void*, unsigned long, unsigned long) MtlNewBuffer; // newBufferWithLength:options:
-typedef fn void*(void*, void*, unsigned long) MtlMsgULong;                // objectAtIndexedSubscript:
-typedef fn void(void*, void*, void*, unsigned long, unsigned long) MtlSetBuffer;   // setFragmentBuffer:offset:atIndex:
-typedef fn void(void*, void*, const void*, unsigned long, unsigned long) MtlSetBytes; // setFragmentBytes:length:atIndex:
-typedef fn void(void*, void*, unsigned long, unsigned long, unsigned long) MtlDraw;  // drawPrimitives:vertexStart:vertexCount:
+// objc_msgSend, one cast per call shape (receiver, selector, arguments).
+typedef fn ObjcId_*() MtlCreateDevice_;
+typedef fn ObjcId_*(ObjcId_*, ObjcSel_*) MtlMsg0;
+typedef fn unsigned char*(ObjcId_*, ObjcSel_*) MtlMsgRetBytes;            // -[MTLBuffer contents]
+typedef fn ObjcId_*(ObjcId_*, ObjcSel_*, ObjcId_*) MtlMsg1;
+typedef fn ObjcId_*(ObjcId_*, ObjcSel_*, const char*) MtlMsgStr;          // stringWithUTF8String:
+typedef fn void(ObjcId_*, ObjcSel_*) MtlVoid0;
+typedef fn void(ObjcId_*, ObjcSel_*, ObjcId_*) MtlVoid1;
+typedef fn void(ObjcId_*, ObjcSel_*, unsigned long) MtlVoidULong;
+typedef fn void(ObjcId_*, ObjcSel_*, signed char) MtlVoidBool;
+typedef fn void(ObjcId_*, ObjcSel_*, double) MtlVoidDouble;
+typedef fn void(ObjcId_*, ObjcSel_*, struct GuiMtlCGSize) MtlVoidSize;
+typedef fn ObjcId_*(ObjcId_*, ObjcSel_*, ObjcId_*, ObjcId_*, ObjcId_**) MtlNewLibrary;  // newLibraryWithSource:options:error:
+typedef fn ObjcId_*(ObjcId_*, ObjcSel_*, ObjcId_*, ObjcId_**) MtlNewPipeline;           // newRenderPipelineStateWithDescriptor:error:
+typedef fn ObjcId_*(ObjcId_*, ObjcSel_*, unsigned long, unsigned long) MtlNewBuffer;    // newBufferWithLength:options:
+typedef fn ObjcId_*(ObjcId_*, ObjcSel_*, unsigned long) MtlMsgULong;                    // objectAtIndexedSubscript:
+typedef fn void(ObjcId_*, ObjcSel_*, ObjcId_*, unsigned long, unsigned long) MtlSetBuffer;   // setFragmentBuffer:offset:atIndex:
+typedef fn void(ObjcId_*, ObjcSel_*, const unsigned char*, unsigned long, unsigned long) MtlSetBytes; // setFragmentBytes:length:atIndex:
+typedef fn void(ObjcId_*, ObjcSel_*, unsigned long, unsigned long, unsigned long) MtlDraw;  // drawPrimitives:vertexStart:vertexCount:
 
 #define GUI_MTL_BGRA8 80UL           // MTLPixelFormatBGRA8Unorm
 
 static int gMtlLoaded = 0;            // 0 not tried, 1 ok, -1 unavailable
 static MtlCreateDevice_ gMtlCreateDevice;
-static void* gMtlDevice = (void*)0;
-static void* gMtlQueue = (void*)0;
-static void* gMtlPipeline = (void*)0;
+static ObjcId_* gMtlDevice = (ObjcId_*)0;
+static ObjcId_* gMtlQueue = (ObjcId_*)0;
+static ObjcId_* gMtlPipeline = (ObjcId_*)0;
 
 // A full-drawable triangle; each fragment reads its pixel from the frame
 // buffer (RGBA8, premultiplied, row-major, top-left origin like Metal's
@@ -87,80 +97,83 @@ static const char* __mtl_shaders() {
     "}\n";
 }
 
-static void* __mtl_sel(const char* name) { unsafe { return sel_registerName(name); } }
+static ObjcSel_* __mtl_sel(const char* name) { unsafe { return sel_registerName(name); } }
 
-static void* __mtl_send0(void* obj, const char* sel) {
+static ObjcId_* __mtl_send0(ObjcId_* obj, const char* sel) {
     unsafe {
         MtlMsg0 m = (MtlMsg0)objc_msgSend;
         return m(obj, __mtl_sel(sel));
     }
 }
 
-static void __mtl_void0(void* obj, const char* sel) {
+static void __mtl_void0(ObjcId_* obj, const char* sel) {
     unsafe {
         MtlVoid0 m = (MtlVoid0)objc_msgSend;
         m(obj, __mtl_sel(sel));
     }
 }
 
-static void __mtl_void1(void* obj, const char* sel, void* arg) {
+static void __mtl_void1(ObjcId_* obj, const char* sel, ObjcId_* arg) {
     unsafe {
         MtlVoid1 m = (MtlVoid1)objc_msgSend;
         m(obj, __mtl_sel(sel), arg);
     }
 }
 
-static void __mtl_bool(void* obj, const char* sel, int v) {
+static void __mtl_bool(ObjcId_* obj, const char* sel, int v) {
     unsafe {
         MtlVoidBool m = (MtlVoidBool)objc_msgSend;
         m(obj, __mtl_sel(sel), v ? (signed char)1 : (signed char)0);
     }
 }
 
-static void __mtl_release(void* obj) {
-    unsafe { if (obj != (void*)0) { __mtl_void0(obj, "release"); } }
+static void __mtl_release(ObjcId_* obj) {
+    unsafe { if (obj != null) { __mtl_void0(obj, "release"); } }
 }
 
 static int __mtl_load() {
     if (gMtlLoaded != 0) { return gMtlLoaded > 0 ? 1 : 0; }
     gMtlLoaded = -1;
     unsafe {
-        void* lib = dlopen("/System/Library/Frameworks/Metal.framework/Metal", 1 /* RTLD_LAZY */);
-        if (lib == (void*)0) { return 0; }
+        MtlLib_* lib = dlopen("/System/Library/Frameworks/Metal.framework/Metal", 1 /* RTLD_LAZY */);
+        if (lib == null) { return 0; }
         dlopen("/System/Library/Frameworks/QuartzCore.framework/QuartzCore", 1);
-        gMtlCreateDevice = (MtlCreateDevice_)dlsym(lib, "MTLCreateSystemDefaultDevice");
-        if (gMtlCreateDevice == (MtlCreateDevice_)0) { return 0; }
-        if (objc_getClass("CAMetalLayer") == (void*)0) { return 0; }
-        void* dev = gMtlCreateDevice();
-        if (dev == (void*)0) { return 0; }
-        void* q = __mtl_send0(dev, "newCommandQueue");
-        if (q == (void*)0) { return 0; }
+        match (dlsym(lib, "MTLCreateSystemDefaultDevice")) {
+            case some(p): { gMtlCreateDevice = (MtlCreateDevice_)p; }
+            case null: { return 0; }
+        }
+        if (objc_getClass("CAMetalLayer") == null) { return 0; }
+        ObjcId_* dev = gMtlCreateDevice();
+        if (dev == null) { return 0; }
+        ObjcId_* q = __mtl_send0(dev, "newCommandQueue");
+        if (q == null) { return 0; }
         // the pipeline: compile the shaders, BGRA8 color attachment
-        void* pool = objc_autoreleasePoolPush();
+        ObjcPool_* pool = objc_autoreleasePoolPush();
         MtlMsg1 strMsg = (MtlMsg1)objc_msgSend;
-        void* src = strMsg(objc_getClass("NSString"), __mtl_sel("stringWithUTF8String:"), (void*)__mtl_shaders());
-        void* err = (void*)0;
+        MtlMsgStr nsStr = (MtlMsgStr)objc_msgSend;
+        ObjcId_* src = nsStr(objc_getClass("NSString"), __mtl_sel("stringWithUTF8String:"), __mtl_shaders());
+        ObjcId_* err = null;
         MtlNewLibrary newLib = (MtlNewLibrary)objc_msgSend;
-        void* lib2 = newLib(dev, __mtl_sel("newLibraryWithSource:options:error:"), src, (void*)0, &err);
-        if (lib2 == (void*)0) { objc_autoreleasePoolPop(pool); return 0; }
-        void* vs = strMsg(lib2, __mtl_sel("newFunctionWithName:"), strMsg(objc_getClass("NSString"), __mtl_sel("stringWithUTF8String:"), (void*)"safec_vs"));
-        void* fs = strMsg(lib2, __mtl_sel("newFunctionWithName:"), strMsg(objc_getClass("NSString"), __mtl_sel("stringWithUTF8String:"), (void*)"safec_fs"));
-        if (vs == (void*)0 || fs == (void*)0) { objc_autoreleasePoolPop(pool); return 0; }
-        void* desc = __mtl_send0(__mtl_send0(objc_getClass("MTLRenderPipelineDescriptor"), "alloc"), "init");
+        ObjcId_* lib2 = newLib(dev, __mtl_sel("newLibraryWithSource:options:error:"), src, null, &err);
+        if (lib2 == null) { objc_autoreleasePoolPop(pool); return 0; }
+        ObjcId_* vs = strMsg(lib2, __mtl_sel("newFunctionWithName:"), nsStr(objc_getClass("NSString"), __mtl_sel("stringWithUTF8String:"), "safec_vs"));
+        ObjcId_* fs = strMsg(lib2, __mtl_sel("newFunctionWithName:"), nsStr(objc_getClass("NSString"), __mtl_sel("stringWithUTF8String:"), "safec_fs"));
+        if (vs == null || fs == null) { objc_autoreleasePoolPop(pool); return 0; }
+        ObjcId_* desc = __mtl_send0(__mtl_send0(objc_getClass("MTLRenderPipelineDescriptor"), "alloc"), "init");
         __mtl_void1(desc, "setVertexFunction:", vs);
         __mtl_void1(desc, "setFragmentFunction:", fs);
         MtlMsgULong at = (MtlMsgULong)objc_msgSend;
-        void* att = at(__mtl_send0(desc, "colorAttachments"), __mtl_sel("objectAtIndexedSubscript:"), 0UL);
+        ObjcId_* att = at(__mtl_send0(desc, "colorAttachments"), __mtl_sel("objectAtIndexedSubscript:"), 0UL);
         MtlVoidULong setU = (MtlVoidULong)objc_msgSend;
         setU(att, __mtl_sel("setPixelFormat:"), GUI_MTL_BGRA8);
         MtlNewPipeline newPipe = (MtlNewPipeline)objc_msgSend;
-        void* pipe = newPipe(dev, __mtl_sel("newRenderPipelineStateWithDescriptor:error:"), desc, &err);
+        ObjcId_* pipe = newPipe(dev, __mtl_sel("newRenderPipelineStateWithDescriptor:error:"), desc, &err);
         __mtl_release(desc);
         __mtl_release(vs);
         __mtl_release(fs);
         __mtl_release(lib2);
         objc_autoreleasePoolPop(pool);
-        if (pipe == (void*)0) { return 0; }
+        if (pipe == null) { return 0; }
         gMtlDevice = dev;
         gMtlQueue = q;
         gMtlPipeline = pipe;
@@ -170,13 +183,13 @@ static int __mtl_load() {
 }
 
 struct GuiMtlWindow {
-    void* view;
-    void* oldLayer;          // the backend's layer, retained, put back on detach
-    void* layer;             // CAMetalLayer, retained
-    void* buffer;            // MTLBuffer (shared): the frame, RGBA
+    ObjcId_* view;
+    ObjcId_* oldLayer;       // the backend's layer, retained, put back on detach
+    ObjcId_* layer;          // CAMetalLayer, retained
+    ObjcId_* buffer;         // MTLBuffer (shared): the frame, RGBA
     unsigned char* data;     // its contents
     int bufW; int bufH;
-    void* lastCmd;           // the previous frame's command buffer, retained
+    ObjcId_* lastCmd;        // the previous frame's command buffer, retained
 };
 
 static struct GuiPresenter gMtlPresenter;
@@ -185,7 +198,7 @@ static int gMtlPresenterInit = 0;
 static void __mtl_free_buffer(struct GuiMtlWindow* w) {
     unsafe {
         __mtl_release(w->buffer);
-        w->buffer = (void*)0;
+        w->buffer = null;
         w->data = (unsigned char*)0;
         w->bufW = 0;
         w->bufH = 0;
@@ -198,8 +211,9 @@ static int __mtl_make_buffer(struct GuiMtlWindow* w, int bw, int bh) {
         MtlNewBuffer nb = (MtlNewBuffer)objc_msgSend;
         w->buffer = nb(gMtlDevice, __mtl_sel("newBufferWithLength:options:"),
                        (unsigned long)bw * (unsigned long)bh * 4UL, 0UL /* StorageModeShared */);
-        if (w->buffer == (void*)0) { return 0; }
-        w->data = (unsigned char*)__mtl_send0(w->buffer, "contents");
+        if (w->buffer == null) { return 0; }
+        MtlMsgRetBytes contents = (MtlMsgRetBytes)objc_msgSend;
+        w->data = contents(w->buffer, __mtl_sel("contents"));
         w->bufW = bw;
         w->bufH = bh;
         return 1;
@@ -208,12 +222,12 @@ static int __mtl_make_buffer(struct GuiMtlWindow* w, int bw, int bh) {
 
 static void __mtl_free(struct GuiMtlWindow* w) {
     unsafe {
-        if (w->lastCmd != (void*)0) {
+        if (w->lastCmd != null) {
             __mtl_void0(w->lastCmd, "waitUntilCompleted");
             __mtl_release(w->lastCmd);
         }
         __mtl_free_buffer(w);
-        if (w->view != (void*)0 && w->oldLayer != (void*)0) {
+        if (w->view != null && w->oldLayer != null) {
             __mtl_void1(w->view, "setLayer:", w->oldLayer);
             __mtl_bool(w->view, "setWantsLayer:", 1);
         }
@@ -228,10 +242,10 @@ static int __mtl_attach(&GuiWindowState st, struct GuiNativeHandle h) {
         if (h.kind != GUI_NATIVE_COCOA || h.view == 0ULL) { return 0; }
         if (!__mtl_load()) { return 0; }
         struct GuiMtlWindow* w = (struct GuiMtlWindow*)alloc_zeroed_raw_(sizeof(struct GuiMtlWindow));
-        w->view = (void*)(unsigned long)h.view;
-        void* pool = objc_autoreleasePoolPush();
-        void* layer = __mtl_send0(objc_getClass("CAMetalLayer"), "layer");
-        if (layer == (void*)0) { objc_autoreleasePoolPop(pool); dealloc(w); return 0; }
+        w->view = (ObjcId_*)(unsigned long)h.view;
+        ObjcPool_* pool = objc_autoreleasePoolPush();
+        ObjcId_* layer = __mtl_send0(objc_getClass("CAMetalLayer"), "layer");
+        if (layer == null) { objc_autoreleasePoolPop(pool); dealloc(w); return 0; }
         __mtl_send0(layer, "retain");
         w->layer = layer;
         __mtl_void1(layer, "setDevice:", gMtlDevice);
@@ -246,14 +260,14 @@ static int __mtl_attach(&GuiWindowState st, struct GuiNativeHandle h) {
         sz.h = (double)st.pixelH;
         MtlVoidSize setS = (MtlVoidSize)objc_msgSend;
         setS(layer, __mtl_sel("setDrawableSize:"), sz);
-        void* old = __mtl_send0(w->view, "layer");
-        if (old != (void*)0) { __mtl_send0(old, "retain"); }
+        ObjcId_* old = __mtl_send0(w->view, "layer");
+        if (old != null) { __mtl_send0(old, "retain"); }
         w->oldLayer = old;
         // layer-hosting: set the layer first, then wantsLayer
         __mtl_void1(w->view, "setLayer:", layer);
         __mtl_bool(w->view, "setWantsLayer:", 1);
         objc_autoreleasePoolPop(pool);
-        st.presenterData = (void*)w;
+        st.presenterData = (?&Erased)w;
         return 1;
     }
 }
@@ -278,11 +292,11 @@ static void __mtl_present(&GuiWindowState st, const &unsigned char px, int bw, i
     unsafe {
         struct GuiMtlWindow* w = (struct GuiMtlWindow*)st.presenterData;
         if (w == (struct GuiMtlWindow*)0) { return; }
-        void* pool = objc_autoreleasePoolPush();
-        if (w->lastCmd != (void*)0) {
+        ObjcPool_* pool = objc_autoreleasePoolPush();
+        if (w->lastCmd != null) {
             __mtl_void0(w->lastCmd, "waitUntilCompleted");
             __mtl_release(w->lastCmd);
-            w->lastCmd = (void*)0;
+            w->lastCmd = null;
         }
         if (w->bufW != bw || w->bufH != bh) {
             if (!__mtl_make_buffer(w, bw, bh)) {
@@ -301,27 +315,28 @@ static void __mtl_present(&GuiWindowState st, const &unsigned char px, int bw, i
         }
         // the damaged rows into the GPU-visible copy
         unsigned long rowBytes = (unsigned long)bw * 4UL;
-        memcpy((void*)(w->data + (unsigned long)y * rowBytes),
-               (const void*)((const unsigned char*)px + (unsigned long)y * rowBytes), (unsigned long)rh * rowBytes);
-        void* drawable = __mtl_send0(w->layer, "nextDrawable");
-        if (drawable == (void*)0) { objc_autoreleasePoolPop(pool); return; }   // none free now: skip the frame
-        void* target = __mtl_send0(drawable, "texture");
-        void* cmd = __mtl_send0(gMtlQueue, "commandBuffer");
-        if (cmd == (void*)0 || target == (void*)0) {
+        unsigned long n = (unsigned long)rh * rowBytes;
+        safe_memcpy((w->data + (unsigned long)y * rowBytes)[0..n],
+                    ((const unsigned char*)px + (unsigned long)y * rowBytes)[0..n]);
+        ObjcId_* drawable = __mtl_send0(w->layer, "nextDrawable");
+        if (drawable == null) { objc_autoreleasePoolPop(pool); return; }   // none free now: skip the frame
+        ObjcId_* target = __mtl_send0(drawable, "texture");
+        ObjcId_* cmd = __mtl_send0(gMtlQueue, "commandBuffer");
+        if (cmd == null || target == null) {
             objc_autoreleasePoolPop(pool);
             __mtl_fallback(st, px, bw, bh);
             return;
         }
-        void* pass = __mtl_send0(objc_getClass("MTLRenderPassDescriptor"), "renderPassDescriptor");
+        ObjcId_* pass = __mtl_send0(objc_getClass("MTLRenderPassDescriptor"), "renderPassDescriptor");
         MtlMsgULong at = (MtlMsgULong)objc_msgSend;
-        void* att = at(__mtl_send0(pass, "colorAttachments"), __mtl_sel("objectAtIndexedSubscript:"), 0UL);
+        ObjcId_* att = at(__mtl_send0(pass, "colorAttachments"), __mtl_sel("objectAtIndexedSubscript:"), 0UL);
         __mtl_void1(att, "setTexture:", target);
         MtlVoidULong setU = (MtlVoidULong)objc_msgSend;
         setU(att, __mtl_sel("setLoadAction:"), 0UL /* DontCare: every pixel is drawn */);
         setU(att, __mtl_sel("setStoreAction:"), 1UL /* Store */);
         MtlMsg1 enc = (MtlMsg1)objc_msgSend;
-        void* re = enc(cmd, __mtl_sel("renderCommandEncoderWithDescriptor:"), pass);
-        if (re == (void*)0) {
+        ObjcId_* re = enc(cmd, __mtl_sel("renderCommandEncoderWithDescriptor:"), pass);
+        if (re == null) {
             objc_autoreleasePoolPop(pool);
             __mtl_fallback(st, px, bw, bh);
             return;
@@ -333,7 +348,7 @@ static void __mtl_present(&GuiWindowState st, const &unsigned char px, int bw, i
         size[0] = (unsigned int)bw;
         size[1] = (unsigned int)bh;
         MtlSetBytes setBytes = (MtlSetBytes)objc_msgSend;
-        setBytes(re, __mtl_sel("setFragmentBytes:length:atIndex:"), (const void*)&size[0], 8UL, 1UL);
+        setBytes(re, __mtl_sel("setFragmentBytes:length:atIndex:"), (const unsigned char*)&size[0], 8UL, 1UL);
         MtlDraw draw = (MtlDraw)objc_msgSend;
         draw(re, __mtl_sel("drawPrimitives:vertexStart:vertexCount:"), 3UL /* Triangle */, 0UL, 3UL);
         __mtl_void0(re, "endEncoding");

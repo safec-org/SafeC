@@ -31,8 +31,8 @@ struct WebGpuBackend {
     static unsigned long offset(unsigned long handle, unsigned long bytes);
 
     // bytes (a multiple of 4) to / from device memory at a 4-byte aligned handle
-    static int upload_bytes_(unsigned long dst, const void* src, unsigned long bytes);
-    static int download_bytes_(void* dst, unsigned long src, unsigned long bytes);
+    static int upload_bytes_(unsigned long dst, const unsigned char* src, unsigned long bytes);
+    static int download_bytes_(unsigned char* dst, unsigned long src, unsigned long bytes);
     // gpu_webgpu.h's elementwise ops without a DK_* kernel (device_kernels.wgsl's
     // wk_map): out = a / b (op 0), pow(a, b) (1), sqrt(a) (2) over n elements
     static int map(int op, unsigned long a, unsigned long b, unsigned long out, unsigned long n);

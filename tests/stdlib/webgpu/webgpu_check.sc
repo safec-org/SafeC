@@ -14,8 +14,8 @@
 #include <std/ml/float16.h>
 #include <std/math.h>
 extern int printf(const char* fmt, ...);
-extern void* malloc(unsigned long n);
-extern void free(void* p);
+extern unsigned char* malloc(unsigned long n);
+extern void free(unsigned char* p);
 
 static int g_checks = 0;
 static int g_fails = 0;
@@ -100,7 +100,7 @@ static void check_elementwise(unsigned long n) {
             check(ok && e < 2.0e-6, names[op]);
             op = op + 1;
         }
-        free((void*)a); free((void*)b); free((void*)s); free((void*)got); free((void*)want);
+        free((unsigned char*)a); free((unsigned char*)b); free((unsigned char*)s); free((unsigned char*)got); free((unsigned char*)want);
     }
 }
 
@@ -117,7 +117,7 @@ static void check_sum(unsigned long n) {
         if (e < 0.0) e = -e;
         printf("  sum    n %-8lu got %.6g want %.6g\n", n, (double)got, want);
         check(ok && e <= 1.0e-5 * (double)n, "sum");
-        free((void*)a);
+        free((unsigned char*)a);
     }
 }
 
@@ -179,7 +179,7 @@ static void check_matmul(unsigned long M, unsigned long K, unsigned long N, int 
         const char* on = outType == 0 ? "fp32" : (outType == WEBGPU_FP16 ? "fp16" : "bf16");
         printf("  matmul %s -> %s %lux%lux%lu err %.2e\n", tn, on, M, K, N, e);
         check(ok && e < tol, "matmul");
-        free((void*)a); free((void*)b); free((void*)got); free((void*)want);
+        free((unsigned char*)a); free((unsigned char*)b); free((unsigned char*)got); free((unsigned char*)want);
     }
 }
 
@@ -195,7 +195,7 @@ static void check_buffers() {
         struct WebGpuBuf f = WebGpuBuf::upload(((const float*)a)[0..n]);
         check(f.valid() && f.bytes == 4UL * n && f.dtype == 0, "upload: valid fp32 buffer");
         check(f.read_f32(((float*)got)[0..n]) && relerr(got, a, n) == 0.0, "upload: fp32 round trip");
-        check(!f.read(((unsigned char*)(void*)got)[0..4UL * n + 4UL]), "read past the end refused");
+        check(!f.read(((unsigned char*)got)[0..4UL * n + 4UL]), "read past the end refused");
         int dt = WEBGPU_FP16;
         while (dt <= WEBGPU_BF16) {
             struct WebGpuBuf h = dt == WEBGPU_FP16 ? WebGpuBuf::upload_f16(((const float*)a)[0..n]) : WebGpuBuf::upload_bf16(((const float*)a)[0..n]);
@@ -215,7 +215,7 @@ static void check_buffers() {
             bits[0] = dt == WEBGPU_FP16 ? std::f32_to_fp16((float)1.5) : std::f32_to_bf16((float)1.5);
             bits[1] = dt == WEBGPU_FP16 ? std::f32_to_fp16((float)-2.0) : std::f32_to_bf16((float)-2.0);
             bits[2] = dt == WEBGPU_FP16 ? std::f32_to_fp16((float)0.25) : std::f32_to_bf16((float)0.25);
-            check(h.write(((const unsigned char*)(const void*)&bits[0])[0..6UL]) && h.read_f32(((float*)got)[0..4UL]), "write 3 halves");
+            check(h.write(((const unsigned char*)&bits[0])[0..6UL]) && h.read_f32(((float*)got)[0..4UL]), "write 3 halves");
             check(got[0] == (float)1.5 && got[1] == (float)-2.0 && got[2] == (float)0.25, "write 3 halves: values");
             h.free(); gb.free();
             check(!h.valid() && h.bytes == 0UL, "free invalidates");
@@ -240,7 +240,7 @@ static void check_buffers() {
         struct WebGpuBuf bad = WebGpuBuf::alloc(4UL, 7);
         check(!bad.valid(), "alloc of an unknown dtype is invalid");
         check(webgpu_sync(), "sync");
-        free((void*)a); free((void*)g); free((void*)got); free((void*)want);
+        free((unsigned char*)a); free((unsigned char*)g); free((unsigned char*)got); free((unsigned char*)want);
     }
 }
 
@@ -337,7 +337,7 @@ static void check_gemm_path(int ta, int tb, unsigned long m, unsigned long n, un
         device_mem_free_(d, fa, 4UL * m * k); device_mem_free_(d, fb, 4UL * k * n); device_mem_free_(d, fc, 4UL * m * n);
         if (dt != 0) { device_mem_free_(d, ha, 2UL * m * k + 4UL); device_mem_free_(d, hb, 2UL * k * n + 4UL); }
         if (ct != 0) device_mem_free_(d, hc, 2UL * m * n + 4UL);
-        free((void*)a); free((void*)b); free((void*)c0); free((void*)got); free((void*)want);
+        free((unsigned char*)a); free((unsigned char*)b); free((unsigned char*)c0); free((unsigned char*)got); free((unsigned char*)want);
     }
 }
 
@@ -364,7 +364,7 @@ static float conv_err(const float* a, const float* b, unsigned long n) {
 
 static void conv_values(&FloatTensor t, float* out, int grad) {
     unsafe {
-        if (grad) tensor_grad_host_raw_((void*)t); else tensor_host_raw_((void*)t);
+        if (grad) tensor_grad_host_raw_((FloatTensor*)t); else tensor_host_raw_((FloatTensor*)t);
         unsigned long i = 0UL;
         while (i < t->size) { out[i] = grad ? t->grad[i] : t->data[i]; i = i + 1UL; }
     }
@@ -404,7 +404,7 @@ static void check_conv_tiles(unsigned long batch, unsigned long ch, unsigned lon
         float ew = conv_err(&want[2UL * no], &got[2UL * no], nw);
         printf("  conv %lu->%lu side %lu batch %lu: output %.2e, dx %.2e, dw %.2e\n", ch, ch, side, batch, (double)eo, (double)ex, (double)ew);
         check(eo < (float)2e-4 && ex < (float)2e-4 && ew < (float)2e-4, "large convolution");
-        free((void*)want); free((void*)got);
+        free((unsigned char*)want); free((unsigned char*)got);
     }
     x.free(); w.free(); b.free(); R.free();
 }

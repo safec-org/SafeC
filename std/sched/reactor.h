@@ -29,7 +29,7 @@
 //
 // Usage shape:
 //   1. Spawn tasks on a std::TaskScheduler as usual (see task.h) — each
-//      task follows the same 'int(void* arg, int resume_point)' yield
+//      task follows the same 'int(?&Erased arg, int resume_point)' yield
 //      protocol.
 //   2. A task that would otherwise block on I/O calls
 //      'sched->await_fd(fd, SCHED_READ)' (or SCHED_WRITE/SCHED_SIGNAL)

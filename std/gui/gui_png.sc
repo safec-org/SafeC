@@ -9,7 +9,6 @@
 #include <std/gui/gui_png.h>
 #include <std/mem.h>
 #include <std/collections/string.h>
-extern void* memset(void* ptr, int val, size_t n);
 
 namespace std {
 
@@ -415,7 +414,7 @@ int GuiImage::load_png_n_(const &unsigned char data_ref, unsigned long size) { c
     // Previous-scanline reconstructed bytes (for Up/Average/Paeth), zeroed
     // for the first row per the PNG spec.
     unsigned char* prevRow;
-    unsafe { prevRow = (unsigned char*)alloc_raw_(rowBytes); memset((void*)prevRow, 0, rowBytes); }
+    unsafe { prevRow = (unsigned char*)alloc_zeroed_raw_(rowBytes); }
     unsigned char* curRow;
     unsafe { curRow = (unsigned char*)alloc_raw_(rowBytes); }
 
@@ -519,7 +518,7 @@ void GuiImage::free() { self.drop(); }
 
 void GuiImage::drop() {
     unsafe {
-        if ((void*)self.pixels != (void*)0) { dealloc(self.pixels); }
+        if ((const unsigned char*)self.pixels != (const unsigned char*)0) { dealloc(self.pixels); }
         self.pixels = (&heap unsigned char)0;
         self.width = 0;
         self.height = 0;

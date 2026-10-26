@@ -21,11 +21,11 @@
 #include <std/ml/gan.h>
 #include <std/ml/diffusion.h>
 
-extern void free(void* ptr);
+extern void free(unsigned char* ptr);
 
 static void tensor_drop(&FloatTensor t) {   // a heap tensor: destroyed in place, then freed
     unsafe { t->free(); }
-    unsafe { free((void*)t); }
+    unsafe { free((unsigned char*)t); }
 }
 
 static float absf_(float x) { return x < (float)0.0 ? -x : x; }

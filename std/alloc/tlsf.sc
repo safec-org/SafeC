@@ -6,12 +6,12 @@
 
 namespace std {
 
-extern void* malloc(size_t size);
-extern void  free(void* ptr);
-extern void* memset(void* ptr, int val, size_t n);
+extern unsigned char* malloc(size_t size);
+extern void  free(unsigned char* ptr);
+extern unsigned char* memset(unsigned char* ptr, int val, size_t n);
 // Same rationale as mem.sc/pool.sc/slab.sc for not using panic.h/panic_at here.
 extern void  abort();
-extern int   fprintf(void* stream, const char* fmt, ...);
+extern int   fprintf(CFile_* stream, const char* fmt, ...);
 
 static void tlsf_abort_(const char* msg) {
     unsafe { fprintf(SAFEC_STDERR_, "std::alloc (tlsf) fatal: %s\n", msg); }
@@ -95,7 +95,7 @@ static ?&TlsfBlock tlsf_next_phys_(&TlsfBlock blk, &TlsfAllocator a) {
 static void tlsf_link_next_(&TlsfBlock blk, &TlsfAllocator a) {
     match (tlsf_next_phys_(blk, a)) {
         case null: return;
-        case some(n): { unsafe { n.prev_phys = (void*)blk; } }
+        case some(n): { unsafe { n.prev_phys = (?&TlsfBlock)blk; } }
     }
 }
 
@@ -108,14 +108,14 @@ inline void TlsfAllocator::insert_(&TlsfBlock blk) {
 
     unsafe {
         int idx = fl * 16 + sl;
-        void* head = self.blocks[idx];
+        ?&TlsfBlock head = self.blocks[idx];
         blk.next_free = head;
-        blk.prev_free = (void*)0;
-        if (head != (void*)0) {
+        blk.prev_free = null;
+        if (!head.is_null()) {
             struct TlsfBlock* h = (struct TlsfBlock*)head;
-            h->prev_free = (void*)blk;
+            h->prev_free = (?&TlsfBlock)blk;
         }
-        self.blocks[idx] = (void*)blk;
+        self.blocks[idx] = (?&TlsfBlock)blk;
         self.fl_bitmap = self.fl_bitmap | ((unsigned int)1 << fl);
         self.sl_bitmap[fl] = self.sl_bitmap[fl] | ((unsigned int)1 << sl);
     }
@@ -132,14 +132,14 @@ void TlsfAllocator::remove_(&TlsfBlock blk) {
         struct TlsfBlock* prev = (struct TlsfBlock*)blk.prev_free;
         struct TlsfBlock* next = (struct TlsfBlock*)blk.next_free;
         if (prev != (struct TlsfBlock*)0) {
-            prev->next_free = (void*)next;
+            prev->next_free = (?&TlsfBlock)next;
         } else {
-            self.blocks[idx] = (void*)next;
+            self.blocks[idx] = (?&TlsfBlock)next;
         }
         if (next != (struct TlsfBlock*)0) {
-            next->prev_free = (void*)prev;
+            next->prev_free = (?&TlsfBlock)prev;
         }
-        if (self.blocks[idx] == (void*)0) {
+        if (self.blocks[idx] == (unsigned char*)0) {
             self.sl_bitmap[fl] = self.sl_bitmap[fl] & ~((unsigned int)1 << sl);
             if (self.sl_bitmap[fl] == (unsigned int)0) {
                 self.fl_bitmap = self.fl_bitmap & ~((unsigned int)1 << fl);
@@ -166,17 +166,17 @@ void TlsfAllocator::remove_(&TlsfBlock blk) {
     int fl = 0;
     int sl = 0;
     tlsf_mapping_(search, &fl, &sl);
-    if (fl >= TLSF_FL_MAX) { return (void*)0; }
+    if (fl >= TLSF_FL_MAX) { return null; }
 
     unsafe {
         // 'search' is already rounded up to a class whose every block fits,
         // so that class itself (sl) is searched too, not only those above it.
         unsigned int sl_map = self.sl_bitmap[fl] & ~(((unsigned int)1 << sl) - (unsigned int)1);
         if (sl_map == (unsigned int)0) {
-            if (fl + 1 >= TLSF_FL_MAX) { return (void*)0; }
+            if (fl + 1 >= TLSF_FL_MAX) { return null; }
             unsigned int fl_map = self.fl_bitmap & ~(((unsigned int)1 << (fl + 1)) - (unsigned int)1);
             if (fl_map == (unsigned int)0) {
-                return (void*)0;
+                return null;
             }
             fl = 0;
             unsigned int ftmp = fl_map;
@@ -202,17 +202,17 @@ void TlsfAllocator::remove_(&TlsfBlock blk) {
 void TlsfAllocator::reset() {
     self.fl_bitmap = (unsigned int)0;
     unsafe {
-        memset((void*)self.sl_bitmap, 0, sizeof(self.sl_bitmap));
-        memset((void*)self.blocks, 0, sizeof(self.blocks));
+        memset((unsigned char*)self.sl_bitmap, 0, sizeof(self.sl_bitmap));
+        memset((unsigned char*)self.blocks, 0, sizeof(self.blocks));
     }
     unsigned long hdr = tlsf_hdr_size_();
     if (self.cap > hdr) {
         unsafe {
             struct TlsfBlock* blk = (struct TlsfBlock*)self.base;
             blk->size      = self.cap - hdr;
-            blk->prev_phys = (void*)0;
-            blk->next_free = (void*)0;
-            blk->prev_free = (void*)0;
+            blk->prev_phys = null;
+            blk->next_free = null;
+            blk->prev_free = null;
             self.insert_(&(*blk));
         }
     }
@@ -223,7 +223,7 @@ struct TlsfAllocator TlsfAllocator::over([]unsigned char buffer_s) {
     &unsigned char buffer;
     unsafe { buffer = (&unsigned char)buffer_s.ptr; }
     struct TlsfAllocator a;
-    unsafe { a.base = (&heap void)buffer; }
+    unsafe { a.base = (&heap unsigned char)buffer; }
     a.owned = 0;
     a.cap   = cap;
     a.reset();
@@ -232,14 +232,14 @@ struct TlsfAllocator TlsfAllocator::over([]unsigned char buffer_s) {
 
 struct TlsfAllocator TlsfAllocator::new(unsigned long cap) {
     struct TlsfAllocator a;
-    unsafe { a.base = (&heap void)malloc(cap); }
+    unsafe { a.base = (&heap unsigned char)malloc(cap); }
     a.owned = 1;
     a.cap   = cap;
     a.reset();
     return a;
 }
 
-?&heap void TlsfAllocator::alloc(unsigned long size, unsigned long align) {
+?&heap unsigned char TlsfAllocator::alloc(unsigned long size, unsigned long align) {
     // Headers are 32 bytes and block sizes multiples of 8, so every block
     // starts at an 8-aligned offset and payloads are 8-aligned: alignments
     // up to 8 come free; above that would need padding blocks, so null.
@@ -250,8 +250,8 @@ struct TlsfAllocator TlsfAllocator::new(unsigned long cap) {
     unsigned long aligned = (size + (unsigned long)7) & ~(unsigned long)7;
     if (aligned < min) { aligned = min; }
 
-    void* found = self.find_(aligned);
-    if (found == (void*)0) {
+    ?&TlsfBlock found = self.find_(aligned);
+    if (found.is_null()) {
         return null;
     }
 
@@ -263,22 +263,22 @@ struct TlsfAllocator TlsfAllocator::new(unsigned long cap) {
         if (bsz >= aligned + hdr + min) {
             struct TlsfBlock* rest = (struct TlsfBlock*)((unsigned long)blk + hdr + aligned);
             rest->size      = bsz - aligned - hdr;
-            rest->prev_phys = (void*)blk;
-            rest->next_free = (void*)0;
-            rest->prev_free = (void*)0;
+            rest->prev_phys = (?&TlsfBlock)blk;
+            rest->next_free = null;
+            rest->prev_free = null;
             blk->size = aligned;
             tlsf_link_next_(rest, self);
             self.insert_(&(*rest));
         }
 
         blk->set_used_();
-        return (?&heap void)((unsigned long)blk + hdr);
+        return (?&heap unsigned char)((unsigned long)blk + hdr);
     }
 }
 
-void TlsfAllocator::dealloc(?&heap void ptr_ref) {
-    void* ptr = ptr_ref;
-    if (ptr == (void*)0) { return; }
+void TlsfAllocator::dealloc(?&heap unsigned char ptr_ref) {
+    unsigned char* ptr = ptr_ref;
+    if (ptr == (unsigned char*)0) { return; }
     unsigned long hdr = tlsf_hdr_size_();
     unsafe {
         struct TlsfBlock* blk = (struct TlsfBlock*)((unsigned long)ptr - hdr);
@@ -306,7 +306,7 @@ void TlsfAllocator::dealloc(?&heap void ptr_ref) {
         }
 
         // Coalesce with previous physical block if free
-        if (blk->prev_phys != (void*)0) {
+        if (blk->prev_phys != (unsigned char*)0) {
             struct TlsfBlock* prev = (struct TlsfBlock*)blk->prev_phys;
             if (prev->is_free_() == 1) {
                 self.remove_(&(*prev));
@@ -323,7 +323,7 @@ void TlsfAllocator::dealloc(?&heap void ptr_ref) {
 inline void TlsfAllocator::destroy() { self.drop(); }
 
 inline void TlsfAllocator::drop() {
-    if (self.owned) { unsafe { free((void*)self.base); } }
+    if (self.owned) { unsafe { free((unsigned char*)self.base); } }
     self.cap = (unsigned long)0;
 }
 

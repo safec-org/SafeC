@@ -11,8 +11,8 @@ namespace std {
 
 extern char* getenv(const char* name);
 extern int   strcmp(const char* a, const char* b);
-extern void* malloc(size_t size);
-extern void  free(void* ptr);
+extern unsigned char* malloc(size_t size);
+extern void  free(unsigned char* ptr);
 
 static struct DeviceOps g_dev_ops[DEVICE_COUNT];
 static int g_dev_linked = 0;
@@ -173,7 +173,7 @@ void device_mem_free_(int device, unsigned long handle, unsigned long bytes) {
             if (items == (unsigned long*)0) { g_dev_ops[device].release(handle); return; }
             unsigned long i = 0UL;
             while (i < fl->count) { items[i] = fl->items[i]; i = i + 1UL; }
-            if (fl->items != (unsigned long*)0) free((void*)fl->items);
+            if (fl->items != (unsigned long*)0) free((unsigned char*)fl->items);
             fl->items = items;
             fl->cap = cap;
         }

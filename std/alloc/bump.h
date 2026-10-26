@@ -9,7 +9,7 @@
 namespace std {
 
 struct BumpAllocator {
-    &heap void    base;    // heap-backed backing buffer
+    &heap unsigned char base;    // heap-backed backing buffer
     int           owned;   // 1 if BumpAllocator::new allocated base (destroy() frees it)
     unsigned long used;    // bytes currently allocated
     unsigned long cap;     // total buffer capacity in bytes
@@ -23,10 +23,10 @@ struct BumpAllocator {
     // Allocate `size` bytes whose address is a multiple of `align` (any
     // power of two; 0 is taken as 1), padding the arena as needed. null
     // when the arena is exhausted or `align` isn't a power of two.
-    ?&heap void   alloc(unsigned long size, unsigned long align);
+    ?&heap unsigned char alloc(unsigned long size, unsigned long align);
 
     // A no-op: an arena can't give back one block. reset() frees them all.
-    void          dealloc(?&heap void ptr);
+    void          dealloc(?&heap unsigned char ptr);
 
     // Reset the allocator — all previous allocations become invalid.
     void          reset();

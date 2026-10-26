@@ -9,8 +9,8 @@
 
 namespace std {
 
-extern void* malloc(size_t size);
-extern void  free(void* ptr);
+extern unsigned char* malloc(size_t size);
+extern void  free(unsigned char* ptr);
 
 // ── MLA / EG-MLA ─────────────────────────────────────────────────────────────
 static void aa_drop_(&FloatTensor t) { attn_release_(t); }
@@ -121,7 +121,7 @@ void EgMla::drop() {
 
 // ── Shifted-window attention ─────────────────────────────────────────────────
 static &FloatTensor __row_slice(&FloatTensor in, unsigned long startRow, unsigned long numRows) {
-    unsafe { tensor_host_write_raw_((void*)in); }
+    unsafe { tensor_host_write_raw_((FloatTensor*)in); }
     unsigned long cols;
     unsafe { cols = in->shape[1]; }
     &FloatTensor out = FloatTensor::new_2d(numRows, cols, 0);
@@ -140,7 +140,7 @@ static &FloatTensor __row_slice(&FloatTensor in, unsigned long startRow, unsigne
 }
 
 static void __row_set(&FloatTensor dst, unsigned long startRow, &FloatTensor src) {
-    unsafe { tensor_host_write_raw_((void*)dst); tensor_host_write_raw_((void*)src); }
+    unsafe { tensor_host_write_raw_((FloatTensor*)dst); tensor_host_write_raw_((FloatTensor*)src); }
     unsigned long cols; unsigned long numRows;
     unsafe { cols = dst->shape[1]; numRows = src->shape[0]; }
     unsafe {
@@ -157,7 +157,7 @@ static void __row_set(&FloatTensor dst, unsigned long startRow, &FloatTensor src
 }
 
 static &FloatTensor __row_cyclic_shift(&FloatTensor in, unsigned long shift) {
-    unsafe { tensor_host_write_raw_((void*)in); }
+    unsafe { tensor_host_write_raw_((FloatTensor*)in); }
     unsigned long rows; unsigned long cols;
     unsafe { rows = in->shape[0]; cols = in->shape[1]; }
     &FloatTensor out = FloatTensor::new_2d(rows, cols, 0);
@@ -178,7 +178,7 @@ static &FloatTensor __row_cyclic_shift(&FloatTensor in, unsigned long shift) {
 
 &FloatTensor windowed_attention_forward(const &FloatTensor Q, const &FloatTensor K, const &FloatTensor V,
                                     unsigned long windowSize, unsigned long shift) {
-    unsafe { tensor_host_raw_((void*)Q); }
+    unsafe { tensor_host_raw_((FloatTensor*)Q); }
     unsigned long seqLen; unsigned long dim;
     unsafe { seqLen = Q->shape[0]; dim = Q->shape[1]; }
 
@@ -204,16 +204,16 @@ static &FloatTensor __row_cyclic_shift(&FloatTensor in, unsigned long shift) {
         __row_set(winOut, startRow, ow);
 
         qw->free(); kw->free(); vw->free(); ow->free();
-        unsafe { free((void*)qw); free((void*)kw); free((void*)vw); free((void*)ow); }
+        unsafe { free((unsigned char*)qw); free((unsigned char*)kw); free((unsigned char*)vw); free((unsigned char*)ow); }
         w = w + 1UL;
     }
 
     if (didShift) {
         unsafe { Qs->free(); Ks->free(); Vs->free(); }   // heap tensors, freed below
-        unsafe { free((void*)Qs); free((void*)Ks); free((void*)Vs); }
+        unsafe { free((unsigned char*)Qs); free((unsigned char*)Ks); free((unsigned char*)Vs); }
         &FloatTensor out = __row_cyclic_shift(winOut, seqLen - shift);
         winOut->free();
-        unsafe { free((void*)winOut); }
+        unsafe { free((unsigned char*)winOut); }
         return out;
     }
     return winOut;
@@ -248,12 +248,12 @@ void GatedDeltaNet::free() { self.drop(); }
 void GatedDeltaNet::drop() {
     unsafe {
         self->Walpha->free(); self->Wbeta->free();
-        free((void*)self->Walpha); free((void*)self->Wbeta);
+        free((unsigned char*)self->Walpha); free((unsigned char*)self->Wbeta);
     }
 }
 
 &FloatTensor GatedDeltaNet::forward(const &FloatTensor X, const &FloatTensor Q, const &FloatTensor K, const &FloatTensor V) const {
-    unsafe { tensor_host_raw_((void*)X); tensor_host_raw_((void*)Q); tensor_host_raw_((void*)K); tensor_host_raw_((void*)V); }
+    unsafe { tensor_host_raw_((FloatTensor*)X); tensor_host_raw_((FloatTensor*)Q); tensor_host_raw_((FloatTensor*)K); tensor_host_raw_((FloatTensor*)V); }
     unsigned long seqLen; unsigned long dModel;
     unsigned long keyDim; unsigned long valueDim;
     unsafe {
@@ -306,7 +306,7 @@ void GatedDeltaNet::drop() {
                 }
                 kd2 = kd2 + 1UL;
             }
-            free((void*)pred);
+            free((unsigned char*)pred);
 
             unsigned long vd3 = 0UL;
             while (vd3 < valueDim) {
@@ -322,7 +322,7 @@ void GatedDeltaNet::drop() {
 
             t = t + 1UL;
         }
-        free((void*)S);
+        free((unsigned char*)S);
     }
 
     return out;

@@ -25,9 +25,10 @@
 #include <std/collections/string.h>
 
 extern int system(const char* cmd);
-extern void* fopen(const char* path, const char* mode);
-extern unsigned long fread(void* buf, unsigned long size, unsigned long n, void* f);
-extern int fclose(void* f);
+struct TestFile_ { char opaque_; };   // C's FILE, opaque
+extern TestFile_* fopen(const char* path, const char* mode);
+extern unsigned long fread(unsigned char* buf, unsigned long size, unsigned long n, TestFile_* f);
+extern int fclose(TestFile_* f);
 extern int strcmp(const char* a, const char* b);
 extern unsigned long strlen(const char* s);
 extern char* getenv(const char* name);
@@ -35,29 +36,34 @@ extern double atof(const char* s);
 extern int usleep(unsigned int us);
 extern int unlink(const char* path);
 extern int memfd_create(const char* name, unsigned int flags);
-extern long write(int fd, const void* buf, unsigned long n);
+extern long write(int fd, const unsigned char* buf, unsigned long n);
 extern int close(int fd);
-
-// libwayland-client and libxkbcommon, linked (this is a test program).
-extern void* wl_display_connect(const char* name);
-extern void wl_display_disconnect(void* d);
-extern int wl_display_roundtrip(void* d);
-extern int wl_display_flush(void* d);
-extern void* wl_proxy_marshal_flags(void* proxy, unsigned int opcode, const void* iface, unsigned int version, unsigned int flags, ...);
-extern int wl_proxy_add_dispatcher(void* proxy, void* func, const void* data, void* udata);
-extern unsigned int wl_proxy_get_version(void* proxy);
-extern char wl_registry_interface;
-extern char wl_seat_interface;
-extern void* xkb_context_new(int flags);
-extern void* xkb_keymap_new_from_names(void* ctx, const void* names, int flags);
-extern char* xkb_keymap_get_as_string(void* keymap, int format);
 
 // ── the injector: virtual pointer + keyboard on a second connection ─────
 
-struct WlMessage { const char* name; const char* signature; const void** types; };
+struct WlMessage { const char* name; const char* signature; const WlInterface** types; };
 struct WlInterface { const char* name; int version; int nm; const WlMessage* m; int ne; const WlMessage* e; };
 
-static const void* g_null_types[8];
+// libwayland-client and libxkbcommon, linked (this is a test program).
+// A wl_display is a wl_proxy too; the xkb objects are opaque.
+struct WlProxy_ { char opaque_; };
+struct XkbContext_ { char opaque_; };
+struct XkbKeymap_ { char opaque_; };
+typedef fn int(?&Erased, WlProxy_*, unsigned int, const WlMessage*, unsigned long long*) WlDispatcher_;
+extern WlProxy_* wl_display_connect(const char* name);
+extern void wl_display_disconnect(WlProxy_* d);
+extern int wl_display_roundtrip(WlProxy_* d);
+extern int wl_display_flush(WlProxy_* d);
+extern WlProxy_* wl_proxy_marshal_flags(WlProxy_* proxy, unsigned int opcode, const WlInterface* iface, unsigned int version, unsigned int flags, ...);
+extern int wl_proxy_add_dispatcher(WlProxy_* proxy, WlDispatcher_ func, ?&Erased data, ?&Erased udata);
+extern unsigned int wl_proxy_get_version(WlProxy_* proxy);
+extern struct WlInterface wl_registry_interface;
+extern struct WlInterface wl_seat_interface;
+extern XkbContext_* xkb_context_new(int flags);
+extern XkbKeymap_* xkb_keymap_new_from_names(XkbContext_* ctx, const unsigned char* names, int flags);
+extern char* xkb_keymap_get_as_string(XkbKeymap_* keymap, int format);
+
+static const WlInterface* g_null_types[8];
 static struct WlMessage g_vpm_msgs[3];
 static struct WlMessage g_vp_msgs[9];
 static struct WlMessage g_vkm_msgs[1];
@@ -71,29 +77,29 @@ static void msg(&WlMessage m, const char* name, const char* sig) {
     unsafe { m.name = name; m.signature = sig; m.types = &g_null_types[0]; }
 }
 
-static void* g_idpy = (void*)0;
-static void* g_iseat = (void*)0;
-static void* g_ivpm = (void*)0;
-static void* g_ivkm = (void*)0;
-static void* g_ptr = (void*)0;
-static void* g_kbd = (void*)0;
+static WlProxy_* g_idpy = (WlProxy_*)0;
+static WlProxy_* g_iseat = (WlProxy_*)0;
+static WlProxy_* g_ivpm = (WlProxy_*)0;
+static WlProxy_* g_ivkm = (WlProxy_*)0;
+static WlProxy_* g_ptr = (WlProxy_*)0;
+static WlProxy_* g_kbd = (WlProxy_*)0;
 static unsigned int g_time = 1000U;
 static double g_extW = 640.0;
 static double g_extH = 480.0;
 static double g_scale = 1.0;      // the output's scale (run.sh)
 
-static int reg_dispatch(const void* data, void* target, unsigned int opcode, const void* m, void* args) {
+static int reg_dispatch(?&Erased data, WlProxy_* target, unsigned int opcode, const WlMessage* m, unsigned long long* args) {
     unsafe {
         if (opcode != 0U) { return 0; }
-        unsigned long long* a = (unsigned long long*)args;
+        unsigned long long* a = args;
         unsigned int name = *(unsigned int*)&a[0];
         const char* iface = *(const char**)&a[1];
-        if (strcmp(iface, "wl_seat") == 0 && g_iseat == (void*)0) {
-            g_iseat = wl_proxy_marshal_flags(target, 0U, (const void*)&wl_seat_interface, 1U, 0U, name, "wl_seat", 1U, (void*)0);
+        if (strcmp(iface, "wl_seat") == 0 && g_iseat == (WlProxy_*)0) {
+            g_iseat = wl_proxy_marshal_flags(target, 0U, &wl_seat_interface, 1U, 0U, name, "wl_seat", 1U, (WlProxy_*)0);
         } else if (strcmp(iface, "zwlr_virtual_pointer_manager_v1") == 0) {
-            g_ivpm = wl_proxy_marshal_flags(target, 0U, (const void*)&g_vpm, 1U, 0U, name, g_vpm.name, 1U, (void*)0);
+            g_ivpm = wl_proxy_marshal_flags(target, 0U, &g_vpm, 1U, 0U, name, g_vpm.name, 1U, (WlProxy_*)0);
         } else if (strcmp(iface, "zwp_virtual_keyboard_manager_v1") == 0) {
-            g_ivkm = wl_proxy_marshal_flags(target, 0U, (const void*)&g_vkm, 1U, 0U, name, g_vkm.name, 1U, (void*)0);
+            g_ivkm = wl_proxy_marshal_flags(target, 0U, &g_vkm, 1U, 0U, name, g_vkm.name, 1U, (WlProxy_*)0);
         }
     }
     return 0;
@@ -124,21 +130,21 @@ static int injector_open() {
         g_vk.name = "zwp_virtual_keyboard_v1"; g_vk.version = 1; g_vk.nm = 4; g_vk.m = &g_vk_msgs[0];
 
         g_idpy = wl_display_connect((const char*)0);
-        if (g_idpy == (void*)0) { return 0; }
-        void* reg = wl_proxy_marshal_flags(g_idpy, 1U, (const void*)&wl_registry_interface, 1U, 0U, (void*)0);
-        wl_proxy_add_dispatcher(reg, (void*)reg_dispatch, (const void*)0, (void*)0);
+        if (g_idpy == (WlProxy_*)0) { return 0; }
+        WlProxy_* reg = wl_proxy_marshal_flags(g_idpy, 1U, &wl_registry_interface, 1U, 0U, (WlProxy_*)0);
+        wl_proxy_add_dispatcher(reg, reg_dispatch, (?&Erased)null, (?&Erased)null);
         wl_display_roundtrip(g_idpy);
-        if (g_iseat == (void*)0 || g_ivpm == (void*)0 || g_ivkm == (void*)0) { return 0; }
-        g_ptr = wl_proxy_marshal_flags(g_ivpm, 0U, (const void*)&g_vp, 1U, 0U, g_iseat, (void*)0);
-        g_kbd = wl_proxy_marshal_flags(g_ivkm, 0U, (const void*)&g_vk, 1U, 0U, g_iseat, (void*)0);
+        if (g_iseat == (WlProxy_*)0 || g_ivpm == (WlProxy_*)0 || g_ivkm == (WlProxy_*)0) { return 0; }
+        g_ptr = wl_proxy_marshal_flags(g_ivpm, 0U, &g_vp, 1U, 0U, g_iseat, (WlProxy_*)0);
+        g_kbd = wl_proxy_marshal_flags(g_ivkm, 0U, &g_vk, 1U, 0U, g_iseat, (WlProxy_*)0);
         // a US keymap for the virtual keyboard
-        void* ctx = xkb_context_new(0);
-        void* km = xkb_keymap_new_from_names(ctx, (const void*)0, 0);
+        XkbContext_* ctx = xkb_context_new(0);
+        XkbKeymap_* km = xkb_keymap_new_from_names(ctx, (const unsigned char*)0, 0);
         char* text = xkb_keymap_get_as_string(km, 1);
         unsigned long n = strlen(text) + 1UL;
         int fd = memfd_create("keymap", 0U);
-        write(fd, (const void*)text, n);
-        wl_proxy_marshal_flags(g_kbd, 0U, (const void*)0, 1U, 0U, 1U, fd, (unsigned int)n);
+        write(fd, (const unsigned char*)text, n);
+        wl_proxy_marshal_flags(g_kbd, 0U, (const WlInterface*)0, 1U, 0U, 1U, fd, (unsigned int)n);
         close(fd);
         wl_display_roundtrip(g_idpy);
         return 1;
@@ -151,9 +157,9 @@ static void inj_flush() { unsafe { wl_display_roundtrip(g_idpy); } }
 static void inj_move(double lx, double ly) {
     unsafe {
         g_time = g_time + 10U;
-        wl_proxy_marshal_flags(g_ptr, 1U, (const void*)0, 1U, 0U, g_time, (unsigned int)(lx * 100.0),
+        wl_proxy_marshal_flags(g_ptr, 1U, (const WlInterface*)0, 1U, 0U, g_time, (unsigned int)(lx * 100.0),
                                (unsigned int)(ly * 100.0), (unsigned int)(g_extW * 100.0), (unsigned int)(g_extH * 100.0));
-        wl_proxy_marshal_flags(g_ptr, 4U, (const void*)0, 1U, 0U);
+        wl_proxy_marshal_flags(g_ptr, 4U, (const WlInterface*)0, 1U, 0U);
         inj_flush();
     }
 }
@@ -161,8 +167,8 @@ static void inj_move(double lx, double ly) {
 static void inj_button(unsigned int button, unsigned int state) {
     unsafe {
         g_time = g_time + 10U;
-        wl_proxy_marshal_flags(g_ptr, 2U, (const void*)0, 1U, 0U, g_time, button, state);
-        wl_proxy_marshal_flags(g_ptr, 4U, (const void*)0, 1U, 0U);
+        wl_proxy_marshal_flags(g_ptr, 2U, (const WlInterface*)0, 1U, 0U, g_time, button, state);
+        wl_proxy_marshal_flags(g_ptr, 4U, (const WlInterface*)0, 1U, 0U);
         inj_flush();
     }
 }
@@ -170,9 +176,9 @@ static void inj_button(unsigned int button, unsigned int state) {
 static void inj_wheel(int steps) {
     unsafe {
         g_time = g_time + 10U;
-        wl_proxy_marshal_flags(g_ptr, 5U, (const void*)0, 1U, 0U, 0U);   // axis_source wheel
-        wl_proxy_marshal_flags(g_ptr, 7U, (const void*)0, 1U, 0U, g_time, 0U, steps * 15 * 256, steps);
-        wl_proxy_marshal_flags(g_ptr, 4U, (const void*)0, 1U, 0U);
+        wl_proxy_marshal_flags(g_ptr, 5U, (const WlInterface*)0, 1U, 0U, 0U);   // axis_source wheel
+        wl_proxy_marshal_flags(g_ptr, 7U, (const WlInterface*)0, 1U, 0U, g_time, 0U, steps * 15 * 256, steps);
+        wl_proxy_marshal_flags(g_ptr, 4U, (const WlInterface*)0, 1U, 0U);
         inj_flush();
     }
 }
@@ -180,14 +186,14 @@ static void inj_wheel(int steps) {
 static void inj_key(unsigned int key, unsigned int state) {
     unsafe {
         g_time = g_time + 10U;
-        wl_proxy_marshal_flags(g_kbd, 1U, (const void*)0, 1U, 0U, g_time, key, state);
+        wl_proxy_marshal_flags(g_kbd, 1U, (const WlInterface*)0, 1U, 0U, g_time, key, state);
         inj_flush();
     }
 }
 
 static void inj_mods(unsigned int depressed) {
     unsafe {
-        wl_proxy_marshal_flags(g_kbd, 2U, (const void*)0, 1U, 0U, depressed, 0U, 0U, 0U);
+        wl_proxy_marshal_flags(g_kbd, 2U, (const WlInterface*)0, 1U, 0U, depressed, 0U, 0U, 0U);
         inj_flush();
     }
 }
@@ -229,11 +235,11 @@ static int grab() {
         if (system("grim -t ppm /tmp/safec-wl-shot.ppm") != 0) { return 0; }
         // $SAFEC_WL_SHOTS=<dir>: keep every frame read back (debugging)
         if (getenv("SAFEC_WL_SHOTS") != (char*)0) { system("cp /tmp/safec-wl-shot.ppm \"$SAFEC_WL_SHOTS/shot-$(date +%s%N).ppm\""); }
-        void* f = fopen("/tmp/safec-wl-shot.ppm", "rb");
-        if (f == (void*)0) { return 0; }
+        TestFile_* f = fopen("/tmp/safec-wl-shot.ppm", "rb");
+        if (f == (TestFile_*)0) { return 0; }
         char head[64];
         // "P6\n<w> <h>\n255\n"
-        unsigned long n = fread((void*)&head[0], 1UL, 15UL, f);
+        unsigned long n = fread((unsigned char*)&head[0], 1UL, 15UL, f);
         int i = 3; int w = 0; int h = 0;
         while (head[i] >= '0' && head[i] <= '9') { w = w * 10 + (int)(head[i] - '0'); i = i + 1; }
         i = i + 1;
@@ -241,10 +247,10 @@ static int grab() {
         i = i + 5;   // "\n255\n"
         fclose(f);
         f = fopen("/tmp/safec-wl-shot.ppm", "rb");
-        fread((void*)&head[0], 1UL, (unsigned long)i, f);
+        fread((unsigned char*)&head[0], 1UL, (unsigned long)i, f);
         unsigned long want = (unsigned long)w * (unsigned long)h * 3UL;
         if (want > 3686400UL) { fclose(f); return 0; }
-        n = fread((void*)&g_shot[0], 1UL, want, f);
+        n = fread((unsigned char*)&g_shot[0], 1UL, want, f);
         fclose(f);
         g_shotW = w;
         g_shotH = h;
@@ -262,10 +268,10 @@ static unsigned int shot_px(int x, int y) {
 static int read_file(const char* path, &String out) {
     unsafe {
         out.clear();
-        void* f = fopen(path, "rb");
-        if (f == (void*)0) { return 0; }
+        TestFile_* f = fopen(path, "rb");
+        if (f == (TestFile_*)0) { return 0; }
         char buf[256];
-        unsigned long n = fread((void*)&buf[0], 1UL, 255UL, f);
+        unsigned long n = fread((unsigned char*)&buf[0], 1UL, 255UL, f);
         fclose(f);
         out.push_bytes(buf[0..n]);
         return 1;
@@ -274,8 +280,8 @@ static int read_file(const char* path, &String out) {
 
 static int file_exists(const char* path) {
     unsafe {
-        void* f = fopen(path, "rb");
-        if (f == (void*)0) { return 0; }
+        TestFile_* f = fopen(path, "rb");
+        if (f == (TestFile_*)0) { return 0; }
         fclose(f);
         return 1;
     }
@@ -493,9 +499,9 @@ void t_present_and_input() {
 
 static int g_clicks1 = 0;
 static int g_clicks2 = 0;
-static void click1(&Widget w, ?&void d) { g_clicks1 = g_clicks1 + 1; }
-static void click2(&Widget w, ?&void d) { g_clicks2 = g_clicks2 + 1; }
-static void paint2(&GuiApp app, &GuiWindow win, &GuiCanvas c, ?&void d) {
+static void click1(&Widget w, ?&Erased d) { g_clicks1 = g_clicks1 + 1; }
+static void click2(&Widget w, ?&Erased d) { g_clicks2 = g_clicks2 + 1; }
+static void paint2(&GuiApp app, &GuiWindow win, &GuiCanvas c, ?&Erased d) {
     c.set_fill_color(GuiColor::hex(0xFF0000U));
     c.fill_rect(0.0f, 0.0f, 8.0f, 8.0f);
 }
@@ -522,14 +528,14 @@ void t_multi() {
         &GuiWindow w2 = (struct GuiWindow*)ow2;
         ASSERT_TRUE(w1.native_handle() != w2.native_handle());
         &Widget r1 = Widget::vstack().set_padding(10);
-        &Widget b1 = Widget::button("One").on_click(click1, (?&void)null);
+        &Widget b1 = Widget::button("One").on_click(click1, (?&Erased)null);
         r1.add_child(b1);
         &Widget r2 = Widget::vstack().set_padding(10);
-        &Widget b2 = Widget::button("Two").on_click(click2, (?&void)null);
+        &Widget b2 = Widget::button("Two").on_click(click2, (?&Erased)null);
         r2.add_child(b2);
         app.set_root(w1, r1);
         app.set_root(w2, r2);
-        app.on_draw(w2, paint2, (?&void)null);
+        app.on_draw(w2, paint2, (?&Erased)null);
         int i = 0;
         while (i < 30) { app.pump(5); i = i + 1; }
         ASSERT_TRUE(grab());
@@ -682,7 +688,7 @@ void t_basic() {
         if (ow1.is_null() || ow2.is_null()) { return; }
         &GuiWindow w1 = (struct GuiWindow*)ow1;
         &GuiWindow w2 = (struct GuiWindow*)ow2;
-        app.on_draw(w2, paint2, (?&void)null);
+        app.on_draw(w2, paint2, (?&Erased)null);
         app.set_root(w1, Widget::button("Hello"));
         int i = 0;
         while (i < 20) { app.pump(5); i = i + 1; }

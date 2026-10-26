@@ -171,7 +171,7 @@ void t_frames_paging() {
         ASSERT_EQ(f.alloc(), 40);
         f.init(1000000UL);               // more than the bitmap tracks: clamped
         ASSERT_EQ(f.total_frames, (unsigned long)FRAME_BITMAP_SIZE * 32UL);
-        dealloc_raw_((void*)f);
+        dealloc_raw_((unsigned char*)f);
 
         ?&heap PageTable tq = (?&heap PageTable)alloc_raw_(sizeof(struct PageTable));
         if (tq.is_null()) { ASSERT_TRUE(0); return; }
@@ -188,7 +188,7 @@ void t_frames_paging() {
         t.unmap(3);
         ASSERT_EQ(t.get_phys(3), 0);
         ASSERT_FALSE(t.is_present(PAGE_TABLE_SIZE));
-        dealloc_raw_((void*)t);
+        dealloc_raw_((unsigned char*)t);
     }
 }
 
@@ -230,7 +230,7 @@ void t_scheduler() {
         ASSERT_EQ(s.procs[0].pid, 3);
         s.procs[0].save_context(0x1234UL, 0x5678UL);
         ASSERT_EQ(s.procs[0].stack_ptr, 0x1234);
-        dealloc_raw_((void*)s);
+        dealloc_raw_((unsigned char*)s);
     }
 }
 
@@ -247,7 +247,7 @@ static void mmu_reset_() {
             unsigned long raw = (unsigned long)alloc_zeroed_raw_(MMU_TEST_FRAMES * 4096UL + 16384UL);
             g_mmu_base = (raw + 16383UL) & ~16383UL;        // 16 KiB aligned (ARMv7 L1)
         }
-        safe_memset_raw_((void*)g_mmu_base, 0, MMU_TEST_FRAMES * 4096UL);
+        safe_memset_raw_((unsigned char*)g_mmu_base, 0, MMU_TEST_FRAMES * 4096UL);
     }
     g_mmu_frames.init(MMU_TEST_FRAMES);
     g_mmu_frames.mark_range(0UL, 4UL);                    // frames 0-3: the root table
@@ -395,7 +395,7 @@ void t_syscall_mailbox() {
         ASSERT_FALSE(mb.send(1, 0, str_bytes("")));     // full
         mb.clear();
         ASSERT_EQ(mb.length(), 0);
-        dealloc_raw_((void*)mb);
+        dealloc_raw_((unsigned char*)mb);
     }
 }
 
@@ -725,7 +725,7 @@ void t_node_pool() {
         case some(n): {
             p.give(n);
             ?&heap PoolNode again = p.take();      // recycled first
-            unsafe { ASSERT_TRUE((void*)again == (void*)n); }
+            unsafe { ASSERT_TRUE((unsigned char*)again == (unsigned char*)n); }
         }
     }
     p.free_all();
@@ -750,11 +750,11 @@ void t_alloc_edges() {
         ASSERT_TRUE(t.alloc(64UL, 8UL).is_null());          // full
         match (blocks[2]) {                                  // neighbours stay used
             case null: { ASSERT_TRUE(0); }
-            case some(blk): { t.dealloc((?&heap void)blk); }
+            case some(blk): { t.dealloc((?&heap unsigned char)blk); }
         }
-        void* again = (void*)t.alloc(64UL, 8UL);
-        ASSERT_TRUE(again != (void*)0);
-        ASSERT_TRUE(again == (void*)blocks[2]);
+        unsigned char* again = (unsigned char*)t.alloc(64UL, 8UL);
+        ASSERT_TRUE(again != (unsigned char*)0);
+        ASSERT_TRUE(again == (unsigned char*)blocks[2]);
         t.destroy();
 
         // Pool over a buffer too small for one header: empty, nothing written.
@@ -776,8 +776,8 @@ void t_alloc_edges() {
         ASSERT_EQ(s.available(), 0);
 
         // Sizes whose header would wrap around fail instead of returning a tiny block.
-        ASSERT_TRUE(alloc_raw_(~0UL - 4UL) == (void*)0);
-        ASSERT_TRUE(alloc_zeroed_raw_(~0UL) == (void*)0);
+        ASSERT_TRUE(alloc_raw_(~0UL - 4UL) == (unsigned char*)0);
+        ASSERT_TRUE(alloc_zeroed_raw_(~0UL) == (unsigned char*)0);
     }
 }
 

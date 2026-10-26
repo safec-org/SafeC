@@ -8,14 +8,14 @@
 
 namespace std {
 
-extern void* malloc(size_t size);
-extern void  free(void* ptr);
+extern unsigned char* malloc(size_t size);
+extern void  free(unsigned char* ptr);
 
 static void ssm_release_(&FloatTensor t) {
     // A heap tensor: destroyed in place through the reference, then its
     // memory released (a Box the checker can't see).
     unsafe { t->free(); }
-    unsafe { free((void*)t); }
+    unsafe { free((unsigned char*)t); }
 }
 
 static float ssm_silu_(float v) { return v / ((float)1.0 + exp_f(-v)); }
@@ -82,7 +82,7 @@ static void scan_channels_(&ScanJob j, unsigned long lo, unsigned long hi) {
             }
             d = d + 1UL;
         }
-        free((void*)a);
+        free((unsigned char*)a);
     }
 }
 
@@ -95,7 +95,7 @@ static void scan_run_(&ScanJob j, unsigned long D) {
 
 &FloatTensor ssm_selective_scan(const &FloatTensor x, const &FloatTensor delta, const &FloatTensor A,
                            const &FloatTensor B, const &FloatTensor C, const &FloatTensor Dskip) {
-    unsafe { tensor_host_raw_((void*)x); tensor_host_raw_((void*)delta); tensor_host_raw_((void*)A); tensor_host_raw_((void*)B); tensor_host_raw_((void*)C); tensor_host_raw_((void*)Dskip); }
+    unsafe { tensor_host_raw_((FloatTensor*)x); tensor_host_raw_((FloatTensor*)delta); tensor_host_raw_((FloatTensor*)A); tensor_host_raw_((FloatTensor*)B); tensor_host_raw_((FloatTensor*)C); tensor_host_raw_((FloatTensor*)Dskip); }
     unsigned long T; unsigned long D; unsigned long N;
     unsafe { T = x->shape[0]; D = x->shape[1]; N = A->shape[1]; }
     &FloatTensor y = FloatTensor::new_2d(T, D, 0);
@@ -115,7 +115,7 @@ static void scan_run_(&ScanJob j, unsigned long D) {
         j.y = (float*)y->data; j.ldy = D;
         j.T = T; j.N = N;
         scan_run_(&j, D);
-        free((void*)h);
+        free((unsigned char*)h);
     }
     return y;
 }
@@ -170,7 +170,7 @@ static void conv_channels_(&ConvJob j, unsigned long lo, unsigned long hi) {
             while (k < K1) { st[k] = hist[k]; k = k + 1UL; }
             d = d + 1UL;
         }
-        free((void*)hist);
+        free((unsigned char*)hist);
     }
 }
 
@@ -238,7 +238,7 @@ void Mamba::drop() {
 // Runs T tokens from the given state (conv [dInner][dConv-1], h
 // [dInner][dState]) and leaves the state after the last token there.
 static &FloatTensor mamba_run_(const &Mamba m, const &FloatTensor X, &FloatTensor convState, &FloatTensor hState) {
-    unsafe { tensor_host_raw_((void*)X); tensor_host_write_raw_((void*)convState); tensor_host_write_raw_((void*)hState); }
+    unsafe { tensor_host_raw_((FloatTensor*)X); tensor_host_write_raw_((FloatTensor*)convState); tensor_host_write_raw_((FloatTensor*)hState); }
     unsigned long T; unsigned long E; unsigned long N; unsigned long R;
     unsafe { T = X->size / m->dModel; }
     E = m->dInner; N = m->dState; R = m->dtRank;
@@ -249,7 +249,7 @@ static &FloatTensor mamba_run_(const &Mamba m, const &FloatTensor X, &FloatTenso
         while (i < T * m->dModel) { X2->data[i] = X->data[i]; i = i + 1UL; }
     }
     &FloatTensor xz = tensor_matmul(X2, m->inProj);
-    unsafe { tensor_host_raw_((void*)xz); }          // [T, 2E]: x | z
+    unsafe { tensor_host_raw_((FloatTensor*)xz); }          // [T, 2E]: x | z
     ssm_release_(X2);
 
     &FloatTensor xc = FloatTensor::new_2d(T, E, 0);
@@ -265,7 +265,7 @@ static &FloatTensor mamba_run_(const &Mamba m, const &FloatTensor X, &FloatTenso
     else conv_channels_(&cj, 0UL, E);
 
     &FloatTensor xdbl = tensor_matmul(xc, m->xProj);
-    unsafe { tensor_host_raw_((void*)xdbl); }         // [T, R + 2N]: dt | B | C
+    unsafe { tensor_host_raw_((FloatTensor*)xdbl); }         // [T, R + 2N]: dt | B | C
     unsigned long W = R + 2UL * N;
     &FloatTensor dtLow = FloatTensor::new_2d(T, R, 0);
     unsafe {
@@ -277,7 +277,7 @@ static &FloatTensor mamba_run_(const &Mamba m, const &FloatTensor X, &FloatTenso
         }
     }
     &FloatTensor dt = tensor_matmul(dtLow, m->dtProj);
-    unsafe { tensor_host_raw_((void*)dt); }       // [T, E], before bias + softplus
+    unsafe { tensor_host_raw_((FloatTensor*)dt); }       // [T, E], before bias + softplus
     ssm_release_(dtLow);
 
     &FloatTensor y = FloatTensor::new_2d(T, E, 0);

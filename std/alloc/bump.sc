@@ -5,15 +5,15 @@
 
 namespace std {
 
-extern void* malloc(size_t size);
-extern void  free(void* ptr);
+extern unsigned char* malloc(size_t size);
+extern void  free(unsigned char* ptr);
 
 inline struct BumpAllocator BumpAllocator::over([]unsigned char buffer_s) {
     unsigned long cap = buffer_s.len;
     &unsigned char buffer;
     unsafe { buffer = (&unsigned char)buffer_s.ptr; }
     struct BumpAllocator a;
-    unsafe { a.base = (&heap void)buffer; }
+    unsafe { a.base = (&heap unsigned char)buffer; }
     a.owned = 0;
     a.used = (unsigned long)0;
     a.cap  = cap;
@@ -22,14 +22,14 @@ inline struct BumpAllocator BumpAllocator::over([]unsigned char buffer_s) {
 
 inline struct BumpAllocator BumpAllocator::new(unsigned long cap) {
     struct BumpAllocator a;
-    unsafe { a.base = (&heap void)malloc(cap); }
+    unsafe { a.base = (&heap unsigned char)malloc(cap); }
     a.owned = 1;
     a.used = (unsigned long)0;
     a.cap  = cap;
     return a;
 }
 
-?&heap void BumpAllocator::alloc(unsigned long size, unsigned long align) {
+?&heap unsigned char BumpAllocator::alloc(unsigned long size, unsigned long align) {
     if (align == 0UL) { align = 1UL; }
     if ((align & (align - 1UL)) != 0UL) { return null; }
     unsigned long mask = align - 1UL;
@@ -48,13 +48,13 @@ inline struct BumpAllocator BumpAllocator::new(unsigned long cap) {
         return null;
     }
     unsafe {
-        ?&heap void ptr = (?&heap void)(base + aligned);
+        ?&heap unsigned char ptr = (?&heap unsigned char)(base + aligned);
         self.used = aligned + size;
         return ptr;
     }
 }
 
-inline void BumpAllocator::dealloc(?&heap void ptr) {
+inline void BumpAllocator::dealloc(?&heap unsigned char ptr) {
     // An arena frees its blocks all at once (reset/destroy).
 }
 
@@ -69,7 +69,7 @@ inline unsigned long BumpAllocator::remaining() const {
 inline void BumpAllocator::destroy() { self.drop(); }
 
 inline void BumpAllocator::drop() {
-    if (self.owned) { unsafe { free((void*)self.base); } }
+    if (self.owned) { unsafe { free((unsigned char*)self.base); } }
     self.used = (unsigned long)0;
     self.cap  = (unsigned long)0;
 }

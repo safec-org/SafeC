@@ -5,6 +5,8 @@
 
 # SIMD vector types are not supported
 ctests/simd/vector_align.sc
+# malloc_defer (parser sugar) is not supported (SUBSET.md, "Not supported")
+ctests/regions/malloc_defer_typed.sc
 # safec's import of the host's C headers through clang (<complex.h> here):
 # scc has no C header import, only the shims in selfhost/include
 ctests/cheaders/complex_float128.sc

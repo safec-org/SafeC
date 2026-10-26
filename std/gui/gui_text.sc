@@ -11,8 +11,6 @@
 #include <std/io_traits.h>
 #include <std/collections/vec.h>
 #include <std/collections/string.h>
-extern void* memcpy(void* dst, const void* src, size_t n);
-extern void* memset(void* ptr, int val, size_t n);
 
 namespace std {
 
@@ -247,7 +245,7 @@ int GuiTypeface::load_memory_index_n_(const &unsigned char bytes, unsigned long 
         unsafe {
             unsigned char* copy = (unsigned char*)alloc_raw_(size);
             if (copy == (unsigned char*)0) { return 0; }
-            memcpy((void*)copy, (const void*)bytes, size);
+            safe_memcpy(copy[0..size], ((const unsigned char*)bytes)[0..size]);
             self.data = (const unsigned char*)copy;
         }
         self.owned = 1;
@@ -838,7 +836,7 @@ float GuiTypeface::measure_n_n_(const &char text, unsigned long len, float size)
     int prev = 0;
     unsigned long i = 0UL;
     int self_is_fb;
-    unsafe { self_is_fb = ((const void*)self == (const void*)fb) ? 1 : 0; }
+    unsafe { self_is_fb = ((const unsigned char*)self == (const unsigned char*)fb) ? 1 : 0; }
     while (i < len) {
         unsigned int cp = gui_utf8_next_n_(text, len, &i);
         if (cp == 0U) { break; }

@@ -17,7 +17,7 @@ namespace std {
             while (i < out->size) { out->data[i] = a->data[i] + b->data[i]; i = i + 1UL; }
         }
     }
-    __tensor_link2(out, a, b, (void*)__add_backward);
+    __tensor_link2(out, a, b, __add_backward);
     return out;
 }
 
@@ -31,7 +31,7 @@ namespace std {
             while (i < out->size) { out->data[i] = a->data[i] - b->data[i]; i = i + 1UL; }
         }
     }
-    __tensor_link2(out, a, b, (void*)__sub_backward);
+    __tensor_link2(out, a, b, __sub_backward);
     return out;
 }
 
@@ -45,7 +45,7 @@ namespace std {
             while (i < out->size) { out->data[i] = a->data[i] * b->data[i]; i = i + 1UL; }
         }
     }
-    __tensor_link2(out, a, b, (void*)__mul_backward);
+    __tensor_link2(out, a, b, __mul_backward);
     return out;
 }
 
@@ -60,7 +60,7 @@ namespace std {
         }
     }
     unsafe { out->extraScalar = k; }
-    __tensor_link1(out, self, (void*)__scale_backward);
+    __tensor_link1(out, self, __scale_backward);
     return out;
 }
 
@@ -78,7 +78,7 @@ namespace std {
             }
         }
     }
-    __tensor_link1(out, self, (void*)__relu_backward);
+    __tensor_link1(out, self, __relu_backward);
     return out;
 }
 
@@ -99,7 +99,7 @@ namespace std {
             out->data[0] = acc;
         }
     }
-    __tensor_link1(out, self, (void*)__sum_backward);
+    __tensor_link1(out, self, __sum_backward);
     return out;
 }
 
@@ -134,7 +134,7 @@ namespace std {
             }
         }
     }
-    __tensor_link2(out, a, b, (void*)__matmul_backward);
+    __tensor_link2(out, a, b, __matmul_backward);
     return out;
 }
 

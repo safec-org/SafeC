@@ -99,7 +99,7 @@ void t_bump() {
         ASSERT_EQ((unsigned long)p3 % 256UL, 0);
         ASSERT_TRUE(b.alloc(8UL, 24UL).is_null());   // not a power of two
         unsigned long left = b.remaining();
-        b.dealloc((?&heap void)p3);                  // a no-op on an arena
+        b.dealloc((?&heap unsigned char)p3);                  // a no-op on an arena
         ASSERT_EQ(b.remaining(), left);
         b.reset();
         ASSERT_EQ(b.remaining(), 1024);
@@ -110,12 +110,12 @@ void t_bump() {
 void t_slab() {
     unsafe {
         struct SlabAllocator s = SlabAllocator::new(32UL, 4UL);
-        ?&heap void a = s.alloc(32UL, 8UL);
-        ?&heap void b = s.alloc(32UL, 8UL);
-        ?&heap void c = s.alloc(32UL, 8UL);
-        ?&heap void d = s.alloc(32UL, 8UL);
+        ?&heap unsigned char a = s.alloc(32UL, 8UL);
+        ?&heap unsigned char b = s.alloc(32UL, 8UL);
+        ?&heap unsigned char c = s.alloc(32UL, 8UL);
+        ?&heap unsigned char d = s.alloc(32UL, 8UL);
         ASSERT_FALSE(d.is_null());
-        ?&heap void none = s.alloc(32UL, 8UL);
+        ?&heap unsigned char none = s.alloc(32UL, 8UL);
         ASSERT_TRUE(none.is_null());
         ASSERT_EQ(s.available(), 0);
         s.dealloc(b);
@@ -123,7 +123,7 @@ void t_slab() {
         ASSERT_TRUE(s.alloc(33UL, 1UL).is_null());   // bigger than one object
         ASSERT_TRUE(s.alloc(8UL, 16UL).is_null());   // beyond max_align() (8)
         ASSERT_EQ(s.available(), 1);
-        ?&heap void e = s.alloc(32UL, 8UL);
+        ?&heap unsigned char e = s.alloc(32UL, 8UL);
         ASSERT_TRUE((unsigned long)e == (unsigned long)b);
         s.dealloc(a); s.dealloc(c); s.dealloc(d); s.dealloc(e);
         ASSERT_EQ(s.available(), 4);
@@ -145,10 +145,10 @@ void t_pool() {
         safe_memset(((char*)a)[0..100], 1);
         safe_memset(((char*)b)[0..200], 2);
         ASSERT_EQ(a[99], 1);
-        p.dealloc((?&heap void)aq);
-        p.dealloc((?&heap void)bq);
+        p.dealloc((?&heap unsigned char)aq);
+        p.dealloc((?&heap unsigned char)bq);
         ASSERT_EQ(p.available(), before);   // coalesced back
-        ?&heap void huge = p.alloc(1000000UL, 1UL);
+        ?&heap unsigned char huge = p.alloc(1000000UL, 1UL);
         ASSERT_TRUE(huge.is_null());
         ASSERT_TRUE(p.alloc(~0UL - 3UL, 1UL).is_null());   // size rounding mustn't wrap
         ASSERT_TRUE(p.alloc(16UL, 16UL).is_null());       // beyond the 8 it guarantees
@@ -184,12 +184,12 @@ void t_tlsf() {
         while (i < 64) {
             match (ptrs[i]) {
                 case null: { }
-                case some(blk): { t.dealloc((?&heap void)blk); }
+                case some(blk): { t.dealloc((?&heap unsigned char)blk); }
             }
             i = i + 1;
         }
         // After freeing everything a large block must fit again (coalescing).
-        ?&heap void bigq = t.alloc(50000UL, 8UL);
+        ?&heap unsigned char bigq = t.alloc(50000UL, 8UL);
         match (bigq) {
             case null: { ASSERT_TRUE(0); }
             case some(big): { t.dealloc(big); }
@@ -208,13 +208,13 @@ void t_heap_result() {
         if (pq.is_null()) return;
         &char p = std::expect_ref(pq, "pq is null");
         unsafe { str_copy(((char*)p)[0..100], "heap"); }
-        ?&heap char q = (?&heap char)heap_realloc((&heap void)p, 1000UL);
+        ?&heap char q = (?&heap char)heap_realloc((&heap unsigned char)p, 1000UL);
         ASSERT_FALSE(q.is_null());
         if (q.is_null()) return;
         ASSERT_STR_EQ(q, "heap");
         match (q) {
             case null: { }
-            case some(qq): { heap_free((&heap void)qq); }
+            case some(qq): { heap_free((&heap unsigned char)qq); }
         }
         ASSERT_EQ(heap_capacity(), 0);   // hosted: unbounded (malloc-backed)
 
@@ -728,7 +728,7 @@ long long MemStream::read([]unsigned char buf_s) {
     unsigned long k = self.len - self.rd;
     if (k > n) k = n;
     if (k > self.step) k = self.step;
-    unsafe { safe_memcpy_raw_((void*)buf, (const void*)&self.data[self.rd], k); }
+    unsafe { safe_memcpy_raw_((unsigned char*)buf, (const unsigned char*)&self.data[self.rd], k); }
     self.rd = self.rd + k;
     return (long long)k;
 }
@@ -740,7 +740,7 @@ long long MemStream::write([]const unsigned char buf_s) {
     unsigned long k = 20000UL - self.len;
     if (k > n) k = n;
     if (k == 0UL && n > 0UL) return -1LL;
-    unsafe { safe_memcpy_raw_((void*)&self.data[self.len], (const void*)buf, k); }
+    unsafe { safe_memcpy_raw_((unsigned char*)&self.data[self.len], (const unsigned char*)buf, k); }
     self.len = self.len + k;
     return (long long)k;
 }
@@ -768,7 +768,7 @@ int stream_echo(&S s, const &unsigned char src, unsigned long n) {
     if (!write_all(s, ((const unsigned char*)src)[0..n])) return 0;
     if (!read_exact(s, back[0..n])) return 0;
     int same;
-    unsafe { same = safe_memcmp_raw_((const void*)&back[0], (const void*)src, n) == 0; }
+    unsafe { same = safe_memcmp_raw_((const unsigned char*)&back[0], (const unsigned char*)src, n) == 0; }
     return same;
 }
 
@@ -782,7 +782,7 @@ int seek_roundtrip(&S s, const &unsigned char src, unsigned long n) {
     if (!read_exact(s, back[0..n - 100UL])) return 0;
     if (s.tell() != (long long)n) return 0;
     int same;
-    unsafe { same = safe_memcmp_raw_((const void*)&back[0], (const void*)((const unsigned char*)src + 100), n - 100UL) == 0; }
+    unsafe { same = safe_memcmp_raw_((const unsigned char*)&back[0], (const unsigned char*)((const unsigned char*)src + 100), n - 100UL) == 0; }
     return same;
 }
 
@@ -851,7 +851,7 @@ void t_io_roles() {
         ASSERT_EQ(bw.len, 0UL);
         unsigned char back[3000];
         ASSERT_EQ(read_exact(&p, back[0..3000UL]), 1);
-        ASSERT_EQ(safe_memcmp_raw_((const void*)&back[0], (const void*)&data[0], 3000UL), 0);
+        ASSERT_EQ(safe_memcmp_raw_((const unsigned char*)&back[0], (const unsigned char*)&data[0], 3000UL), 0);
         &File g = std::expect_ref(File::open(path, "wb"), "wb handle");
         ASSERT_EQ(write_flushed(g, src, 3000UL), 1);
         g.close();
@@ -863,7 +863,7 @@ void t_io_roles() {
         ASSERT_EQ(read_exact(&br, back[0..10UL]), 1);
         ASSERT_EQ(br.buffered(), 2990UL);               // the rest came with the first read
         ASSERT_EQ(read_exact(&br, back[10..3000UL]), 1);
-        ASSERT_EQ(safe_memcmp_raw_((const void*)&back[0], (const void*)&data[0], 3000UL), 0);
+        ASSERT_EQ(safe_memcmp_raw_((const unsigned char*)&back[0], (const unsigned char*)&data[0], 3000UL), 0);
         ASSERT_EQ(br.read(back[0..16UL]), 0);           // EOF
         h.close();
         h = std::expect_ref(File::open(path, "rb"), "rb handle");

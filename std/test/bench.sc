@@ -7,7 +7,7 @@ namespace std {
 
 extern int    printf(const char* fmt, ...);
 extern long   clock();           // returns clock_t; CLOCKS_PER_SEC = 1000000
-extern void*  memset(void* p, int v, size_t n);
+extern unsigned char*  memset(unsigned char* p, int v, size_t n);
 
 #define CLOCKS_PER_SEC_VAL 1000000
 

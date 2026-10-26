@@ -31,7 +31,7 @@ struct KEvent {
     unsigned short  flags;
     unsigned int    fflags;
     long            data;     // intptr_t
-    void*           udata;
+    ?&Erased       udata;    // std never sets it (null)
 };
 
 struct TimeSpec {
@@ -40,10 +40,10 @@ struct TimeSpec {
 };
 
 extern int   kqueue();
-extern int   kevent(int kq, const void* changelist, int nchanges,
-                     void* eventlist, int nevents, const void* timeout);
+extern int   kevent(int kq, const KEvent* changelist, int nchanges,
+                     KEvent* eventlist, int nevents, const TimeSpec* timeout);
 extern int   close(int fd);
-extern void* signal(int sig, void* handler);
+extern fn void(int) signal(int sig, fn void(int) handler);   // sighandler_t
 
 } // namespace std
 
@@ -96,7 +96,7 @@ inline void Reactor::add(int fd, int filter) {
     // before kqueue ever gets a chance to report it — standard, documented
     // kqueue behavior, not optional.
     if (filter == SCHED_SIGNAL) {
-        unsafe { signal(fd, (void*)SAFEC_SIG_IGN); }
+        unsafe { signal(fd, (fn void(int))SAFEC_SIG_IGN); }
     }
     struct KEvent ev;
     ev.ident  = (unsigned long)fd;
@@ -104,9 +104,9 @@ inline void Reactor::add(int fd, int filter) {
     ev.flags  = (unsigned short)(SAFEC_EV_ADD | SAFEC_EV_ENABLE);
     ev.fflags = 0U;
     ev.data   = 0L;
-    unsafe { ev.udata = (void*)0; }
+    unsafe { ev.udata = null; }
     unsafe {
-        kevent(self.kq, (const void*)&ev, 1, (void*)0, 0, (const void*)0);
+        kevent(self.kq, &ev, 1, (KEvent*)0, 0, (const TimeSpec*)0);
     }
 }
 
@@ -117,9 +117,9 @@ inline void Reactor::remove(int fd, int filter) {
     ev.flags  = (unsigned short)SAFEC_EV_DELETE;
     ev.fflags = 0U;
     ev.data   = 0L;
-    unsafe { ev.udata = (void*)0; }
+    unsafe { ev.udata = null; }
     unsafe {
-        kevent(self.kq, (const void*)&ev, 1, (void*)0, 0, (const void*)0);
+        kevent(self.kq, &ev, 1, (KEvent*)0, 0, (const TimeSpec*)0);
     }
 }
 
@@ -127,17 +127,17 @@ inline void Reactor::remove(int fd, int filter) {
 inline int Reactor::poll_events_raw_(fn void(?&Erased, int, int) on_ready, ?&Erased ctx, long long timeout_ms) {
     struct KEvent events[64];
     struct TimeSpec ts;
-    const void* toPtr;
+    const TimeSpec* toPtr;
     if (timeout_ms < 0LL) {
-        unsafe { toPtr = (const void*)0; } // NULL timeout = block indefinitely
+        unsafe { toPtr = (const TimeSpec*)0; } // NULL timeout = block indefinitely
     } else {
         ts.tv_sec  = timeout_ms / 1000LL;
         ts.tv_nsec = (timeout_ms % 1000LL) * 1000000LL;
-        unsafe { toPtr = (const void*)&ts; }
+        unsafe { toPtr = (const TimeSpec*)&ts; }
     }
     int n;
     unsafe {
-        n = kevent(self.kq, (const void*)0, 0, (void*)&events[0], 64, toPtr);
+        n = kevent(self.kq, (const KEvent*)0, 0, &events[0], 64, toPtr);
     }
     if (n <= 0) {
         return 0;

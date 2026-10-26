@@ -10,8 +10,8 @@
 
 namespace std {
 
-extern void* malloc(size_t size);
-extern void  free(void* ptr);
+extern unsigned char* malloc(size_t size);
+extern void  free(unsigned char* ptr);
 
 static &FloatTensor __xf_init_weight(unsigned long rows, unsigned long cols, unsigned long seed) {
     &FloatTensor t = FloatTensor::new_2d(rows, cols, 1);
@@ -80,9 +80,9 @@ void DiTBlock::drop() {
     unsafe {
         self->Wq->free(); self->Wk->free(); self->Wv->free(); self->Wo->free();
         self->W1->free(); self->b1->free(); self->W2->free(); self->b2->free(); self->WadaLN->free();
-        free((void*)self->Wq); free((void*)self->Wk); free((void*)self->Wv); free((void*)self->Wo);
-        free((void*)self->W1); free((void*)self->b1); free((void*)self->W2); free((void*)self->b2);
-        free((void*)self->WadaLN);
+        free((unsigned char*)self->Wq); free((unsigned char*)self->Wk); free((unsigned char*)self->Wv); free((unsigned char*)self->Wo);
+        free((unsigned char*)self->W1); free((unsigned char*)self->b1); free((unsigned char*)self->W2); free((unsigned char*)self->b2);
+        free((unsigned char*)self->WadaLN);
     }
 }
 
@@ -137,8 +137,8 @@ void JiTBlock::drop() {
     unsafe {
         self->Wq->free(); self->Wk->free(); self->Wv->free(); self->Wo->free();
         self->W1->free(); self->b1->free(); self->W2->free(); self->b2->free();
-        free((void*)self->Wq); free((void*)self->Wk); free((void*)self->Wv); free((void*)self->Wo);
-        free((void*)self->W1); free((void*)self->b1); free((void*)self->W2); free((void*)self->b2);
+        free((unsigned char*)self->Wq); free((unsigned char*)self->Wk); free((unsigned char*)self->Wv); free((unsigned char*)self->Wo);
+        free((unsigned char*)self->W1); free((unsigned char*)self->b1); free((unsigned char*)self->W2); free((unsigned char*)self->b2);
     }
 }
 

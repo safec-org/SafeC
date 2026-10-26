@@ -25,10 +25,10 @@ struct SecureAllocator {
     // One slot for `size` bytes aligned to `align` (a power of two; 0 is
     // taken as 1). null when every slot is in use, size > obj_size, or
     // `align` is above slab.max_align() (at most 8).
-    ?&heap void alloc(unsigned long size, unsigned long align);
+    ?&heap unsigned char alloc(unsigned long size, unsigned long align);
 
     // Zero and free an object slot (null: no-op).
-    void       dealloc(?&heap void ptr);
+    void       dealloc(?&heap unsigned char ptr);
 
     // Return number of available slots.
     unsigned long available() const;

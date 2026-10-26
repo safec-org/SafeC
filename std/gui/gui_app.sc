@@ -9,7 +9,6 @@
 #include <std/gui/gui_app.h>
 #include <std/mem.h>
 #include <std/collections/vec.h>
-extern void* memset(void* ptr, int val, size_t n);
 
 namespace std {
 
@@ -34,7 +33,7 @@ static ?&GuiAppWindow __gui_app_rec(const &GuiApp app, const &GuiWindow win) {
     unsigned long i = 0UL;
     while (i < app.windows.len) {
         &GuiAppWindow r = *app.windows.at(i);
-        unsafe { if ((const void*)r.win == (const void*)win) { return r; } }
+        unsafe { if ((const unsigned char*)r.win == (const unsigned char*)win) { return r; } }
         i = i + 1UL;
     }
     return null;
@@ -77,7 +76,7 @@ void GuiApp::close_window(&GuiWindow win) {
     while (i < self.windows.len) {
         &GuiAppWindow r = *self.windows.at(i);
         int same = 0;
-        unsafe { same = ((void*)r.win == (void*)win) ? 1 : 0; }
+        unsafe { same = ((const unsigned char*)r.win == (const unsigned char*)win) ? 1 : 0; }
         if (same) {
             self.windows.remove(i);
             match (r.ui) { case some(ui): { ui.free(); } case null: { } }

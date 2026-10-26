@@ -18,7 +18,7 @@
 // site targeting ThreadBackend::Hook transparently uses it.
 //
 // A spawned function is expected to follow TaskScheduler's own yield
-// protocol ('int(void* arg, int resume_point)', see task.h) rather than
+// protocol ('int(?&Erased arg, int resume_point)', see task.h) rather than
 // run to completion in one call — there's no OS thread underneath to
 // preempt it, so a function that never yields blocks the whole cooperative
 // scheduler (including whichever task called __safec_thread_join on it).
@@ -33,16 +33,16 @@
 // compiler emits calls to.
 
 namespace std {
-// The compiler's spawn hands over an untyped C function and argument.
-static int bare_spawn_(&TaskScheduler s, void* func, void* arg) {
-    unsafe { return s.spawn_raw_((fn int(?&Erased, int))func, (?&Erased)arg); }
+// The compiler's spawn hands over the task function and its argument, erased.
+static int bare_spawn_(&TaskScheduler s, fn int(?&Erased, int) func, ?&Erased arg) {
+    return s.spawn_raw_(func, arg);
 }
 } // namespace std
 
 static struct TaskScheduler __safec_bare_sched_;
 static int __safec_bare_sched_ready_ = 0;
 
-long long __safec_thread_create(void* func, void* arg) {
+long long __safec_thread_create(fn int(?&Erased, int) func, ?&Erased arg) {
     if (__safec_bare_sched_ready_ == 0) {
         __safec_bare_sched_ = std::TaskScheduler::new();
         __safec_bare_sched_ready_ = 1;

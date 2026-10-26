@@ -433,7 +433,7 @@ defer free(buf);
 // both run in LIFO order at function exit
 ```
 
-`?&heap int p = malloc_defer(64UL);` is sugar for an allocation plus a matching `defer` free in one statement — `malloc_defer` isn't a real callable (nothing to look up or link), it's recognized only as a variable declaration's initializer and expands at parse time to `std::alloc_raw_(n)` (the type-erased allocator behind the generic `std::alloc`) and `defer std::dealloc_raw_(p);`. The result is a raw `void*`, so declare it as `auto`/`void*` or as a nullable heap reference (`?&heap T`).
+`?&heap int p = malloc_defer(64UL);` is sugar for an allocation plus a matching `defer` free in one statement — `malloc_defer` isn't a real callable (nothing to look up or link), it's recognized only as a variable declaration's initializer and expands at parse time to `std::alloc(n)` (the generic allocator, `T` taken from the declared type) and `defer std::dealloc(p);`; with `auto` (no type to take `T` from) it is the type-erased `std::alloc_raw_(n)` / `std::dealloc_raw_(p)` pair, and `p` is a byte pointer (`unsigned char*`).
 
 ### Concurrency
 

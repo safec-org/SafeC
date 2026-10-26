@@ -45,7 +45,7 @@ int gui_headless_requested() {
 static int __hl_create(&GuiWindowState st, const &GuiWindowOptions opts) {
     unsafe {
         struct GuiHeadlessWin* w = (struct GuiHeadlessWin*)alloc_zeroed_raw_(sizeof(struct GuiHeadlessWin));
-        st.native = (void*)w;
+        st.native = (?&Erased)w;
     }
     st.key = gHeadlessNextKey;
     gHeadlessNextKey = gHeadlessNextKey + 1ULL;

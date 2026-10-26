@@ -11,7 +11,7 @@ namespace std {
 // ── Row LayerNorm ────────────────────────────────────────────────────────────
 // The output's rows are xhat; the backward pass needs 1/sigma per row,
 // kept in an aux parent ([rows]).
-static void norm_ln_backward_(void* selfPtr) {
+static void norm_ln_backward_(&FloatTensor selfPtr) {
     unsafe {
         FloatTensor* s = (FloatTensor*)selfPtr;
         FloatTensor* x = __tensor_parent(s, 0UL);
@@ -47,7 +47,7 @@ static void norm_ln_backward_(void* selfPtr) {
 
 &FloatTensor FloatTensor::layer_norm(float eps) const {
     match (tdev_layer_norm_(self, eps)) { case some(o): { return o; } case null: { } }
-    unsafe { tensor_host_raw_((void*)self); }
+    unsafe { tensor_host_raw_((FloatTensor*)self); }
     unsigned long n; unsigned long rows;
     unsafe { n = self->shape[self->ndim - 1UL]; rows = self->size / n; }
     &FloatTensor out = __tensor_alloc_uninit_like(self);
@@ -70,13 +70,13 @@ static void norm_ln_backward_(void* selfPtr) {
             r = r + 1UL;
         }
     }
-    __tensor_link2(out, self, inv, (void*)norm_ln_backward_);
+    __tensor_link2(out, self, inv, norm_ln_backward_);
     unsafe {
         // not in a graph: release the aux now (an arena's goes with its reset)
         if (!out->requiresGrad) {
             match (inv->owner) {
                 case some(ar): { }
-                case null: { inv->free(); free((void*)inv); }
+                case null: { inv->free(); free((unsigned char*)inv); }
             }
         }
     }
@@ -84,7 +84,7 @@ static void norm_ln_backward_(void* selfPtr) {
 }
 
 // ── Row-broadcast multiply ───────────────────────────────────────────────────
-static void norm_mul_row_backward_(void* selfPtr) {
+static void norm_mul_row_backward_(&FloatTensor selfPtr) {
     unsafe {
         FloatTensor* s = (FloatTensor*)selfPtr;
         FloatTensor* x = __tensor_parent(s, 0UL);
@@ -109,14 +109,14 @@ static void norm_mul_row_backward_(void* selfPtr) {
 
 &FloatTensor tensor_mul_row(const &FloatTensor x, const &FloatTensor g) {
     match (tdev_mul_row_(x, g)) { case some(o): { return o; } case null: { } }
-    unsafe { tensor_host_raw_((void*)x); tensor_host_raw_((void*)g); }
+    unsafe { tensor_host_raw_((FloatTensor*)x); tensor_host_raw_((FloatTensor*)g); }
     &FloatTensor out = __tensor_alloc_uninit_like(x);
     unsafe {
         unsigned long n = g->size;
         unsigned long i = 0UL;
         while (i < x->size) { out->data[i] = x->data[i] * g->data[i % n]; i = i + 1UL; }
     }
-    __tensor_link2(out, x, g, (void*)norm_mul_row_backward_);
+    __tensor_link2(out, x, g, norm_mul_row_backward_);
     return out;
 }
 
@@ -139,7 +139,7 @@ static void norm_drop_(&FloatTensor t) {
     // A heap tensor: destroyed in place through the reference, then its
     // memory released (a Box the checker can't see).
     unsafe { t->free(); }
-    unsafe { free((void*)t); }
+    unsafe { free((unsigned char*)t); }
 }
 
 struct LayerNorm LayerNorm::new(unsigned long dim) {

@@ -8,31 +8,35 @@
 
 namespace std {
 
+// HCERTSTORE, CERT_INFO and the crypto provider (always null), opaque.
+struct TlsWinStore_ { char opaque_; };
+struct TlsWinCertInfo_ { char opaque_; };
+struct TlsWinProv_ { char opaque_; };
+
 // CERT_CONTEXT: { DWORD dwCertEncodingType; BYTE* pbCertEncoded;
 // DWORD cbCertEncoded; PCERT_INFO pCertInfo; HCERTSTORE hCertStore; }
 struct TlsWinCertCtx_ {
-    unsigned int   encoding;
-    unsigned char* data;
-    unsigned int   len;
-    void*          info;
-    void*          store;
+    unsigned int     encoding;
+    unsigned char*   data;
+    unsigned int     len;
+    TlsWinCertInfo_* info;
+    TlsWinStore_*    store;
 };
 
-extern void* CertOpenSystemStoreA(void* prov, const char* name);
-extern void* CertEnumCertificatesInStore(void* store, void* prev);
-extern int   CertCloseStore(void* store, unsigned int flags);
+extern TlsWinStore_* CertOpenSystemStoreA(TlsWinProv_* prov, const char* name);
+extern TlsWinCertCtx_* CertEnumCertificatesInStore(TlsWinStore_* store, TlsWinCertCtx_* prev);
+extern int   CertCloseStore(TlsWinStore_* store, unsigned int flags);
 
 void tls_system_roots_(&TlsTrust_ out) {
     unsafe {
-        void* store = CertOpenSystemStoreA((void*)0, "ROOT");
-        if (store == (void*)0) { return; }
-        void* ctx = CertEnumCertificatesInStore(store, (void*)0);
-        while (ctx != (void*)0) {
-            struct TlsWinCertCtx_* c = (struct TlsWinCertCtx_*)ctx;
+        TlsWinStore_* store = CertOpenSystemStoreA((TlsWinProv_*)0, "ROOT");
+        if (store == (TlsWinStore_*)0) { return; }
+        TlsWinCertCtx_* c = CertEnumCertificatesInStore(store, (TlsWinCertCtx_*)0);
+        while (c != (TlsWinCertCtx_*)0) {
             if (c->data != (unsigned char*)0 && c->len > 0U) {
                 tls_trust_add_der_(out, (const &unsigned char)c->data, (unsigned long)c->len);
             }
-            ctx = CertEnumCertificatesInStore(store, ctx);
+            c = CertEnumCertificatesInStore(store, c);
         }
         CertCloseStore(store, 0U);
     }

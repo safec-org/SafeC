@@ -265,7 +265,7 @@ void BST::foreach_inorder(fn void(const &K, &V) func) {
                                         case null: walking = 0;
                                         case some(r): {
                                             int back = 0;
-                                            unsafe { back = (void*)r == (void*)n; }
+                                            unsafe { back = (unsigned char*)r == (unsigned char*)n; }
                                             if (back) walking = 0;
                                             else pre = r;
                                         }

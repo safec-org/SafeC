@@ -12,7 +12,8 @@
 // Graphics' own C API, the same technique minimal Cocoa bindings in other
 // languages without a real ObjC bridge use. 'objc_msgSend' is declared
 // once with a generic two-pointer-argument signature and then reinterpret-
-// cast (via 'typedef fn ... Name;' function-pointer types) to whatever
+// cast (via 'typedef fn ... Name;' function-pointer types, one per call
+// shape: receiver and selector, then the message's arguments) to whatever
 // concrete signature a given message send actually needs before calling
 // through it — the real ABI dispatch depends entirely on the argument/
 // return types at the call site, not on how the symbol itself is declared.
@@ -45,91 +46,107 @@
 #include <std/mem.h>
 #include <std/time.h>
 #include <std/collections/string.h>
-extern void* memset(void* ptr, int val, size_t n);
-extern void* memcpy(void* dst, const void* src, size_t n);
 
 namespace std {
 
-extern void* objc_getClass(const char* name);
-extern void* sel_registerName(const char* name);
-extern void* objc_msgSend(void* recv, void* op);
-#if defined(__x86_64__)
-extern void  objc_msgSend_stret(void* recv, void* op);
-#endif
-extern void* objc_allocateClassPair(void* superclass, const char* name, unsigned long extraBytes);
-extern void  objc_registerClassPair(void* cls);
-extern int   class_addMethod(void* cls, void* sel, void* imp, const char* types);
-extern void* objc_autoreleasePoolPush();
-extern void  objc_autoreleasePoolPop(void* pool);
+// Opaque Objective-C runtime types: an object ('id'; a Class is one too,
+// and is messaged as one), a selector (SEL), an autorelease pool token.
+// A method implementation (IMP) is registered untyped and cast from its
+// real signature (the receiver, the selector, then the arguments).
+struct ObjcId_   { char opaque_; };
+struct ObjcSel_  { char opaque_; };
+struct ObjcPool_ { char opaque_; };
+typedef fn void() ObjcImp_;
+// Core Graphics' opaque types.
+struct CGColorSpace_  { char opaque_; };
+struct CGDataProvider_ { char opaque_; };
+struct CGImage_       { char opaque_; };
+struct CGContext_     { char opaque_; };
+// CGDataProviderReleaseDataCallback: 'info' and 'data' are the copied bytes.
+typedef fn void(unsigned char*, const unsigned char*, unsigned long) CGReleaseData_;
 
-extern void* CGColorSpaceCreateDeviceRGB();
-extern void* CGDataProviderCreateWithData(void* info, const void* data, unsigned long size, void* releaseFunc);
-extern void* CGImageCreate(unsigned long width, unsigned long height, unsigned long bitsPerComponent,
-                            unsigned long bitsPerPixel, unsigned long bytesPerRow, void* space,
-                            unsigned int bitmapInfo, void* provider, const double* decode,
-                            int shouldInterpolate, int intent);
-extern void  CGImageRelease(void* image);
-extern void  CGColorSpaceRelease(void* space);
-extern void  CGDataProviderRelease(void* provider);
+extern ObjcId_*  objc_getClass(const char* name);
+extern ObjcSel_* sel_registerName(const char* name);
+extern ObjcId_*  objc_msgSend(ObjcId_* recv, ObjcSel_* op);
+#if defined(__x86_64__)
+extern void      objc_msgSend_stret(ObjcId_* recv, ObjcSel_* op);
+#endif
+extern ObjcId_*  objc_allocateClassPair(ObjcId_* superclass, const char* name, unsigned long extraBytes);
+extern void      objc_registerClassPair(ObjcId_* cls);
+extern int       class_addMethod(ObjcId_* cls, ObjcSel_* sel, ObjcImp_ imp, const char* types);
+extern ObjcPool_* objc_autoreleasePoolPush();
+extern void      objc_autoreleasePoolPop(ObjcPool_* pool);
+
+extern CGColorSpace_* CGColorSpaceCreateDeviceRGB();
+extern CGDataProvider_* CGDataProviderCreateWithData(unsigned char* info, const unsigned char* data, unsigned long size,
+                                                     CGReleaseData_ releaseFunc);
+extern CGImage_* CGImageCreate(unsigned long width, unsigned long height, unsigned long bitsPerComponent,
+                               unsigned long bitsPerPixel, unsigned long bytesPerRow, CGColorSpace_* space,
+                               unsigned int bitmapInfo, CGDataProvider_* provider, const double* decode,
+                               int shouldInterpolate, int intent);
+extern void  CGImageRelease(CGImage_* image);
+extern void  CGColorSpaceRelease(CGColorSpace_* space);
+extern void  CGDataProviderRelease(CGDataProvider_* provider);
 
 struct NSRect { double x; double y; double w; double h; };
 struct NSPoint { double x; double y; };
 struct NSSize { double w; double h; };
 
-typedef fn void*(void*, void*) MsgSend0;
-typedef fn void*(void*, void*, void*) MsgSend1;
-typedef fn void*(void*, void*, unsigned long) MsgSendULong;
-typedef fn void*(void*, void*, long) MsgSendLong;
-typedef fn void*(void*, void*, int) MsgSendInt;
-typedef fn void*(void*, void*, double) MsgSendDoubleArg;
-typedef fn void*(void*, void*, struct NSRect, unsigned long, unsigned long, int) MsgSendInitRect;
-typedef fn void(void*, void*, struct NSSize) MsgSendSize;
-typedef fn void(void*, void*, struct NSPoint) MsgSendPointArg;
-typedef fn struct NSPoint(void*, void*) MsgSendPoint;
-typedef fn struct NSRect(void*, void*) MsgSendRect;
-typedef fn struct NSRect(void*, void*, struct NSRect) MsgSendRectRect;
-typedef fn unsigned long(void*, void*) MsgSendRetULong;
-typedef fn long(void*, void*) MsgSendRetLong;
-typedef fn unsigned short(void*, void*) MsgSendRetUShort;
-typedef fn signed char(void*, void*) MsgSendRetBool;
-typedef fn void(void*, void*, void*) MsgSendVoid1;
-typedef fn void(void*, void*) MsgSendVoid0;
-typedef fn void(void*, void*, void*, int) MsgSendVoid1Int;
-typedef fn signed char(void*, void*, void*, void*) MsgSendBool2;
-typedef fn void*(void*, void*, unsigned long, void*, void*, int) MsgSendNextEvent;
-typedef fn double(void*, void*) MsgSendDouble;
-typedef fn void*(void*, void*, unsigned long, struct NSPoint, unsigned long, double, long, void*,
-                 short, long, long) MsgSendOtherEvent;
+typedef fn ObjcId_*(ObjcId_*, ObjcSel_*) MsgSend0;
+typedef fn ObjcId_*(ObjcId_*, ObjcSel_*, ObjcId_*) MsgSend1;
+typedef fn ObjcId_*(ObjcId_*, ObjcSel_*, unsigned long) MsgSendULong;
+typedef fn ObjcId_*(ObjcId_*, ObjcSel_*, long) MsgSendLong;
+typedef fn ObjcId_*(ObjcId_*, ObjcSel_*, int) MsgSendInt;
+typedef fn ObjcId_*(ObjcId_*, ObjcSel_*, double) MsgSendDoubleArg;
+typedef fn ObjcId_*(ObjcId_*, ObjcSel_*, struct NSRect, unsigned long, unsigned long, int) MsgSendInitRect;
+typedef fn void(ObjcId_*, ObjcSel_*, struct NSSize) MsgSendSize;
+typedef fn void(ObjcId_*, ObjcSel_*, struct NSPoint) MsgSendPointArg;
+typedef fn struct NSPoint(ObjcId_*, ObjcSel_*) MsgSendPoint;
+typedef fn struct NSRect(ObjcId_*, ObjcSel_*) MsgSendRect;
+typedef fn struct NSRect(ObjcId_*, ObjcSel_*, struct NSRect) MsgSendRectRect;
+typedef fn unsigned long(ObjcId_*, ObjcSel_*) MsgSendRetULong;
+typedef fn long(ObjcId_*, ObjcSel_*) MsgSendRetLong;
+typedef fn unsigned short(ObjcId_*, ObjcSel_*) MsgSendRetUShort;
+typedef fn signed char(ObjcId_*, ObjcSel_*) MsgSendRetBool;
+typedef fn void(ObjcId_*, ObjcSel_*, ObjcId_*) MsgSendVoid1;
+typedef fn ObjcId_*(ObjcId_*, ObjcSel_*, const char*) MsgSendStr;
+typedef fn const char*(ObjcId_*, ObjcSel_*) MsgSendRetStr;
+typedef fn void(ObjcId_*, ObjcSel_*) MsgSendVoid0;
+typedef fn void(ObjcId_*, ObjcSel_*, ObjcId_*, int) MsgSendVoid1Int;
+typedef fn signed char(ObjcId_*, ObjcSel_*, ObjcId_*, ObjcId_*) MsgSendBool2;
+typedef fn ObjcId_*(ObjcId_*, ObjcSel_*, unsigned long, ObjcId_*, ObjcId_*, int) MsgSendNextEvent;
+typedef fn double(ObjcId_*, ObjcSel_*) MsgSendDouble;
+typedef fn ObjcId_*(ObjcId_*, ObjcSel_*, unsigned long, struct NSPoint, unsigned long, double, long, ObjcId_*, short, long, long) MsgSendOtherEvent;
 
 // ── one-time class/selector/app setup ───────────────────────────────────────
 
 struct GuiCocoaWindow {
-    void* window;       // NSWindow*
-    void* view;         // its content view
-    void* delegate;     // SafeCWindowDelegate instance
+    ObjcId_* window;       // NSWindow*
+    ObjcId_* view;         // its content view
+    ObjcId_* delegate;     // SafeCWindowDelegate instance
 };
 
 static int   gInited = 0;
-static void* gNSApp;
-static void* gDelegateClass;
-static void* gDefaultMode;
-static void* gPasteType;
+static ObjcId_* gNSApp;
+static ObjcId_* gDelegateClass;
+static ObjcId_* gDefaultMode;
+static ObjcId_* gPasteType;
 static int   gCursorHidden = 0;
 static struct GuiBackend gCocoaBackend;
 static int gCocoaBackendInit = 0;
 
-static void* __gui_cocoa_sel(const char* name) {
+static ObjcSel_* __gui_cocoa_sel(const char* name) {
     unsafe { return sel_registerName(name); }
 }
 
-static void* __gui_cocoa_str(const char* utf8) {
+static ObjcId_* __gui_cocoa_str(const char* utf8) {
     unsafe {
-        MsgSend1 strMsg = (MsgSend1)objc_msgSend;
-        return strMsg(objc_getClass("NSString"), __gui_cocoa_sel("stringWithUTF8String:"), (void*)utf8);
+        MsgSendStr strMsg = (MsgSendStr)objc_msgSend;
+        return strMsg(objc_getClass("NSString"), __gui_cocoa_sel("stringWithUTF8String:"), utf8);
     }
 }
 
-static struct NSRect __gui_cocoa_rect(void* obj, const char* sel) {
+static struct NSRect __gui_cocoa_rect(ObjcId_* obj, const char* sel) {
     unsafe {
 #if defined(__x86_64__)
         MsgSendRect m = (MsgSendRect)objc_msgSend_stret;
@@ -143,18 +160,18 @@ static struct NSRect __gui_cocoa_rect(void* obj, const char* sel) {
 static double __gui_cocoa_screen_height() {
     unsafe {
         MsgSend0 m = (MsgSend0)objc_msgSend;
-        void* screen = m(objc_getClass("NSScreen"), __gui_cocoa_sel("mainScreen"));
-        if (screen == (void*)0) { return 0.0; }
+        ObjcId_* screen = m(objc_getClass("NSScreen"), __gui_cocoa_sel("mainScreen"));
+        if (screen == null) { return 0.0; }
         struct NSRect r = __gui_cocoa_rect(screen, "frame");
         return r.h;
     }
 }
 
-static ?&GuiWindowState __gui_cocoa_find(void* nsWindow) {
+static ?&GuiWindowState __gui_cocoa_find(ObjcId_* nsWindow) {
     unsafe { return gui_backend_find((unsigned long long)(unsigned long)nsWindow); }
 }
 
-static void* __gui_cocoa_notif_window(void* notif) {
+static ObjcId_* __gui_cocoa_notif_window(ObjcId_* notif) {
     unsafe {
         MsgSend0 m = (MsgSend0)objc_msgSend;
         return m(notif, __gui_cocoa_sel("object"));
@@ -206,7 +223,7 @@ static void __gui_cocoa_update_geometry(struct GuiWindowState* st, int postEvent
     }
 }
 
-signed char __gui_cocoa_window_should_close(void* recv, void* cmd, void* sender) {
+signed char __gui_cocoa_window_should_close(ObjcId_* recv, ObjcSel_* cmd, ObjcId_* sender) {
     ?&GuiWindowState ost = __gui_cocoa_find(sender);
     unsafe {
         if (!ost.is_null()) { gui_backend_post((struct GuiWindowState*)ost, GuiEvent::new(GUI_EVENT_CLOSE)); }
@@ -214,17 +231,17 @@ signed char __gui_cocoa_window_should_close(void* recv, void* cmd, void* sender)
     return (signed char)0;   // NO: the application closes it (GuiWindow::destroy)
 }
 
-void __gui_cocoa_window_did_resize(void* recv, void* cmd, void* notif) {
+void __gui_cocoa_window_did_resize(ObjcId_* recv, ObjcSel_* cmd, ObjcId_* notif) {
     ?&GuiWindowState ost = __gui_cocoa_find(__gui_cocoa_notif_window(notif));
     unsafe { if (!ost.is_null()) { __gui_cocoa_update_geometry((struct GuiWindowState*)ost, 1); } }
 }
 
-void __gui_cocoa_window_did_move(void* recv, void* cmd, void* notif) {
+void __gui_cocoa_window_did_move(ObjcId_* recv, ObjcSel_* cmd, ObjcId_* notif) {
     ?&GuiWindowState ost = __gui_cocoa_find(__gui_cocoa_notif_window(notif));
     unsafe { if (!ost.is_null()) { __gui_cocoa_update_geometry((struct GuiWindowState*)ost, 1); } }
 }
 
-void __gui_cocoa_window_did_become_key(void* recv, void* cmd, void* notif) {
+void __gui_cocoa_window_did_become_key(ObjcId_* recv, ObjcSel_* cmd, ObjcId_* notif) {
     ?&GuiWindowState ost = __gui_cocoa_find(__gui_cocoa_notif_window(notif));
     unsafe {
         if (ost.is_null()) { return; }
@@ -236,7 +253,7 @@ void __gui_cocoa_window_did_become_key(void* recv, void* cmd, void* notif) {
     }
 }
 
-void __gui_cocoa_window_did_resign_key(void* recv, void* cmd, void* notif) {
+void __gui_cocoa_window_did_resign_key(ObjcId_* recv, ObjcSel_* cmd, ObjcId_* notif) {
     ?&GuiWindowState ost = __gui_cocoa_find(__gui_cocoa_notif_window(notif));
     unsafe {
         if (ost.is_null()) { return; }
@@ -248,7 +265,7 @@ void __gui_cocoa_window_did_resign_key(void* recv, void* cmd, void* notif) {
     }
 }
 
-void __gui_cocoa_window_did_change_backing(void* recv, void* cmd, void* notif) {
+void __gui_cocoa_window_did_change_backing(ObjcId_* recv, ObjcSel_* cmd, ObjcId_* notif) {
     ?&GuiWindowState ost = __gui_cocoa_find(__gui_cocoa_notif_window(notif));
     unsafe {
         if (ost.is_null()) { return; }
@@ -271,8 +288,8 @@ void __gui_cocoa_window_did_change_backing(void* recv, void* cmd, void* notif) {
 static int __gui_cocoa_init() {
     if (gInited) { return 1; }
     unsafe {
-        void* appCls = objc_getClass("NSApplication");
-        if (appCls == (void*)0) { return 0; }
+        ObjcId_* appCls = objc_getClass("NSApplication");
+        if (appCls == null) { return 0; }
         MsgSend0 sharedApp = (MsgSend0)objc_msgSend;
         gNSApp = sharedApp(appCls, __gui_cocoa_sel("sharedApplication"));
 
@@ -286,21 +303,21 @@ static int __gui_cocoa_init() {
         MsgSendInt activate = (MsgSendInt)objc_msgSend;
         activate(gNSApp, __gui_cocoa_sel("activateIgnoringOtherApps:"), 1);
 
-        void* nsObjectCls = objc_getClass("NSObject");
+        ObjcId_* nsObjectCls = objc_getClass("NSObject");
         gDelegateClass = objc_allocateClassPair(nsObjectCls, "SafeCWindowDelegate", 0UL);
-        if (gDelegateClass != (void*)0) {
+        if (gDelegateClass != null) {
             class_addMethod(gDelegateClass, __gui_cocoa_sel("windowShouldClose:"),
-                            (void*)__gui_cocoa_window_should_close, "c@:@");
+                            (ObjcImp_)__gui_cocoa_window_should_close, "c@:@");
             class_addMethod(gDelegateClass, __gui_cocoa_sel("windowDidResize:"),
-                            (void*)__gui_cocoa_window_did_resize, "v@:@");
+                            (ObjcImp_)__gui_cocoa_window_did_resize, "v@:@");
             class_addMethod(gDelegateClass, __gui_cocoa_sel("windowDidMove:"),
-                            (void*)__gui_cocoa_window_did_move, "v@:@");
+                            (ObjcImp_)__gui_cocoa_window_did_move, "v@:@");
             class_addMethod(gDelegateClass, __gui_cocoa_sel("windowDidBecomeKey:"),
-                            (void*)__gui_cocoa_window_did_become_key, "v@:@");
+                            (ObjcImp_)__gui_cocoa_window_did_become_key, "v@:@");
             class_addMethod(gDelegateClass, __gui_cocoa_sel("windowDidResignKey:"),
-                            (void*)__gui_cocoa_window_did_resign_key, "v@:@");
+                            (ObjcImp_)__gui_cocoa_window_did_resign_key, "v@:@");
             class_addMethod(gDelegateClass, __gui_cocoa_sel("windowDidChangeBackingProperties:"),
-                            (void*)__gui_cocoa_window_did_change_backing, "v@:@");
+                            (ObjcImp_)__gui_cocoa_window_did_change_backing, "v@:@");
             objc_registerClassPair(gDelegateClass);
         } else {
             gDelegateClass = objc_getClass("SafeCWindowDelegate");   // registered earlier in this process
@@ -335,10 +352,10 @@ static void __gui_cocoa_apply_limits(&GuiWindowState st) {
 
 static int __gui_cocoa_create(&GuiWindowState st, const &GuiWindowOptions opts) {
     unsafe {
-        void* pool = objc_autoreleasePoolPush();
-        void* winCls = objc_getClass("NSWindow");
+        ObjcPool_* pool = objc_autoreleasePoolPush();
+        ObjcId_* winCls = objc_getClass("NSWindow");
         MsgSend0 allocMsg = (MsgSend0)objc_msgSend;
-        void* winAlloc = allocMsg(winCls, __gui_cocoa_sel("alloc"));
+        ObjcId_* winAlloc = allocMsg(winCls, __gui_cocoa_sel("alloc"));
 
         double sh = __gui_cocoa_screen_height();
         struct NSRect rect;
@@ -353,9 +370,9 @@ static int __gui_cocoa_create(&GuiWindowState st, const &GuiWindowOptions opts) 
             if (opts.resizable) { style = style | 8UL; }
         }
         MsgSendInitRect initMsg = (MsgSendInitRect)objc_msgSend;
-        void* nsWin = initMsg(winAlloc, __gui_cocoa_sel("initWithContentRect:styleMask:backing:defer:"),
+        ObjcId_* nsWin = initMsg(winAlloc, __gui_cocoa_sel("initWithContentRect:styleMask:backing:defer:"),
                               rect, style, 2UL, 0);
-        if (nsWin == (void*)0) { objc_autoreleasePoolPop(pool); return 0; }
+        if (nsWin == null) { objc_autoreleasePoolPop(pool); return 0; }
 
         // We own the window (GuiWindow::destroy releases it); AppKit must
         // not release it again when it closes.
@@ -378,7 +395,7 @@ static int __gui_cocoa_create(&GuiWindowState st, const &GuiWindowOptions opts) 
 
         // Delegate (close/resize/move/focus/scale).
         MsgSend0 delAlloc = (MsgSend0)objc_msgSend;
-        void* delInstance = delAlloc(gDelegateClass, __gui_cocoa_sel("alloc"));
+        ObjcId_* delInstance = delAlloc(gDelegateClass, __gui_cocoa_sel("alloc"));
         MsgSend0 delInit = (MsgSend0)objc_msgSend;
         delInstance = delInit(delInstance, __gui_cocoa_sel("init"));
         MsgSendVoid1 setDelegate = (MsgSendVoid1)objc_msgSend;
@@ -386,7 +403,7 @@ static int __gui_cocoa_create(&GuiWindowState st, const &GuiWindowOptions opts) 
 
         // Layer-backed content view, for CGImage-based presentation.
         MsgSend0 contentView = (MsgSend0)objc_msgSend;
-        void* view = contentView(nsWin, __gui_cocoa_sel("contentView"));
+        ObjcId_* view = contentView(nsWin, __gui_cocoa_sel("contentView"));
         MsgSendInt setWantsLayer = (MsgSendInt)objc_msgSend;
         setWantsLayer(view, __gui_cocoa_sel("setWantsLayer:"), 1);
 
@@ -394,7 +411,7 @@ static int __gui_cocoa_create(&GuiWindowState st, const &GuiWindowOptions opts) 
         w->window = nsWin;
         w->view = view;
         w->delegate = delInstance;
-        st.native = (void*)w;
+        st.native = (?&Erased)w;
         st.key = (unsigned long long)(unsigned long)nsWin;
 
         st.scale = 1.0;
@@ -406,8 +423,8 @@ static int __gui_cocoa_create(&GuiWindowState st, const &GuiWindowOptions opts) 
         st.pixelW = (int)((double)st.logicalW * st.scale + 0.5);
         st.pixelH = (int)((double)st.logicalH * st.scale + 0.5);
         MsgSend0 layerMsg = (MsgSend0)objc_msgSend;
-        void* layer = layerMsg(view, __gui_cocoa_sel("layer"));
-        if (layer != (void*)0) {
+        ObjcId_* layer = layerMsg(view, __gui_cocoa_sel("layer"));
+        if (layer != null) {
             MsgSendDoubleArg setScale = (MsgSendDoubleArg)objc_msgSend;
             setScale(layer, __gui_cocoa_sel("setContentsScale:"), st.scale);
         }
@@ -424,7 +441,7 @@ static int __gui_cocoa_create(&GuiWindowState st, const &GuiWindowOptions opts) 
 
         if (opts.visible) {
             MsgSendVoid1 orderFront = (MsgSendVoid1)objc_msgSend;
-            orderFront(nsWin, __gui_cocoa_sel("makeKeyAndOrderFront:"), (void*)0);
+            orderFront(nsWin, __gui_cocoa_sel("makeKeyAndOrderFront:"), null);
         }
         objc_autoreleasePoolPop(pool);
         return 1;
@@ -436,7 +453,7 @@ static void __gui_cocoa_destroy(&GuiWindowState st) {
         struct GuiCocoaWindow* w = (struct GuiCocoaWindow*)st.native;
         if (w == (struct GuiCocoaWindow*)0) { return; }
         MsgSendVoid1 setDelegate = (MsgSendVoid1)objc_msgSend;
-        setDelegate(w->window, __gui_cocoa_sel("setDelegate:"), (void*)0);
+        setDelegate(w->window, __gui_cocoa_sel("setDelegate:"), null);
         MsgSendVoid0 closeMsg = (MsgSendVoid0)objc_msgSend;
         closeMsg(w->window, __gui_cocoa_sel("close"));
         MsgSendVoid0 releaseMsg = (MsgSendVoid0)objc_msgSend;
@@ -450,8 +467,8 @@ static void __gui_cocoa_destroy(&GuiWindowState st) {
 // ── presentation ─────────────────────────────────────────────────────────────
 
 // CGDataProviderReleaseDataCallback: frees the copy made for one present.
-void __gui_cocoa_release_pixels(void* info, const void* data, unsigned long size) {
-    unsafe { dealloc_raw_(info); }
+void __gui_cocoa_release_pixels(unsigned char* info, const unsigned char* data, unsigned long size) {
+    unsafe { dealloc(info); }
 }
 
 static void __gui_cocoa_present(&GuiWindowState st, const &unsigned char px, int bw, int bh,
@@ -459,28 +476,28 @@ static void __gui_cocoa_present(&GuiWindowState st, const &unsigned char px, int
     unsafe {
         struct GuiCocoaWindow* w = (struct GuiCocoaWindow*)st.native;
         if (w == (struct GuiCocoaWindow*)0) { return; }
-        void* pool = objc_autoreleasePoolPush();
+        ObjcPool_* pool = objc_autoreleasePoolPush();
         MsgSend0 layerMsg = (MsgSend0)objc_msgSend;
-        void* layer = layerMsg(w->view, __gui_cocoa_sel("layer"));
-        if (layer == (void*)0) { objc_autoreleasePoolPop(pool); return; }
+        ObjcId_* layer = layerMsg(w->view, __gui_cocoa_sel("layer"));
+        if (layer == null) { objc_autoreleasePoolPop(pool); return; }
 
         // The layer keeps reading its contents after this returns, and the
         // window's buffer is reallocated on resize: hand it a copy, freed
         // by the data provider's release callback.
         unsigned long rowBytes = (unsigned long)bw * 4UL;
         unsigned long total = rowBytes * (unsigned long)bh;
-        void* copy = alloc_raw_(total);
-        if (copy == (void*)0) { objc_autoreleasePoolPop(pool); return; }
-        memcpy(copy, (const void*)px, total);
-        void* space = CGColorSpaceCreateDeviceRGB();
-        void* provider = CGDataProviderCreateWithData(copy, (const void*)copy, total,
-                                                      (void*)__gui_cocoa_release_pixels);
+        unsigned char* copy = (unsigned char*)alloc_raw_(total);
+        if (copy == null) { objc_autoreleasePoolPop(pool); return; }
+        safe_memcpy(copy[0..total], ((const unsigned char*)px)[0..total]);
+        CGColorSpace_* space = CGColorSpaceCreateDeviceRGB();
+        CGDataProvider_* provider = CGDataProviderCreateWithData(copy, (const unsigned char*)copy, total,
+                                                                 __gui_cocoa_release_pixels);
         // bitmapInfo = kCGImageAlphaPremultipliedLast (1)
-        void* image = CGImageCreate((unsigned long)bw, (unsigned long)bh, 8UL, 32UL,
+        CGImage_* image = CGImageCreate((unsigned long)bw, (unsigned long)bh, 8UL, 32UL,
                                     rowBytes, space, 1U, provider, (const double*)0, 0, 0);
 
         MsgSendVoid1 setContents = (MsgSendVoid1)objc_msgSend;
-        setContents(layer, __gui_cocoa_sel("setContents:"), image);
+        setContents(layer, __gui_cocoa_sel("setContents:"), (ObjcId_*)image);   // a CGImageRef is a CF object
 
         CGImageRelease(image);
         CGDataProviderRelease(provider);
@@ -495,7 +512,7 @@ static void __gui_cocoa_set_title(&GuiWindowState st, const &char title) {
     unsafe {
         struct GuiCocoaWindow* w = (struct GuiCocoaWindow*)st.native;
         if (w == (struct GuiCocoaWindow*)0) { return; }
-        void* pool = objc_autoreleasePoolPush();
+        ObjcPool_* pool = objc_autoreleasePoolPush();
         MsgSendVoid1 setTitle = (MsgSendVoid1)objc_msgSend;
         setTitle(w->window, __gui_cocoa_sel("setTitle:"), __gui_cocoa_str(title));
         objc_autoreleasePoolPop(pool);
@@ -534,7 +551,7 @@ static void __gui_cocoa_set_visible(&GuiWindowState st, int v) {
         struct GuiCocoaWindow* w = (struct GuiCocoaWindow*)st.native;
         if (w == (struct GuiCocoaWindow*)0) { return; }
         MsgSendVoid1 m = (MsgSendVoid1)objc_msgSend;
-        m(w->window, __gui_cocoa_sel(v ? "orderFront:" : "orderOut:"), (void*)0);
+        m(w->window, __gui_cocoa_sel(v ? "orderFront:" : "orderOut:"), null);
     }
 }
 
@@ -545,14 +562,14 @@ static void __gui_cocoa_focus(&GuiWindowState st) {
         MsgSendInt activate = (MsgSendInt)objc_msgSend;
         activate(gNSApp, __gui_cocoa_sel("activateIgnoringOtherApps:"), 1);
         MsgSendVoid1 orderFront = (MsgSendVoid1)objc_msgSend;
-        orderFront(w->window, __gui_cocoa_sel("makeKeyAndOrderFront:"), (void*)0);
+        orderFront(w->window, __gui_cocoa_sel("makeKeyAndOrderFront:"), null);
     }
 }
 
 static void __gui_cocoa_apply_cursor(int c) {
     unsafe {
         MsgSend0 m = (MsgSend0)objc_msgSend;
-        void* cls = objc_getClass("NSCursor");
+        ObjcId_* cls = objc_getClass("NSCursor");
         if (c == GUI_CURSOR_HIDDEN) {
             if (!gCursorHidden) {
                 MsgSendVoid0 hide = (MsgSendVoid0)objc_msgSend;
@@ -574,8 +591,8 @@ static void __gui_cocoa_apply_cursor(int c) {
         else if (c == GUI_CURSOR_RESIZE_NS) { name = "resizeUpDownCursor"; }
         else if (c == GUI_CURSOR_MOVE) { name = "openHandCursor"; }
         else if (c == GUI_CURSOR_NOT_ALLOWED) { name = "operationNotAllowedCursor"; }
-        void* cur = m(cls, __gui_cocoa_sel(name));
-        if (cur != (void*)0) {
+        ObjcId_* cur = m(cls, __gui_cocoa_sel(name));
+        if (cur != null) {
             MsgSendVoid0 setMsg = (MsgSendVoid0)objc_msgSend;
             setMsg(cur, __gui_cocoa_sel("set"));
         }
@@ -644,16 +661,16 @@ static int __gui_cocoa_mods(unsigned long flags) {
 }
 
 // Routes one NSEvent; returns 1 if it should also go to [NSApp sendEvent:].
-static int __gui_cocoa_route(void* ev) {
+static int __gui_cocoa_route(ObjcId_* ev) {
     unsafe {
         MsgSendRetULong typeMsg = (MsgSendRetULong)objc_msgSend;
         unsigned long etype = typeMsg(ev, __gui_cocoa_sel("type"));
         int isKey = (etype == 10UL || etype == 11UL || etype == 12UL) ? 1 : 0;
         if (etype == 15UL) { return 0; }                 // our own wake() event
         MsgSend0 winMsg = (MsgSend0)objc_msgSend;
-        void* nsWin = winMsg(ev, __gui_cocoa_sel("window"));
-        if (nsWin == (void*)0 && isKey) { nsWin = winMsg(gNSApp, __gui_cocoa_sel("keyWindow")); }
-        if (nsWin == (void*)0) { return isKey ? 0 : 1; }
+        ObjcId_* nsWin = winMsg(ev, __gui_cocoa_sel("window"));
+        if (nsWin == null && isKey) { nsWin = winMsg(gNSApp, __gui_cocoa_sel("keyWindow")); }
+        if (nsWin == null) { return isKey ? 0 : 1; }
         ?&GuiWindowState ost = __gui_cocoa_find(nsWin);
         if (ost.is_null()) { return isKey ? 0 : 1; }
         struct GuiWindowState* st = (struct GuiWindowState*)ost;
@@ -729,8 +746,8 @@ static int __gui_cocoa_route(void* ev) {
             if (etype == 10UL && (mods & (GUI_MOD_META | GUI_MOD_CTRL)) == 0) {
                 // The typed text: [event characters] (an NSString) as UTF-8.
                 MsgSend0 charsMsg = (MsgSend0)objc_msgSend;
-                void* nsChars = charsMsg(ev, __gui_cocoa_sel("characters"));
-                if (nsChars != (void*)0) {
+                ObjcId_* nsChars = charsMsg(ev, __gui_cocoa_sel("characters"));
+                if (nsChars != null) {
                     MsgSend0 utf8Msg = (MsgSend0)objc_msgSend;
                     const char* s = (const char*)utf8Msg(nsChars, __gui_cocoa_sel("UTF8String"));
                     if (s != (const char*)0) {
@@ -763,14 +780,14 @@ static int __gui_cocoa_route(void* ev) {
 static int __gui_cocoa_pump(int timeoutMs) {
     int any = 0;
     unsafe {
-        void* pool = objc_autoreleasePoolPush();
+        ObjcPool_* pool = objc_autoreleasePoolPush();
         MsgSend0 dateMsg = (MsgSend0)objc_msgSend;
-        void* dateCls = objc_getClass("NSDate");
+        ObjcId_* dateCls = objc_getClass("NSDate");
         MsgSendNextEvent nextEvent = (MsgSendNextEvent)objc_msgSend;
         MsgSendVoid1 sendEvent = (MsgSendVoid1)objc_msgSend;
         int first = 1;
         while (1) {
-            void* until;
+            ObjcId_* until;
             if (first && timeoutMs != 0 && !gui_backend_has_events()) {
                 if (timeoutMs < 0) {
                     until = dateMsg(dateCls, __gui_cocoa_sel("distantFuture"));
@@ -783,9 +800,9 @@ static int __gui_cocoa_pump(int timeoutMs) {
                 until = dateMsg(dateCls, __gui_cocoa_sel("distantPast"));
             }
             first = 0;
-            void* ev = nextEvent(gNSApp, __gui_cocoa_sel("nextEventMatchingMask:untilDate:inMode:dequeue:"),
+            ObjcId_* ev = nextEvent(gNSApp, __gui_cocoa_sel("nextEventMatchingMask:untilDate:inMode:dequeue:"),
                                  0xFFFFFFFFFFFFFFFFUL, until, gDefaultMode, 1);
-            if (ev == (void*)0) { break; }
+            if (ev == null) { break; }
             if (__gui_cocoa_route(ev)) { sendEvent(gNSApp, __gui_cocoa_sel("sendEvent:"), ev); }
             any = 1;
         }
@@ -798,15 +815,15 @@ static int __gui_cocoa_pump(int timeoutMs) {
 
 static void __gui_cocoa_wake() {
     unsafe {
-        void* pool = objc_autoreleasePoolPush();
+        ObjcPool_* pool = objc_autoreleasePoolPush();
         struct NSPoint p;
         p.x = 0.0;
         p.y = 0.0;
         MsgSendOtherEvent other = (MsgSendOtherEvent)objc_msgSend;
-        void* ev = other(objc_getClass("NSEvent"),
+        ObjcId_* ev = other(objc_getClass("NSEvent"),
                          __gui_cocoa_sel("otherEventWithType:location:modifierFlags:timestamp:windowNumber:context:subtype:data1:data2:"),
-                         15UL /* NSEventTypeApplicationDefined */, p, 0UL, 0.0, 0L, (void*)0, (short)0, 0L, 0L);
-        if (ev != (void*)0) {
+                         15UL /* NSEventTypeApplicationDefined */, p, 0UL, 0.0, 0L, null, (short)0, 0L, 0L);
+        if (ev != null) {
             MsgSendVoid1Int post = (MsgSendVoid1Int)objc_msgSend;
             post(gNSApp, __gui_cocoa_sel("postEvent:atStart:"), ev, 0);
         }
@@ -818,17 +835,17 @@ static long long __gui_cocoa_now_ns() { return time_mono_ns(); }
 
 static int __gui_cocoa_clip_set(const &char utf8, unsigned long n) {
     unsafe {
-        void* pool = objc_autoreleasePoolPush();
+        ObjcPool_* pool = objc_autoreleasePoolPush();
         MsgSend0 m = (MsgSend0)objc_msgSend;
-        void* pb = m(objc_getClass("NSPasteboard"), __gui_cocoa_sel("generalPasteboard"));
-        if (pb == (void*)0) { objc_autoreleasePoolPop(pool); return 0; }
+        ObjcId_* pb = m(objc_getClass("NSPasteboard"), __gui_cocoa_sel("generalPasteboard"));
+        if (pb == null) { objc_autoreleasePoolPop(pool); return 0; }
         MsgSendRetLong clearMsg = (MsgSendRetLong)objc_msgSend;
         clearMsg(pb, __gui_cocoa_sel("clearContents"));
         // NUL-terminated copy for stringWithUTF8String:.
         char* z = (char*)alloc_raw_(n + 1UL);
-        memcpy((void*)z, (const void*)utf8, n);
+        safe_memcpy(z[0..n], ((const char*)utf8)[0..n]);
         z[n] = '\0';
-        void* str = __gui_cocoa_str(z);
+        ObjcId_* str = __gui_cocoa_str(z);
         dealloc(z);
         MsgSendBool2 setStr = (MsgSendBool2)objc_msgSend;
         signed char ok = setStr(pb, __gui_cocoa_sel("setString:forType:"), str, gPasteType);
@@ -840,15 +857,16 @@ static int __gui_cocoa_clip_set(const &char utf8, unsigned long n) {
 static int __gui_cocoa_clip_get(&String out) {
     out.clear();
     unsafe {
-        void* pool = objc_autoreleasePoolPush();
+        ObjcPool_* pool = objc_autoreleasePoolPush();
         MsgSend0 m = (MsgSend0)objc_msgSend;
-        void* pb = m(objc_getClass("NSPasteboard"), __gui_cocoa_sel("generalPasteboard"));
+        ObjcId_* pb = m(objc_getClass("NSPasteboard"), __gui_cocoa_sel("generalPasteboard"));
         int ok = 0;
-        if (pb != (void*)0) {
+        if (pb != null) {
             MsgSend1 get = (MsgSend1)objc_msgSend;
-            void* str = get(pb, __gui_cocoa_sel("stringForType:"), gPasteType);
-            if (str != (void*)0) {
-                const char* s = (const char*)m(str, __gui_cocoa_sel("UTF8String"));
+            ObjcId_* str = get(pb, __gui_cocoa_sel("stringForType:"), gPasteType);
+            if (str != null) {
+                MsgSendRetStr utf8Msg = (MsgSendRetStr)objc_msgSend;
+                const char* s = utf8Msg(str, __gui_cocoa_sel("UTF8String"));
                 if (s != (const char*)0) {
                     out.push(s);
                     ok = 1;
@@ -863,8 +881,8 @@ static int __gui_cocoa_clip_get(&String out) {
 static double __gui_cocoa_display_scale() {
     unsafe {
         MsgSend0 m = (MsgSend0)objc_msgSend;
-        void* screen = m(objc_getClass("NSScreen"), __gui_cocoa_sel("mainScreen"));
-        if (screen == (void*)0) { return 1.0; }
+        ObjcId_* screen = m(objc_getClass("NSScreen"), __gui_cocoa_sel("mainScreen"));
+        if (screen == null) { return 1.0; }
         MsgSendDouble scaleMsg = (MsgSendDouble)objc_msgSend;
         double s = scaleMsg(screen, __gui_cocoa_sel("backingScaleFactor"));
         return s > 0.0 ? s : 1.0;
@@ -923,25 +941,25 @@ static &GuiBackend __gui_native_backend() {
 // /System/Library/Fonts). Call this only from code that already branches
 // on '#ifdef __APPLE__'. It stays a free function rather than a GuiWindow
 // method: only this backend defines it.
-extern void* CGBitmapContextCreate(void* data, unsigned long width, unsigned long height,
-                                    unsigned long bitsPerComponent, unsigned long bytesPerRow,
-                                    void* colorSpace, unsigned int bitmapInfo);
-extern void  CGContextRelease(void* ctx);
-extern void  CGContextSetRGBFillColor(void* ctx, double r, double g, double b, double a);
-extern void  CGContextSelectFont(void* ctx, const char* fontName, double size, unsigned int textEncoding);
-extern void  CGContextSetTextDrawingMode(void* ctx, unsigned int mode);
-extern void  CGContextShowTextAtPoint(void* ctx, double x, double y, const char* text, unsigned long length);
+extern CGContext_* CGBitmapContextCreate(unsigned char* data, unsigned long width, unsigned long height,
+                                         unsigned long bitsPerComponent, unsigned long bytesPerRow,
+                                         CGColorSpace_* colorSpace, unsigned int bitmapInfo);
+extern void  CGContextRelease(CGContext_* ctx);
+extern void  CGContextSetRGBFillColor(CGContext_* ctx, double r, double g, double b, double a);
+extern void  CGContextSelectFont(CGContext_* ctx, const char* fontName, double size, unsigned int textEncoding);
+extern void  CGContextSetTextDrawingMode(CGContext_* ctx, unsigned int mode);
+extern void  CGContextShowTextAtPoint(CGContext_* ctx, double x, double y, const char* text, unsigned long length);
 
 int gui_draw_text_system(&GuiWindow win, int x, int y, const &char text,
                           struct GuiColor color, double fontSize, const &char fontName) {
     unsafe {
-        void* space = CGColorSpaceCreateDeviceRGB();
+        CGColorSpace_* space = CGColorSpaceCreateDeviceRGB();
         unsigned long rowBytes = (unsigned long)win.width * 4UL;
         // Draws directly into win.pixels (no separate blit) — same
         // buffer GuiWindow::present() reads every frame.
-        void* ctx = CGBitmapContextCreate((void*)win.pixels, (unsigned long)win.width,
+        CGContext_* ctx = CGBitmapContextCreate((unsigned char*)win.pixels, (unsigned long)win.width,
                                            (unsigned long)win.height, 8UL, rowBytes, space, 1U);
-        if (ctx == (void*)0) { CGColorSpaceRelease(space); return 0; }
+        if (ctx == null) { CGColorSpaceRelease(space); return 0; }
 
         CGContextSetRGBFillColor(ctx, (double)color.r / 255.0, (double)color.g / 255.0,
                                   (double)color.b / 255.0, (double)color.a / 255.0);

@@ -19,30 +19,30 @@ namespace std {
 // every other one in this section, not core tensor arithmetic.
 &FloatTensor FloatTensor::relu() const {
     match (tdev_unary_(self, EW_RELU, (float)0.0, (float)0.0, EW_ACC_RELU, 1, (float)0.0, 0)) { case some(o): { return o; } case null: { } }
-    unsafe { tensor_host_raw_((void*)self); }
+    unsafe { tensor_host_raw_((FloatTensor*)self); }
     &FloatTensor out = __tensor_alloc_uninit_like(self);
     unsafe { __tensor_ew(EW_RELU, (const float*)self->data, (const float*)0, (float)0.0, (float*)out->data, out->size); }
-    __tensor_link1(out, self, (void*)__relu_backward);
+    __tensor_link1(out, self, __relu_backward);
     return out;
 }
 
 // ── Sigmoid ──────────────────────────────────────────────────────────────────
 &FloatTensor FloatTensor::sigmoid() const {
     match (tdev_unary_(self, EW_SIGMOID, (float)0.0, (float)0.0, EW_ACC_SIGB, 2, (float)0.0, 0)) { case some(o): { return o; } case null: { } }
-    unsafe { tensor_host_raw_((void*)self); }
+    unsafe { tensor_host_raw_((FloatTensor*)self); }
     &FloatTensor out = __tensor_alloc_uninit_like(self);
     unsafe { vm_sigmoid_f32_n_((const float*)self->data, (float*)out->data, out->size); }
-    __tensor_link1(out, self, (void*)__sigmoid_backward);
+    __tensor_link1(out, self, __sigmoid_backward);
     return out;
 }
 
 // ── Tanh ─────────────────────────────────────────────────────────────────────
 &FloatTensor FloatTensor::tanh() const {
     match (tdev_unary_(self, EW_TANH, (float)0.0, (float)0.0, EW_ACC_TANHB, 2, (float)0.0, 0)) { case some(o): { return o; } case null: { } }
-    unsafe { tensor_host_raw_((void*)self); }
+    unsafe { tensor_host_raw_((FloatTensor*)self); }
     &FloatTensor out = __tensor_alloc_uninit_like(self);
     unsafe { vm_tanh_f32_n_((const float*)self->data, (float*)out->data, out->size); }
-    __tensor_link1(out, self, (void*)__tanh_t_backward);
+    __tensor_link1(out, self, __tanh_t_backward);
     return out;
 }
 
@@ -87,7 +87,7 @@ static void softmax_rows_(&SoftmaxJob j, unsigned long lo, unsigned long hi) {
 
 &FloatTensor FloatTensor::softmax() const {
     match (tdev_softmax_(self, 0)) { case some(o): { return o; } case null: { } }
-    unsafe { tensor_host_raw_((void*)self); }
+    unsafe { tensor_host_raw_((FloatTensor*)self); }
     &FloatTensor out = __tensor_alloc_uninit_like(self);
     unsafe {
         struct SoftmaxJob j;
@@ -98,14 +98,14 @@ static void softmax_rows_(&SoftmaxJob j, unsigned long lo, unsigned long hi) {
         if (self->size >= TENSOR_EW_PAR && rows > 1UL) parallel_for(rows, 16384UL / j.cols + 1UL, softmax_rows_, &j);
         else softmax_rows_(&j, 0UL, rows);
     }
-    __tensor_link1(out, self, (void*)__softmax_backward);
+    __tensor_link1(out, self, __softmax_backward);
     return out;
 }
 
 // ── ELU ──────────────────────────────────────────────────────────────────────
 &FloatTensor FloatTensor::elu(float alpha) const {
     match (tdev_unary_(self, EW_ELU, alpha, (float)0.0, EW_ACC_ELUB, 1, alpha, 2)) { case some(o): { return o; } case null: { } }
-    unsafe { tensor_host_raw_((void*)self); }
+    unsafe { tensor_host_raw_((FloatTensor*)self); }
     &FloatTensor out = __tensor_alloc_uninit_like(self);
     unsafe {
         unsigned long n = out->size;
@@ -121,14 +121,14 @@ static void softmax_rows_(&SoftmaxJob j, unsigned long lo, unsigned long hi) {
         }
     }
     unsafe { out->extraScalar = alpha; }
-    __tensor_link1(out, self, (void*)__elu_backward);
+    __tensor_link1(out, self, __elu_backward);
     return out;
 }
 
 // ── GELU (tanh approximation) ─────────────────────────────────────────────────
 &FloatTensor FloatTensor::gelu() const {
     match (tdev_unary_(self, EW_GELU, (float)0.0, (float)0.0, EW_ACC_GELUB, 1, (float)0.0, 0)) { case some(o): { return o; } case null: { } }
-    unsafe { tensor_host_raw_((void*)self); }
+    unsafe { tensor_host_raw_((FloatTensor*)self); }
     &FloatTensor out = __tensor_alloc_uninit_like(self);
     unsafe {
         float c = (float)0.7978845608028654;
@@ -140,14 +140,14 @@ static void softmax_rows_(&SoftmaxJob j, unsigned long lo, unsigned long hi) {
         i = 0UL;
         while (i < n) { float x = self->data[i]; y[i] = (float)0.5 * x * ((float)1.0 + y[i]); i = i + 1UL; }
     }
-    __tensor_link1(out, self, (void*)__gelu_backward);
+    __tensor_link1(out, self, __gelu_backward);
     return out;
 }
 
 // ── SiLU / Swish ───────────────────────────────────────────────────────────────
 &FloatTensor FloatTensor::silu() const {
     match (tdev_unary_(self, EW_SILU, (float)0.0, (float)0.0, EW_ACC_SILUB, 1, (float)0.0, 0)) { case some(o): { return o; } case null: { } }
-    unsafe { tensor_host_raw_((void*)self); }
+    unsafe { tensor_host_raw_((FloatTensor*)self); }
     &FloatTensor out = __tensor_alloc_uninit_like(self);
     unsafe {
         unsigned long n = out->size;
@@ -156,13 +156,13 @@ static void softmax_rows_(&SoftmaxJob j, unsigned long lo, unsigned long hi) {
         unsigned long i = 0UL;
         while (i < n) { y[i] = self->data[i] * y[i]; i = i + 1UL; }
     }
-    __tensor_link1(out, self, (void*)__silu_backward);
+    __tensor_link1(out, self, __silu_backward);
     return out;
 }
 
 // ── GLU: split last axis in half, out = a1 * sigmoid(a2) ─────────────────────
 &FloatTensor FloatTensor::glu() const {
-    unsafe { tensor_host_raw_((void*)self); }
+    unsafe { tensor_host_raw_((FloatTensor*)self); }
     unsigned long ndim;
     unsafe { ndim = self->ndim; }
     unsigned long* outShape;
@@ -189,13 +189,13 @@ static void softmax_rows_(&SoftmaxJob j, unsigned long lo, unsigned long hi) {
             r = r + 1UL;
         }
     }
-    __tensor_link1(out, self, (void*)__glu_backward);
+    __tensor_link1(out, self, __glu_backward);
     return out;
 }
 
 // ── SwiGLU: split last axis in half, out = silu(a1) * a2 ──────────────────────
 &FloatTensor FloatTensor::swiglu() const {
-    unsafe { tensor_host_raw_((void*)self); }
+    unsafe { tensor_host_raw_((FloatTensor*)self); }
     unsigned long ndim;
     unsafe { ndim = self->ndim; }
     unsigned long* outShape;
@@ -226,7 +226,7 @@ static void softmax_rows_(&SoftmaxJob j, unsigned long lo, unsigned long hi) {
             r = r + 1UL;
         }
     }
-    __tensor_link1(out, self, (void*)__swiglu_backward);
+    __tensor_link1(out, self, __swiglu_backward);
     return out;
 }
 
@@ -254,7 +254,7 @@ struct AdamState AdamState::new_default(unsigned long size, float lr) {
 }
 
 void AdamState::step(&FloatTensor param) {
-    unsafe { tensor_host_write_raw_((void*)param); }
+    unsafe { tensor_host_write_raw_((FloatTensor*)param); }
     unsafe {
         self.t = self.t + 1UL;
         float b1 = self.beta1;
@@ -278,8 +278,8 @@ void AdamState::free() { self.drop(); }
 
 void AdamState::drop() {
     unsafe {
-        if (self.m != (float*)0) { free((void*)self.m); }
-        if (self.v != (float*)0) { free((void*)self.v); }
+        if (self.m != (float*)0) { free((unsigned char*)self.m); }
+        if (self.v != (float*)0) { free((unsigned char*)self.v); }
         self.m = (&heap float)0;
         self.v = (&heap float)0;
     }
@@ -289,7 +289,7 @@ void AdamState::drop() {
 
 // ── 1D max pooling ───────────────────────────────────────────────────────────
 &FloatTensor FloatTensor::maxpool1d(unsigned long kernel, unsigned long stride) const {
-    unsafe { tensor_host_raw_((void*)self); }
+    unsafe { tensor_host_raw_((FloatTensor*)self); }
     unsigned long ndim; unsigned long lastDim;
     unsafe { ndim = self->ndim; lastDim = self->shape[ndim - 1UL]; }
     unsigned long outLen = (lastDim - kernel) / stride + 1UL;
@@ -330,7 +330,7 @@ void AdamState::drop() {
         if (out->requiresGrad) {
             out->parents.push(self);
             out->parents.push(idxCache);
-            out->gradFn = (void*)__maxpool1d_backward;
+            out->gradFn = __maxpool1d_backward;
         }
     }
     return out;
@@ -338,7 +338,7 @@ void AdamState::drop() {
 
 // ── 1D average pooling ───────────────────────────────────────────────────────
 &FloatTensor FloatTensor::avgpool1d(unsigned long kernel, unsigned long stride) const {
-    unsafe { tensor_host_raw_((void*)self); }
+    unsafe { tensor_host_raw_((FloatTensor*)self); }
     unsigned long ndim; unsigned long lastDim;
     unsafe { ndim = self->ndim; lastDim = self->shape[ndim - 1UL]; }
     unsigned long outLen = (lastDim - kernel) / stride + 1UL;
@@ -372,7 +372,7 @@ void AdamState::drop() {
         // See tensor_nn.h's __avgpool1d_backward comment for the base-10000 choice.
         out->extraScalar = (float)(kernel * 10000UL + stride);
     }
-    __tensor_link1(out, self, (void*)__avgpool1d_backward);
+    __tensor_link1(out, self, __avgpool1d_backward);
     return out;
 }
 

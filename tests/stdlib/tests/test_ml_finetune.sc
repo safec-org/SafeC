@@ -9,12 +9,12 @@
 #include <std/ml/trainer.h>
 #include <std/math.h>
 
-extern void* malloc(unsigned long size);
-extern void free(void* ptr);
+extern unsigned char* malloc(unsigned long size);
+extern void free(unsigned char* ptr);
 
 static void drop_(&FloatTensor t) {
     unsafe { t->free(); }   // a heap tensor, freed below
-    unsafe { free((void*)t); }
+    unsafe { free((unsigned char*)t); }
 }
 
 // ── Optimizers ───────────────────────────────────────────────────────────────

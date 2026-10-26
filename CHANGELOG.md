@@ -7,6 +7,66 @@ release tags.
 
 ## [Unreleased]
 
+### Changed — no `void*` anywhere in std
+
+- **The raw memory layer is bytes:** `alloc_raw_`, `dealloc_raw_`,
+  `realloc_buf_raw_`, `safe_memcpy_raw_` and the other `std/mem.h` `_raw_`
+  forms take and return `unsigned char*` (symbol names and ABI unchanged:
+  `new T` still calls `std_alloc_raw_`); the generic `alloc` / `dealloc` /
+  `safe_memcpy` wrappers cast inside `unsafe`.
+- **Breaking:** the allocator traits (`Allocate` / `Deallocate`) and every
+  std allocator (`BumpAllocator`, `PoolAllocator`, `SlabAllocator`,
+  `TlsfAllocator`, `SecureAllocator`, `CountingAllocator`) hand out
+  `?&heap unsigned char` instead of `?&heap void`, and `heap_alloc` /
+  `heap_free` / `heap_realloc` use `&heap unsigned char`. A custom
+  allocator changes its `alloc` / `dealloc` signatures the same way;
+  `alloc_t` / `alloc_array_t` / `dealloc_t` are unchanged.
+- `T x = malloc_defer(n);` now expands to `std::alloc(n)` plus a deferred
+  `std::dealloc(x)`, taking `T` from the declaration (`auto` and `void*`
+  keep `alloc_raw_` / `dealloc_raw_`, so `auto` is now `unsigned char*`).
+- libc / OS / C-library declarations use typed handles: C's `FILE` is the
+  opaque `CFile_`; pthread and Win32 synchronisation objects, `HANDLE`s,
+  `DIR`, find handles, `timespec`, `struct tm`, `sigset_t`, `pollfd`,
+  `epoll_event`, `kevent`, `fd_set`, `addrinfo` and `WSADATA` are passed as
+  their (opaque or mirrored) structs; thread start routines, `signal()`
+  handlers and comparators are `fn` types. The TLS backends declare
+  OpenSSL's dlopen'd API (`SSL`, `SSL_CTX`, `BIO`, `X509`, ..., `dlsym`
+  returning a function), CoreFoundation/Security and SChannel/crypt32 with
+  opaque handle structs and one `fn` type per signature. The channel
+  runtime (`__safec_chan_*`) takes a `SafecChan_*` and its 8-byte slot, and
+  `__safec_thread_create` the task `fn` and its `?&Erased` argument.
+- `tests/std_modules/api_lint.py` fails on any `void*` / `&void` (any
+  region) in std's headers and sources, FFI externs included, with no
+  exemptions (std/ml, std/gui and the CUDA/ROCm FFTs included, below).
+
+### Changed — no `void*` left in std/gui
+
+- **std/gui** has no `void*` at all, internal FFI included (public API
+  unchanged): the X11, Wayland, Win32 and Cocoa backends and the EGL/GLES,
+  D3D11 and Metal presenters declare their system APIs with opaque handle
+  structs (`XDisplay_`, `WlDisplay_` / `WlProxy_`, `HWND_`, `ObjcId_` /
+  `ObjcSel_`, `EGLDisplay_`, ...), typed `struct wl_interface` tables,
+  Wayland dispatchers taking `?&Erased`, COM objects through a typed method
+  table, one typed `objc_msgSend` cast per call shape, typed dlopen()/dlsym()
+  lookups and byte pointers for pixel and property data; the portable core
+  uses `safe_memset_obj` / `safe_memcpy` and byte-pointer identity compares.
+
+### Changed — no `void*` left in std/ml
+
+- **std/ml** (and std/dsp's `fft_cuda` / `fft_rocm`) has no `void*` at all:
+  a tensor's `gradFn` is a `fn void(&DenseTensor<float>)` taking the node
+  through its float32 layout (shared by every element type), the coherence
+  internals take that `FloatTensor*`, and the GPU bindings (CUDA, NVRTC,
+  cuBLAS(Lt), cuDNN, cuFFT, HIP, hiprtc, rocBLAS, MIOpen, hipFFT, Metal
+  through the Objective-C runtime, Vulkan, WebGPU) declare each handle kind
+  as its own opaque struct (`CuEvent_`, `CudnnTensorDesc_`, `HipModule_`,
+  `ObjcSel_`, `VkDevice_`, `WGPUBuffer_`, ...; the shared declarations in the
+  internal `cuda_ffi.h` / `rocm_ffi.h` / `mps_ffi.h`), device memory as
+  `CuDevPtr_` / `HipDevPtr_`, kernel arguments as `CuKernelArg_` /
+  `HipKernelArg_`, pNext / nextInChain chains as `VkNext_` /
+  `WGPUChainedStruct`, and host buffers as `unsigned char*`; cuDNN's SDPA
+  entry points are looked up as typed functions.
+
 ### Changed — no `void*` left in std/audio; fewer in std's internals
 
 - **std/audio** has no `void*` at all, internal headers and FFI included:

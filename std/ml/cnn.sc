@@ -8,8 +8,8 @@
 
 namespace std {
 
-extern void* malloc(size_t size);
-extern void  free(void* ptr);
+extern unsigned char* malloc(size_t size);
+extern void  free(unsigned char* ptr);
 
 // A map's storage: from this thread's TensorArena when one is active (see
 // cnn.h), else malloc.
@@ -47,7 +47,7 @@ struct FeatureMap FeatureMap::new(unsigned long channels, unsigned long height, 
 void FeatureMap::free() { self.drop(); }
 
 void FeatureMap::drop() {
-    unsafe { if (!self->fromArena) free((void*)self->data); }
+    unsafe { if (!self->fromArena) free((unsigned char*)self->data); }
 }
 
 static float __cnn_init_weight(unsigned long i, unsigned long seed) {
@@ -83,7 +83,7 @@ struct Conv2D Conv2D::new(unsigned long inChannels, unsigned long outChannels, u
 void Conv2D::free() { self.drop(); }
 
 void Conv2D::drop() {
-    unsafe { free((void*)self->weight); free((void*)self->bias); }
+    unsafe { free((unsigned char*)self->weight); free((unsigned char*)self->bias); }
 }
 
 // Conv2D::forward is im2col + GEMM: for a block of output pixels, gather
@@ -215,7 +215,7 @@ static void conv_blocks_(&ConvJob j, unsigned long lo, unsigned long hi) {
     unsigned long K = j.inC * j.kH * j.kW;
     unsafe {
         if (g_conv_cap < K * j.block) {
-            free((void*)g_conv_col);
+            free((unsigned char*)g_conv_col);
             g_conv_col = (float*)malloc(sizeof(float) * K * j.block);
             g_conv_cap = g_conv_col == (float*)0 ? 0UL : K * j.block;
             if (g_conv_col == (float*)0) return;
@@ -548,7 +548,7 @@ static int wino_run_(const &Conv2D layer, const &FeatureMap input, &FeatureMap o
     unsigned long need = nu + 16UL * (j.pv + j.pm);
     unsafe {
         if (g_wino_cap < need) {
-            free((void*)g_wino_buf);
+            free((unsigned char*)g_wino_buf);
             g_wino_buf = (float*)malloc(sizeof(float) * need);
             g_wino_cap = g_wino_buf == (float*)0 ? 0UL : need;
             if (g_wino_buf == (float*)0) return 0;

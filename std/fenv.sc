@@ -11,9 +11,9 @@ extern int fetestexcept(int excepts);
 extern int feraiseexcept(int excepts);
 extern int fegetround();
 extern int fesetround(int round);
-extern int fegetenv(void* envp);
-extern int fesetenv(const void* envp);
-extern int feholdexcept(void* envp);
+extern int fegetenv(unsigned char* envp);
+extern int fesetenv(const unsigned char* envp);
+extern int feholdexcept(unsigned char* envp);
 
 int fenv_clear(int excepts)       { unsafe { return feclearexcept(excepts); } }
 int fenv_test(int excepts)        { unsafe { return fetestexcept(excepts); } }

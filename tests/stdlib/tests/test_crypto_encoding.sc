@@ -514,7 +514,7 @@ void t_crypto_misc() {
 
         struct SecureAllocator sa = SecureAllocator::new(32UL, 4UL);
         ASSERT_EQ(sa.available(), 4);
-        ?&heap void p = sa.alloc(32UL, 8UL);
+        ?&heap unsigned char p = sa.alloc(32UL, 8UL);
         ASSERT_FALSE(p.is_null());
         match (p) { case null: { } case some(r): { unsafe { safe_memset(((unsigned char*)r)[0..32], 0x5A); } } }
         ASSERT_EQ(sa.available(), 3);

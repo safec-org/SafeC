@@ -19,6 +19,7 @@
 #include <std/stddef.h>
 #include <std/ml/gpu_cudnn.h>
 #include <std/ml/gpu_cuda.h>
+#include <std/ml/cuda_ffi.h>
 #include <std/ml/cnn.h>
 #include <std/ml/unet.h>
 #include <std/mem.h>
@@ -27,55 +28,67 @@
 namespace std {
 
 // ── cuDNN 9 C ABI (cudnn_graph.h, cudnn_ops.h, cudnn_cnn.h) ──────────────────
-extern int cudnnCreate(void** handle);
-extern int cudnnSetStream(void* handle, void* stream);
-extern int cudnnCreateTensorDescriptor(void** desc);
-extern int cudnnDestroyTensorDescriptor(void* desc);
-extern int cudnnSetTensor4dDescriptor(void* desc, int format, int dataType, int n, int c, int h, int w);
-extern int cudnnCreateFilterDescriptor(void** desc);
-extern int cudnnDestroyFilterDescriptor(void* desc);
-extern int cudnnSetFilter4dDescriptor(void* desc, int dataType, int format, int k, int c, int h, int w);
-extern int cudnnCreateConvolutionDescriptor(void** desc);
-extern int cudnnDestroyConvolutionDescriptor(void* desc);
-extern int cudnnSetConvolution2dDescriptor(void* desc, int padH, int padW, int u, int v,
-                                           int dilationH, int dilationW, int mode, int computeType);
-extern int cudnnSetConvolutionMathType(void* desc, int mathType);
-extern int cudnnFindConvolutionForwardAlgorithm(void* handle, void* xDesc, void* wDesc, void* convDesc,
-                                                void* yDesc, int requested, int* returned, void* perfResults);
-extern int cudnnConvolutionForward(void* handle, const void* alpha, void* xDesc, const void* x,
-                                   void* wDesc, const void* w, void* convDesc, int algo,
-                                   void* workspace, size_t wsBytes, const void* beta, void* yDesc, void* y);
-extern int cudnnConvolutionBiasActivationForward(void* handle, const void* alpha1, void* xDesc, const void* x,
-                                                 void* wDesc, const void* w, void* convDesc, int algo,
-                                                 void* workspace, size_t wsBytes, const void* alpha2,
-                                                 void* zDesc, const void* z, void* biasDesc, const void* bias,
-                                                 void* actDesc, void* yDesc, void* y);
-extern int cudnnAddTensor(void* handle, const void* alpha, void* aDesc, const void* a,
-                          const void* beta, void* cDesc, void* c);
-extern int cudnnCreateActivationDescriptor(void** desc);
-extern int cudnnSetActivationDescriptor(void* desc, int mode, int nanOpt, double coef);
-extern int cudnnCreatePoolingDescriptor(void** desc);
-extern int cudnnSetPooling2dDescriptor(void* desc, int mode, int nanOpt, int windowH, int windowW,
+extern int cudnnCreate(CudnnHandle_** handle);
+extern int cudnnSetStream(CudnnHandle_* handle, CudaNativeStream* stream);
+extern int cudnnCreateTensorDescriptor(CudnnTensorDesc_** desc);
+extern int cudnnSetTensor4dDescriptor(CudnnTensorDesc_* desc, int format, int dataType, int n, int c, int h, int w);
+extern int cudnnCreateFilterDescriptor(CudnnFilterDesc_** desc);
+extern int cudnnSetFilter4dDescriptor(CudnnFilterDesc_* desc, int dataType, int format, int k, int c, int h, int w);
+extern int cudnnCreateConvolutionDescriptor(CudnnConvDesc_** desc);
+extern int cudnnSetConvolution2dDescriptor(CudnnConvDesc_* desc, int padH, int padW, int u, int v, int dilationH, int dilationW,
+                                           int mode, int computeType);
+extern int cudnnSetConvolutionMathType(CudnnConvDesc_* desc, int mathType);
+extern int cudnnBackendCreateDescriptor(int type, CudnnBackendDesc_** desc);
+extern int cudnnBackendDestroyDescriptor(CudnnBackendDesc_* desc);
+// elems: 'count' values of the attribute's type, as bytes
+extern int cudnnBackendSetAttribute(CudnnBackendDesc_* desc, int name, int type, long count, const unsigned char* elems);
+extern int cudnnBackendGetAttribute(CudnnBackendDesc_* desc, int name, int type, long requested, long* count,
+                                    unsigned char* elems);
+extern int cudnnBackendFinalize(CudnnBackendDesc_* desc);
+extern int cudnnBackendExecute(CudnnHandle_* handle, CudnnBackendDesc_* plan, CudnnBackendDesc_* variantPack);
+// perf: 'requested' cudnnConvolution*AlgoPerf_t (DNN_PERF_INTS ints each)
+extern int cudnnFindConvolutionForwardAlgorithm(CudnnHandle_* handle, CudnnTensorDesc_* xDesc, CudnnFilterDesc_* wDesc,
+                                                CudnnConvDesc_* convDesc, CudnnTensorDesc_* yDesc,
+                                                int requested, int* returned, int* perf);
+extern int cudnnFindConvolutionBackwardDataAlgorithm(CudnnHandle_* handle, CudnnFilterDesc_* wDesc, CudnnTensorDesc_* dyDesc,
+                                                     CudnnConvDesc_* convDesc, CudnnTensorDesc_* dxDesc,
+                                                     int requested, int* returned, int* perf);
+extern int cudnnFindConvolutionBackwardFilterAlgorithm(CudnnHandle_* handle, CudnnTensorDesc_* xDesc, CudnnTensorDesc_* dyDesc,
+                                                       CudnnConvDesc_* convDesc, CudnnFilterDesc_* dwDesc,
+                                                       int requested, int* returned, int* perf);
+// alpha / beta: float (CUDNN_DATA_FLOAT compute)
+extern int cudnnConvolutionForward(CudnnHandle_* handle, const float* alpha, CudnnTensorDesc_* xDesc, const CuDevPtr_* x,
+                                   CudnnFilterDesc_* wDesc, const CuDevPtr_* w, CudnnConvDesc_* convDesc, int algo,
+                                   CuDevPtr_* ws, size_t wsBytes, const float* beta,
+                                   CudnnTensorDesc_* yDesc, CuDevPtr_* y);
+extern int cudnnConvolutionBackwardData(CudnnHandle_* handle, const float* alpha, CudnnFilterDesc_* wDesc, const CuDevPtr_* w,
+                                        CudnnTensorDesc_* dyDesc, const CuDevPtr_* dy, CudnnConvDesc_* convDesc, int algo,
+                                        CuDevPtr_* ws, size_t wsBytes, const float* beta,
+                                        CudnnTensorDesc_* dxDesc, CuDevPtr_* dx);
+extern int cudnnConvolutionBackwardFilter(CudnnHandle_* handle, const float* alpha, CudnnTensorDesc_* xDesc, const CuDevPtr_* x,
+                                          CudnnTensorDesc_* dyDesc, const CuDevPtr_* dy, CudnnConvDesc_* convDesc, int algo,
+                                          CuDevPtr_* ws, size_t wsBytes, const float* beta,
+                                          CudnnFilterDesc_* dwDesc, CuDevPtr_* dw);
+extern int cudnnDestroyTensorDescriptor(CudnnTensorDesc_* desc);
+extern int cudnnDestroyFilterDescriptor(CudnnFilterDesc_* desc);
+extern int cudnnDestroyConvolutionDescriptor(CudnnConvDesc_* desc);
+extern int cudnnConvolutionBiasActivationForward(CudnnHandle_* handle, const float* alpha1, CudnnTensorDesc_* xDesc,
+                                                 const CuDevPtr_* x, CudnnFilterDesc_* wDesc, const CuDevPtr_* w,
+                                                 CudnnConvDesc_* convDesc, int algo, CuDevPtr_* workspace, size_t wsBytes,
+                                                 const float* alpha2, CudnnTensorDesc_* zDesc, const CuDevPtr_* z,
+                                                 CudnnTensorDesc_* biasDesc, const CuDevPtr_* bias,
+                                                 CudnnActDesc_* actDesc, CudnnTensorDesc_* yDesc, CuDevPtr_* y);
+extern int cudnnAddTensor(CudnnHandle_* handle, const float* alpha, CudnnTensorDesc_* aDesc, const CuDevPtr_* a,
+                          const float* beta, CudnnTensorDesc_* cDesc, CuDevPtr_* c);
+extern int cudnnCreateActivationDescriptor(CudnnActDesc_** desc);
+extern int cudnnSetActivationDescriptor(CudnnActDesc_* desc, int mode, int nanOpt, double coef);
+extern int cudnnCreatePoolingDescriptor(CudnnPoolDesc_** desc);
+extern int cudnnSetPooling2dDescriptor(CudnnPoolDesc_* desc, int mode, int nanOpt, int windowH, int windowW,
                                        int padH, int padW, int strideH, int strideW);
-extern int cudnnPoolingForward(void* handle, void* poolDesc, const void* alpha, void* xDesc, const void* x,
-                               const void* beta, void* yDesc, void* y);
-
-// cudnn_graph.h backend API
-extern int cudnnBackendCreateDescriptor(int type, void** desc);
-extern int cudnnBackendDestroyDescriptor(void* desc);
-extern int cudnnBackendFinalize(void* desc);
-extern int cudnnBackendSetAttribute(void* desc, int name, int type, long count, const void* values);
-extern int cudnnBackendGetAttribute(void* desc, int name, int type, long requested, long* count, void* values);
-extern int cudnnBackendExecute(void* handle, void* plan, void* variantPack);
-
-extern int cuMemAlloc_v2(unsigned long long* dptr, size_t bytes);
-extern int cuMemFree_v2(unsigned long long dptr);
-extern int cuStreamSynchronize(void* stream);
-extern int cuEventCreate(void** event, unsigned int flags);
-extern int cuEventRecord(void* event, void* stream);
-extern int cuEventSynchronize(void* event);
-extern int cuEventElapsedTime(float* ms, void* start, void* end);
-extern int cuEventDestroy_v2(void* event);
+extern int cudnnPoolingForward(CudnnHandle_* handle, CudnnPoolDesc_* poolDesc, const float* alpha,
+                               CudnnTensorDesc_* xDesc, const CuDevPtr_* x,
+                               const float* beta, CudnnTensorDesc_* yDesc, CuDevPtr_* y);
+// The CUDA driver API is declared in cuda_ffi.h.
 
 #define DNN_TENSOR_NCHW        0    // CUDNN_TENSOR_NCHW
 #define DNN_DATA_FLOAT         0    // CUDNN_DATA_FLOAT
@@ -165,11 +178,11 @@ extern int cuEventDestroy_v2(void* event);
 
 // ── State ────────────────────────────────────────────────────────────────────
 static int   g_dnn_state = 0;        // 0 = not tried, 1 = ready, -1 = unavailable
-static void* g_dnn = (void*)0;
-static void* g_dnn_relu = (void*)0;
-static void* g_dnn_pool = (void*)0;
-static void* g_dnn_pool_x = (void*)0;
-static void* g_dnn_pool_y = (void*)0;
+static CudnnHandle_* g_dnn = null;
+static CudnnActDesc_* g_dnn_relu = null;
+static CudnnPoolDesc_* g_dnn_pool = null;
+static CudnnTensorDesc_* g_dnn_pool_x = null;
+static CudnnTensorDesc_* g_dnn_pool_y = null;
 
 // Plan cache. g_dp_key[s * 8 ..] = batch, inC, H, W, outC, kH, kW,
 // stride | padding << 16 | tf32 << 32 | relu << 33; g_dp_used[s] = 0 for a
@@ -179,15 +192,15 @@ static void* g_dnn_pool_y = (void*)0;
 // While a plan is built both kinds may be present; the slower is freed.
 static unsigned long g_dp_key[DNN_PLANS * 8];
 static int   g_dp_used[DNN_PLANS];
-static void* g_dp_bd[DNN_PLANS * DNB_DESCS];
-static void* g_dp_vp[DNN_PLANS];
+static CudnnBackendDesc_* g_dp_bd[DNN_PLANS * DNB_DESCS];
+static CudnnBackendDesc_* g_dp_vp[DNN_PLANS];
 static unsigned long g_dp_ptr[DNN_PLANS * 4];
 static unsigned long long g_dp_gws[DNN_PLANS];
-static void* g_dp_x[DNN_PLANS];
-static void* g_dp_w[DNN_PLANS];
-static void* g_dp_conv[DNN_PLANS];
-static void* g_dp_y[DNN_PLANS];
-static void* g_dp_b[DNN_PLANS];
+static CudnnTensorDesc_* g_dp_x[DNN_PLANS];
+static CudnnFilterDesc_* g_dp_w[DNN_PLANS];
+static CudnnConvDesc_* g_dp_conv[DNN_PLANS];
+static CudnnTensorDesc_* g_dp_y[DNN_PLANS];
+static CudnnTensorDesc_* g_dp_b[DNN_PLANS];
 static int   g_dp_algo[DNN_PLANS];
 static unsigned long long g_dp_ws[DNN_PLANS];
 static unsigned long g_dp_wsBytes[DNN_PLANS];
@@ -213,8 +226,8 @@ static int cudnn_ensure_() {
         int s = 0;
         while (s < DNN_PLANS) {
             g_dp_used[s] = 0;
-            g_dp_x[s] = (void*)0;
-            g_dp_bd[s * DNB_DESCS] = (void*)0;
+            g_dp_x[s] = null;
+            g_dp_bd[s * DNB_DESCS] = null;
             s = s + 1;
         }
     }
@@ -233,17 +246,17 @@ static int dnn_int_ok_(unsigned long v) { return v > 0UL && v <= 2147483647UL; }
 // Frees a slot's graph plan (descriptors, variant pack, workspace), if any.
 static void dnb_free_(int s) {
     unsafe {
-        if (g_dp_bd[s * DNB_DESCS] == (void*)0) return;
+        if (g_dp_bd[s * DNB_DESCS] == null) return;
         cuStreamSynchronize(cuda_stream_handle());   // queued work may still use the workspace
-        if (g_dp_vp[s] != (void*)0) cudnnBackendDestroyDescriptor(g_dp_vp[s]);
+        if (g_dp_vp[s] != null) cudnnBackendDestroyDescriptor(g_dp_vp[s]);
         int i = 0;
         while (i < DNB_DESCS) {
-            if (g_dp_bd[s * DNB_DESCS + i] != (void*)0) cudnnBackendDestroyDescriptor(g_dp_bd[s * DNB_DESCS + i]);
-            g_dp_bd[s * DNB_DESCS + i] = (void*)0;
+            if (g_dp_bd[s * DNB_DESCS + i] != null) cudnnBackendDestroyDescriptor(g_dp_bd[s * DNB_DESCS + i]);
+            g_dp_bd[s * DNB_DESCS + i] = null;
             i = i + 1;
         }
         if (g_dp_gws[s] != 0ULL) cuMemFree_v2(g_dp_gws[s]);
-        g_dp_vp[s] = (void*)0;
+        g_dp_vp[s] = null;
         g_dp_gws[s] = 0ULL;
     }
 }
@@ -251,7 +264,7 @@ static void dnb_free_(int s) {
 // Frees a slot's legacy plan (descriptors, workspace), if any.
 static void dnn_legacy_free_(int s) {
     unsafe {
-        if (g_dp_x[s] == (void*)0) return;
+        if (g_dp_x[s] == null) return;
         cudnnDestroyTensorDescriptor(g_dp_x[s]);
         cudnnDestroyFilterDescriptor(g_dp_w[s]);
         cudnnDestroyConvolutionDescriptor(g_dp_conv[s]);
@@ -261,7 +274,7 @@ static void dnn_legacy_free_(int s) {
             cuStreamSynchronize(cuda_stream_handle());
             cuMemFree_v2(g_dp_ws[s]);
         }
-        g_dp_x[s] = (void*)0;
+        g_dp_x[s] = null;
         g_dp_ws[s] = 0ULL;
     }
 }
@@ -282,13 +295,13 @@ static void dnn_plan_release_(int s) {
 static int dnn_run_(int s, int kind, const &CudaConv2D layer, unsigned long x, unsigned long y, int relu);
 
 static double dnn_time_(int s, int kind, const &CudaConv2D layer, unsigned long x, unsigned long y, int relu) {
-    void* stream = cuda_stream_handle();
+    CudaNativeStream* stream = cuda_stream_handle();
     double bestHost = 1e30;
     double bestGpu = 1e30;
     unsafe {
         if (!dnn_run_(s, kind, layer, x, y, relu) || cuStreamSynchronize(stream) != 0) return -1.0;
-        void* e0 = (void*)0;
-        void* e1 = (void*)0;
+        CuEvent_* e0 = null;
+        CuEvent_* e1 = null;
         int ok = cuEventCreate(&e0, 0U) == 0 && cuEventCreate(&e1, 0U) == 0;
         int reps = 4;
         int round = 0;
@@ -309,8 +322,8 @@ static double dnn_time_(int s, int kind, const &CudaConv2D layer, unsigned long 
             }
             round = round + 1;
         }
-        if (e0 != (void*)0) cuEventDestroy_v2(e0);
-        if (e1 != (void*)0) cuEventDestroy_v2(e1);
+        if (e0 != null) cuEventDestroy_v2(e0);
+        if (e1 != null) cuEventDestroy_v2(e1);
         if (!ok) return -1.0;
     }
     return bestHost > bestGpu ? bestHost : bestGpu;
@@ -319,10 +332,10 @@ static double dnn_time_(int s, int kind, const &CudaConv2D layer, unsigned long 
 // ── Graph (backend) plans ────────────────────────────────────────────────────
 
 // Finalized NCHW tensor descriptor (fp32 if virtual, else g_dnb_io), or null.
-static void* dnb_tensor_(long uid, unsigned long n, unsigned long c, unsigned long h, unsigned long w, int isVirtual) {
+static CudnnBackendDesc_* dnb_tensor_(long uid, unsigned long n, unsigned long c, unsigned long h, unsigned long w, int isVirtual) {
     unsafe {
-        void* d = (void*)0;
-        if (cudnnBackendCreateDescriptor(DNB_TENSOR, &d) != 0) return (void*)0;
+        CudnnBackendDesc_* d = null;
+        if (cudnnBackendCreateDescriptor(DNB_TENSOR, &d) != 0) return null;
         long dims[4];
         long strides[4];
         dims[0] = (long)n; dims[1] = (long)c; dims[2] = (long)h; dims[3] = (long)w;
@@ -330,77 +343,77 @@ static void* dnb_tensor_(long uid, unsigned long n, unsigned long c, unsigned lo
         int dt = isVirtual ? DNN_DATA_FLOAT : g_dnb_io;
         long align = dt == DNN_DATA_FLOAT ? 4L : 16L;
         unsigned char virt = isVirtual ? (unsigned char)1 : (unsigned char)0;
-        int ok = cudnnBackendSetAttribute(d, DNB_A_TENSOR_TYPE, DNB_T_DATA_TYPE, 1L, (const void*)&dt) == 0 &&
-                 cudnnBackendSetAttribute(d, DNB_A_TENSOR_DIMS, DNB_T_INT64, 4L, (const void*)&dims[0]) == 0 &&
-                 cudnnBackendSetAttribute(d, DNB_A_TENSOR_STRIDES, DNB_T_INT64, 4L, (const void*)&strides[0]) == 0 &&
-                 cudnnBackendSetAttribute(d, DNB_A_TENSOR_UID, DNB_T_INT64, 1L, (const void*)&uid) == 0 &&
-                 cudnnBackendSetAttribute(d, DNB_A_TENSOR_ALIGN, DNB_T_INT64, 1L, (const void*)&align) == 0 &&
-                 cudnnBackendSetAttribute(d, DNB_A_TENSOR_VIRTUAL, DNB_T_BOOLEAN, 1L, (const void*)&virt) == 0 &&
+        int ok = cudnnBackendSetAttribute(d, DNB_A_TENSOR_TYPE, DNB_T_DATA_TYPE, 1L, (const unsigned char*)&dt) == 0 &&
+                 cudnnBackendSetAttribute(d, DNB_A_TENSOR_DIMS, DNB_T_INT64, 4L, (const unsigned char*)&dims[0]) == 0 &&
+                 cudnnBackendSetAttribute(d, DNB_A_TENSOR_STRIDES, DNB_T_INT64, 4L, (const unsigned char*)&strides[0]) == 0 &&
+                 cudnnBackendSetAttribute(d, DNB_A_TENSOR_UID, DNB_T_INT64, 1L, (const unsigned char*)&uid) == 0 &&
+                 cudnnBackendSetAttribute(d, DNB_A_TENSOR_ALIGN, DNB_T_INT64, 1L, (const unsigned char*)&align) == 0 &&
+                 cudnnBackendSetAttribute(d, DNB_A_TENSOR_VIRTUAL, DNB_T_BOOLEAN, 1L, (const unsigned char*)&virt) == 0 &&
                  cudnnBackendFinalize(d) == 0;
-        if (!ok) { cudnnBackendDestroyDescriptor(d); return (void*)0; }
+        if (!ok) { cudnnBackendDestroyDescriptor(d); return null; }
         return d;
     }
 }
 
 // Finalized pointwise op y = mode(x[, b]) in fp32; its pointwise descriptor
 // goes to *pwOut (both kept alive by the plan). Null on failure.
-static void* dnb_pointwise_(int mode, void* x, void* b, void* y, &void* pwOut) {
+static CudnnBackendDesc_* dnb_pointwise_(int mode, CudnnBackendDesc_* x, CudnnBackendDesc_* b, CudnnBackendDesc_* y, &CudnnBackendDesc_* pwOut) {
     unsafe {
-        void* pw = (void*)0;
-        void* op = (void*)0;
+        CudnnBackendDesc_* pw = null;
+        CudnnBackendDesc_* op = null;
         int dt = DNN_DATA_FLOAT;
         int ok = cudnnBackendCreateDescriptor(DNB_POINTWISE, &pw) == 0;
-        ok = ok && cudnnBackendSetAttribute(pw, DNB_A_PW_MODE, DNB_T_POINTWISE_MODE, 1L, (const void*)&mode) == 0 &&
-             cudnnBackendSetAttribute(pw, DNB_A_PW_MATH_PREC, DNB_T_DATA_TYPE, 1L, (const void*)&dt) == 0 &&
+        ok = ok && cudnnBackendSetAttribute(pw, DNB_A_PW_MODE, DNB_T_POINTWISE_MODE, 1L, (const unsigned char*)&mode) == 0 &&
+             cudnnBackendSetAttribute(pw, DNB_A_PW_MATH_PREC, DNB_T_DATA_TYPE, 1L, (const unsigned char*)&dt) == 0 &&
              cudnnBackendFinalize(pw) == 0;
         ok = ok && cudnnBackendCreateDescriptor(DNB_OP_POINTWISE, &op) == 0;
-        ok = ok && cudnnBackendSetAttribute(op, DNB_A_PWOP_DESC, DNB_T_DESCRIPTOR, 1L, (const void*)&pw) == 0 &&
-             cudnnBackendSetAttribute(op, DNB_A_PWOP_X, DNB_T_DESCRIPTOR, 1L, (const void*)&x) == 0 &&
-             (b == (void*)0 || cudnnBackendSetAttribute(op, DNB_A_PWOP_B, DNB_T_DESCRIPTOR, 1L, (const void*)&b) == 0) &&
-             cudnnBackendSetAttribute(op, DNB_A_PWOP_Y, DNB_T_DESCRIPTOR, 1L, (const void*)&y) == 0 &&
+        ok = ok && cudnnBackendSetAttribute(op, DNB_A_PWOP_DESC, DNB_T_DESCRIPTOR, 1L, (const unsigned char*)&pw) == 0 &&
+             cudnnBackendSetAttribute(op, DNB_A_PWOP_X, DNB_T_DESCRIPTOR, 1L, (const unsigned char*)&x) == 0 &&
+             (b == null || cudnnBackendSetAttribute(op, DNB_A_PWOP_B, DNB_T_DESCRIPTOR, 1L, (const unsigned char*)&b) == 0) &&
+             cudnnBackendSetAttribute(op, DNB_A_PWOP_Y, DNB_T_DESCRIPTOR, 1L, (const unsigned char*)&y) == 0 &&
              cudnnBackendFinalize(op) == 0;
         *pwOut = pw;
         if (!ok) {
-            if (op != (void*)0) cudnnBackendDestroyDescriptor(op);
-            return (void*)0;
+            if (op != null) cudnnBackendDestroyDescriptor(op);
+            return null;
         }
         return op;
     }
 }
 
 // Variant pack binding x, w, b, y (uids 1..4) and the workspace; null on failure.
-static void* dnb_variant_pack_(unsigned long x, unsigned long w, unsigned long b, unsigned long y,
+static CudnnBackendDesc_* dnb_variant_pack_(unsigned long x, unsigned long w, unsigned long b, unsigned long y,
                                unsigned long long ws) {
     unsafe {
-        void* vp = (void*)0;
-        if (cudnnBackendCreateDescriptor(DNB_VARIANT_PACK, &vp) != 0) return (void*)0;
+        CudnnBackendDesc_* vp = null;
+        if (cudnnBackendCreateDescriptor(DNB_VARIANT_PACK, &vp) != 0) return null;
         long uids[4];
-        void* ptrs[4];
+        CuDevPtr_* ptrs[4];
         uids[0] = 1L; uids[1] = 2L; uids[2] = 3L; uids[3] = 4L;
-        ptrs[0] = (void*)x; ptrs[1] = (void*)w; ptrs[2] = (void*)b; ptrs[3] = (void*)y;
-        void* wsp = (void*)(unsigned long)ws;
-        int ok = cudnnBackendSetAttribute(vp, DNB_A_VP_UIDS, DNB_T_INT64, 4L, (const void*)&uids[0]) == 0 &&
-                 cudnnBackendSetAttribute(vp, DNB_A_VP_PTRS, DNB_T_VOID_PTR, 4L, (const void*)&ptrs[0]) == 0 &&
-                 cudnnBackendSetAttribute(vp, DNB_A_VP_WORKSPACE, DNB_T_VOID_PTR, 1L, (const void*)&wsp) == 0 &&
+        ptrs[0] = (CuDevPtr_*)x; ptrs[1] = (CuDevPtr_*)w; ptrs[2] = (CuDevPtr_*)b; ptrs[3] = (CuDevPtr_*)y;
+        CuDevPtr_* wsp = (CuDevPtr_*)(unsigned long)ws;
+        int ok = cudnnBackendSetAttribute(vp, DNB_A_VP_UIDS, DNB_T_INT64, 4L, (const unsigned char*)&uids[0]) == 0 &&
+                 cudnnBackendSetAttribute(vp, DNB_A_VP_PTRS, DNB_T_VOID_PTR, 4L, (const unsigned char*)&ptrs[0]) == 0 &&
+                 cudnnBackendSetAttribute(vp, DNB_A_VP_WORKSPACE, DNB_T_VOID_PTR, 1L, (const unsigned char*)&wsp) == 0 &&
                  cudnnBackendFinalize(vp) == 0;
-        if (!ok) { cudnnBackendDestroyDescriptor(vp); return (void*)0; }
+        if (!ok) { cudnnBackendDestroyDescriptor(vp); return null; }
         return vp;
     }
 }
 
 // 1 if the engine behind 'cfg' is allowed in the current precision mode:
 // without TF32, no tensor-core / down-converting / reduced-precision engines.
-static int dnb_cfg_allowed_(void* cfg) {
+static int dnb_cfg_allowed_(CudnnBackendDesc_* cfg) {
     if (cuda_tf32_enabled() || g_dnb_io != DNN_DATA_FLOAT) return 1;   // 16-bit data: tensor cores are the point
     unsafe {
-        void* eng = (void*)0;
+        CudnnBackendDesc_* eng = null;
         if (cudnnBackendCreateDescriptor(DNB_ENGINE, &eng) != 0) return 0;
         long got = 0L;
         int notes[16];
         long nn = 0L;
-        int ok = cudnnBackendGetAttribute(cfg, DNB_A_CFG_ENGINE, DNB_T_DESCRIPTOR, 1L, &got, (void*)&eng) == 0 &&
+        int ok = cudnnBackendGetAttribute(cfg, DNB_A_CFG_ENGINE, DNB_T_DESCRIPTOR, 1L, &got, (unsigned char*)&eng) == 0 &&
                  cudnnBackendGetAttribute(eng, DNB_A_ENGINE_NOTES, DNB_T_NUMERICAL_NOTE, 16L, &nn,
-                                          (void*)&notes[0]) == 0;
+                                          (unsigned char*)&notes[0]) == 0;
         cudnnBackendDestroyDescriptor(eng);
         if (!ok) return 0;
         long i = 0L;
@@ -423,9 +436,9 @@ static double dnb_build_(int slot, const &CudaConv2D layer, unsigned long batch,
                       unsigned long width, unsigned long outH, unsigned long outW, int relu,
                       unsigned long x, unsigned long y) {
     unsafe {
-        void* d[DNB_DESCS];
+        CudnnBackendDesc_* d[DNB_DESCS];
         int i = 0;
-        while (i < DNB_DESCS) { d[i] = (void*)0; i = i + 1; }
+        while (i < DNB_DESCS) { d[i] = null; i = i + 1; }
         // d[0] plan (filled last), 1 x, 2 w, 3 b, 4 y, 5 conv out, 6 biased,
         // 7 conv desc, 8 conv op, 9/10 add pw/op, 11/12 relu pw/op, 13 graph
         d[1] = dnb_tensor_(1L, batch, layer.inChannels, height, width, 0);
@@ -434,8 +447,8 @@ static double dnb_build_(int slot, const &CudaConv2D layer, unsigned long batch,
         d[4] = dnb_tensor_(4L, batch, layer.outChannels, outH, outW, 0);
         d[5] = dnb_tensor_(5L, batch, layer.outChannels, outH, outW, 1);
         if (relu) d[6] = dnb_tensor_(6L, batch, layer.outChannels, outH, outW, 1);
-        int ok = d[1] != (void*)0 && d[2] != (void*)0 && d[3] != (void*)0 && d[4] != (void*)0 &&
-                 d[5] != (void*)0 && (!relu || d[6] != (void*)0);
+        int ok = d[1] != null && d[2] != null && d[3] != null && d[4] != null &&
+                 d[5] != null && (!relu || d[6] != null);
         long two = 2L;
         long pad[2];
         long stride[2];
@@ -446,50 +459,50 @@ static double dnb_build_(int slot, const &CudaConv2D layer, unsigned long batch,
         int ct = DNN_DATA_FLOAT;
         int cm = DNN_CROSS_CORRELATION;
         ok = ok && cudnnBackendCreateDescriptor(DNB_CONV, &d[7]) == 0;
-        ok = ok && cudnnBackendSetAttribute(d[7], DNB_A_CONV_DIMS, DNB_T_INT64, 1L, (const void*)&two) == 0 &&
-             cudnnBackendSetAttribute(d[7], DNB_A_CONV_COMP_TYPE, DNB_T_DATA_TYPE, 1L, (const void*)&ct) == 0 &&
-             cudnnBackendSetAttribute(d[7], DNB_A_CONV_MODE, DNB_T_CONV_MODE, 1L, (const void*)&cm) == 0 &&
-             cudnnBackendSetAttribute(d[7], DNB_A_CONV_PRE_PAD, DNB_T_INT64, 2L, (const void*)&pad[0]) == 0 &&
-             cudnnBackendSetAttribute(d[7], DNB_A_CONV_POST_PAD, DNB_T_INT64, 2L, (const void*)&pad[0]) == 0 &&
-             cudnnBackendSetAttribute(d[7], DNB_A_CONV_DILATIONS, DNB_T_INT64, 2L, (const void*)&dil[0]) == 0 &&
-             cudnnBackendSetAttribute(d[7], DNB_A_CONV_STRIDES, DNB_T_INT64, 2L, (const void*)&stride[0]) == 0 &&
+        ok = ok && cudnnBackendSetAttribute(d[7], DNB_A_CONV_DIMS, DNB_T_INT64, 1L, (const unsigned char*)&two) == 0 &&
+             cudnnBackendSetAttribute(d[7], DNB_A_CONV_COMP_TYPE, DNB_T_DATA_TYPE, 1L, (const unsigned char*)&ct) == 0 &&
+             cudnnBackendSetAttribute(d[7], DNB_A_CONV_MODE, DNB_T_CONV_MODE, 1L, (const unsigned char*)&cm) == 0 &&
+             cudnnBackendSetAttribute(d[7], DNB_A_CONV_PRE_PAD, DNB_T_INT64, 2L, (const unsigned char*)&pad[0]) == 0 &&
+             cudnnBackendSetAttribute(d[7], DNB_A_CONV_POST_PAD, DNB_T_INT64, 2L, (const unsigned char*)&pad[0]) == 0 &&
+             cudnnBackendSetAttribute(d[7], DNB_A_CONV_DILATIONS, DNB_T_INT64, 2L, (const unsigned char*)&dil[0]) == 0 &&
+             cudnnBackendSetAttribute(d[7], DNB_A_CONV_STRIDES, DNB_T_INT64, 2L, (const unsigned char*)&stride[0]) == 0 &&
              cudnnBackendFinalize(d[7]) == 0;
         float one = 1.0f;
         float zero = 0.0f;
         ok = ok && cudnnBackendCreateDescriptor(DNB_OP_CONV_FWD, &d[8]) == 0;
-        ok = ok && cudnnBackendSetAttribute(d[8], DNB_A_FWD_ALPHA, DNB_T_FLOAT, 1L, (const void*)&one) == 0 &&
-             cudnnBackendSetAttribute(d[8], DNB_A_FWD_BETA, DNB_T_FLOAT, 1L, (const void*)&zero) == 0 &&
-             cudnnBackendSetAttribute(d[8], DNB_A_FWD_CONV, DNB_T_DESCRIPTOR, 1L, (const void*)&d[7]) == 0 &&
-             cudnnBackendSetAttribute(d[8], DNB_A_FWD_X, DNB_T_DESCRIPTOR, 1L, (const void*)&d[1]) == 0 &&
-             cudnnBackendSetAttribute(d[8], DNB_A_FWD_W, DNB_T_DESCRIPTOR, 1L, (const void*)&d[2]) == 0 &&
-             cudnnBackendSetAttribute(d[8], DNB_A_FWD_Y, DNB_T_DESCRIPTOR, 1L, (const void*)&d[5]) == 0 &&
+        ok = ok && cudnnBackendSetAttribute(d[8], DNB_A_FWD_ALPHA, DNB_T_FLOAT, 1L, (const unsigned char*)&one) == 0 &&
+             cudnnBackendSetAttribute(d[8], DNB_A_FWD_BETA, DNB_T_FLOAT, 1L, (const unsigned char*)&zero) == 0 &&
+             cudnnBackendSetAttribute(d[8], DNB_A_FWD_CONV, DNB_T_DESCRIPTOR, 1L, (const unsigned char*)&d[7]) == 0 &&
+             cudnnBackendSetAttribute(d[8], DNB_A_FWD_X, DNB_T_DESCRIPTOR, 1L, (const unsigned char*)&d[1]) == 0 &&
+             cudnnBackendSetAttribute(d[8], DNB_A_FWD_W, DNB_T_DESCRIPTOR, 1L, (const unsigned char*)&d[2]) == 0 &&
+             cudnnBackendSetAttribute(d[8], DNB_A_FWD_Y, DNB_T_DESCRIPTOR, 1L, (const unsigned char*)&d[5]) == 0 &&
              cudnnBackendFinalize(d[8]) == 0;
         if (ok) {
             d[10] = dnb_pointwise_(DNB_PW_ADD, d[5], d[3], relu ? d[6] : d[4], &d[9]);
-            ok = d[10] != (void*)0;
+            ok = d[10] != null;
         }
         if (ok && relu) {
-            d[12] = dnb_pointwise_(DNB_PW_RELU, d[6], (void*)0, d[4], &d[11]);
-            ok = d[12] != (void*)0;
+            d[12] = dnb_pointwise_(DNB_PW_RELU, d[6], null, d[4], &d[11]);
+            ok = d[12] != null;
         }
-        void* ops[3];
+        CudnnBackendDesc_* ops[3];
         ops[0] = d[8]; ops[1] = d[10]; ops[2] = d[12];
         long nops = relu ? 3L : 2L;
         ok = ok && cudnnBackendCreateDescriptor(DNB_OPGRAPH, &d[13]) == 0;
-        ok = ok && cudnnBackendSetAttribute(d[13], DNB_A_GRAPH_OPS, DNB_T_DESCRIPTOR, nops, (const void*)&ops[0]) == 0 &&
-             cudnnBackendSetAttribute(d[13], DNB_A_GRAPH_HANDLE, DNB_T_HANDLE, 1L, (const void*)&g_dnn) == 0 &&
+        ok = ok && cudnnBackendSetAttribute(d[13], DNB_A_GRAPH_OPS, DNB_T_DESCRIPTOR, nops, (const unsigned char*)&ops[0]) == 0 &&
+             cudnnBackendSetAttribute(d[13], DNB_A_GRAPH_HANDLE, DNB_T_HANDLE, 1L, (const unsigned char*)&g_dnn) == 0 &&
              cudnnBackendFinalize(d[13]) == 0;
 
         // Heuristic engine configs, best guess first.
-        void* heur = (void*)0;
-        void* cfgs[DNB_MAX_CONFIGS];
+        CudnnBackendDesc_* heur = null;
+        CudnnBackendDesc_* cfgs[DNB_MAX_CONFIGS];
         long ncfg = 0L;
         i = 0;
-        while (i < DNB_MAX_CONFIGS) { cfgs[i] = (void*)0; i = i + 1; }
+        while (i < DNB_MAX_CONFIGS) { cfgs[i] = null; i = i + 1; }
         int hm = DNB_HEUR_A;
         ok = ok && cudnnBackendCreateDescriptor(DNB_ENGINEHEUR, &heur) == 0;
-        ok = ok && cudnnBackendSetAttribute(heur, DNB_A_HEUR_GRAPH, DNB_T_DESCRIPTOR, 1L, (const void*)&d[13]) == 0 &&
-             cudnnBackendSetAttribute(heur, DNB_A_HEUR_MODE, DNB_T_HEUR_MODE, 1L, (const void*)&hm) == 0 &&
+        ok = ok && cudnnBackendSetAttribute(heur, DNB_A_HEUR_GRAPH, DNB_T_DESCRIPTOR, 1L, (const unsigned char*)&d[13]) == 0 &&
+             cudnnBackendSetAttribute(heur, DNB_A_HEUR_MODE, DNB_T_HEUR_MODE, 1L, (const unsigned char*)&hm) == 0 &&
              cudnnBackendFinalize(heur) == 0;
         i = 0;
         while (ok && i < DNB_MAX_CONFIGS) {
@@ -497,7 +510,7 @@ static double dnb_build_(int slot, const &CudaConv2D layer, unsigned long batch,
             i = i + 1;
         }
         ok = ok && cudnnBackendGetAttribute(heur, DNB_A_HEUR_RESULTS, DNB_T_DESCRIPTOR, (long)DNB_MAX_CONFIGS,
-                                            &ncfg, (void*)&cfgs[0]) == 0;
+                                            &ncfg, (unsigned char*)&cfgs[0]) == 0;
         if (ncfg > (long)DNB_MAX_CONFIGS) ncfg = (long)DNB_MAX_CONFIGS;
 
         // Time each usable config; keep the fastest plan and its workspace.
@@ -506,61 +519,61 @@ static double dnb_build_(int slot, const &CudaConv2D layer, unsigned long batch,
         g_dp_ptr[slot * 4 + 1] = layer.weight.dev;
         g_dp_ptr[slot * 4 + 2] = layer.bias.dev;
         g_dp_ptr[slot * 4 + 3] = y;
-        void* best = (void*)0;
+        CudnnBackendDesc_* best = null;
         unsigned long long bestWs = 0ULL;
         double bestMs = 1e30;
         long c = 0L;
         while (ok && c < ncfg) {
-            void* plan = (void*)0;
+            CudnnBackendDesc_* plan = null;
             long wsSize = 0L;
             long got = 0L;
             int usable = dnb_cfg_allowed_(cfgs[c]) && cudnnBackendCreateDescriptor(DNB_PLAN, &plan) == 0;
-            usable = usable && cudnnBackendSetAttribute(plan, DNB_A_PLAN_HANDLE, DNB_T_HANDLE, 1L, (const void*)&g_dnn) == 0 &&
-                     cudnnBackendSetAttribute(plan, DNB_A_PLAN_CFG, DNB_T_DESCRIPTOR, 1L, (const void*)&cfgs[c]) == 0 &&
+            usable = usable && cudnnBackendSetAttribute(plan, DNB_A_PLAN_HANDLE, DNB_T_HANDLE, 1L, (const unsigned char*)&g_dnn) == 0 &&
+                     cudnnBackendSetAttribute(plan, DNB_A_PLAN_CFG, DNB_T_DESCRIPTOR, 1L, (const unsigned char*)&cfgs[c]) == 0 &&
                      cudnnBackendFinalize(plan) == 0 &&
-                     cudnnBackendGetAttribute(plan, DNB_A_PLAN_WS_SIZE, DNB_T_INT64, 1L, &got, (void*)&wsSize) == 0 &&
+                     cudnnBackendGetAttribute(plan, DNB_A_PLAN_WS_SIZE, DNB_T_INT64, 1L, &got, (unsigned char*)&wsSize) == 0 &&
                      wsSize >= 0L && (unsigned long)wsSize <= DNN_MAX_WORKSPACE;
             unsigned long long ws = 0ULL;
             if (usable && wsSize > 0L) usable = cuMemAlloc_v2(&ws, (size_t)wsSize) == 0;
-            void* vp = (void*)0;
+            CudnnBackendDesc_* vp = null;
             if (usable) {
                 vp = dnb_variant_pack_(x, layer.weight.dev, layer.bias.dev, y, ws);
-                usable = vp != (void*)0;
+                usable = vp != null;
             }
             if (usable) {
                 g_dp_bd[slot * DNB_DESCS] = plan;   // dnn_run_ executes the slot's plan
                 g_dp_vp[slot] = vp;
                 double ms = dnn_time_(slot, 2, layer, x, y, relu);
-                g_dp_bd[slot * DNB_DESCS] = (void*)0;
-                g_dp_vp[slot] = (void*)0;
+                g_dp_bd[slot * DNB_DESCS] = null;
+                g_dp_vp[slot] = null;
                 if (ms >= 0.0 && ms < bestMs) {
-                    if (best != (void*)0) cudnnBackendDestroyDescriptor(best);
+                    if (best != null) cudnnBackendDestroyDescriptor(best);
                     if (bestWs != 0ULL) cuMemFree_v2(bestWs);
                     best = plan;
                     bestWs = ws;
                     bestMs = ms;
-                    plan = (void*)0;
+                    plan = null;
                     ws = 0ULL;
                 }
             }
-            if (vp != (void*)0) cudnnBackendDestroyDescriptor(vp);
-            if (plan != (void*)0) cudnnBackendDestroyDescriptor(plan);
+            if (vp != null) cudnnBackendDestroyDescriptor(vp);
+            if (plan != null) cudnnBackendDestroyDescriptor(plan);
             if (ws != 0ULL) cuMemFree_v2(ws);
             c = c + 1L;
         }
-        if (heur != (void*)0) cudnnBackendDestroyDescriptor(heur);
+        if (heur != null) cudnnBackendDestroyDescriptor(heur);
         i = 0;
         while (i < DNB_MAX_CONFIGS) {
-            if (cfgs[i] != (void*)0) cudnnBackendDestroyDescriptor(cfgs[i]);
+            if (cfgs[i] != null) cudnnBackendDestroyDescriptor(cfgs[i]);
             i = i + 1;
         }
-        void* vp = (void*)0;
-        if (best != (void*)0) vp = dnb_variant_pack_(x, layer.weight.dev, layer.bias.dev, y, bestWs);
-        if (vp == (void*)0) {
-            if (best != (void*)0) cudnnBackendDestroyDescriptor(best);
+        CudnnBackendDesc_* vp = null;
+        if (best != null) vp = dnb_variant_pack_(x, layer.weight.dev, layer.bias.dev, y, bestWs);
+        if (vp == null) {
+            if (best != null) cudnnBackendDestroyDescriptor(best);
             if (bestWs != 0ULL) cuMemFree_v2(bestWs);
             i = 0;
-            while (i < DNB_DESCS) { if (d[i] != (void*)0) cudnnBackendDestroyDescriptor(d[i]); i = i + 1; }
+            while (i < DNB_DESCS) { if (d[i] != null) cudnnBackendDestroyDescriptor(d[i]); i = i + 1; }
             return -1.0;
         }
         d[0] = best;
@@ -578,11 +591,11 @@ static double dnb_build_(int slot, const &CudaConv2D layer, unsigned long batch,
 static int dnn_legacy_build_(int slot, const &CudaConv2D layer, unsigned long batch, unsigned long height,
                              unsigned long width, unsigned long outH, unsigned long outW) {
     unsafe {
-        void* xd = (void*)0;
-        void* wd = (void*)0;
-        void* cd = (void*)0;
-        void* yd = (void*)0;
-        void* bd = (void*)0;
+        CudnnTensorDesc_* xd = null;
+        CudnnFilterDesc_* wd = null;
+        CudnnConvDesc_* cd = null;
+        CudnnTensorDesc_* yd = null;
+        CudnnTensorDesc_* bd = null;
         int ok = cudnnCreateTensorDescriptor(&xd) == 0 && cudnnCreateFilterDescriptor(&wd) == 0 &&
                  cudnnCreateConvolutionDescriptor(&cd) == 0 && cudnnCreateTensorDescriptor(&yd) == 0 &&
                  cudnnCreateTensorDescriptor(&bd) == 0;
@@ -607,11 +620,11 @@ static int dnn_legacy_build_(int slot, const &CudaConv2D layer, unsigned long ba
         int algoMath = math;
         unsigned long wsBytes = 0UL;
         ok = ok && cudnnFindConvolutionForwardAlgorithm(g_dnn, xd, wd, cd, yd, DNN_PERF_COUNT, &returned,
-                                                        (void*)&perf[0]) == 0;
+                                                        &perf[0]) == 0;
         int r = 0;
         while (ok && algo < 0 && r < returned) {
             int* p = (int*)&perf[r * DNN_PERF_INTS];
-            unsigned long mem = *(unsigned long*)(void*)&p[4];
+            unsigned long mem = *(unsigned long*)&p[4];
             if (p[1] == 0 && mem <= DNN_MAX_WORKSPACE) {
                 algo = p[0];
                 wsBytes = mem;
@@ -626,11 +639,11 @@ static int dnn_legacy_build_(int slot, const &CudaConv2D layer, unsigned long ba
         unsigned long long ws = 0ULL;
         if (ok && wsBytes > 0UL) ok = cuMemAlloc_v2(&ws, wsBytes) == 0;
         if (!ok) {
-            if (xd != (void*)0) cudnnDestroyTensorDescriptor(xd);
-            if (wd != (void*)0) cudnnDestroyFilterDescriptor(wd);
-            if (cd != (void*)0) cudnnDestroyConvolutionDescriptor(cd);
-            if (yd != (void*)0) cudnnDestroyTensorDescriptor(yd);
-            if (bd != (void*)0) cudnnDestroyTensorDescriptor(bd);
+            if (xd != null) cudnnDestroyTensorDescriptor(xd);
+            if (wd != null) cudnnDestroyFilterDescriptor(wd);
+            if (cd != null) cudnnDestroyConvolutionDescriptor(cd);
+            if (yd != null) cudnnDestroyTensorDescriptor(yd);
+            if (bd != null) cudnnDestroyTensorDescriptor(bd);
             return 0;
         }
         g_dp_x[slot] = xd;
@@ -721,29 +734,29 @@ static int dnn_run_(int s, int kind, const &CudaConv2D layer, unsigned long x, u
             // Rebind the variant pack only when the buffers changed.
             unsigned long* bound = (unsigned long*)&g_dp_ptr[s * 4];
             if (bound[0] != x || bound[1] != layer.weight.dev || bound[2] != layer.bias.dev || bound[3] != y) {
-                void* vp = dnb_variant_pack_(x, layer.weight.dev, layer.bias.dev, y, g_dp_gws[s]);
-                if (vp == (void*)0) return 0;
-                if (g_dp_vp[s] != (void*)0) cudnnBackendDestroyDescriptor(g_dp_vp[s]);
+                CudnnBackendDesc_* vp = dnb_variant_pack_(x, layer.weight.dev, layer.bias.dev, y, g_dp_gws[s]);
+                if (vp == null) return 0;
+                if (g_dp_vp[s] != null) cudnnBackendDestroyDescriptor(g_dp_vp[s]);
                 g_dp_vp[s] = vp;
                 bound[0] = x; bound[1] = layer.weight.dev; bound[2] = layer.bias.dev; bound[3] = y;
             }
             return cudnnBackendExecute(g_dnn, g_dp_bd[s * DNB_DESCS], g_dp_vp[s]) == 0;
         }
-        void* ws = (void*)(unsigned long)g_dp_ws[s];
+        CuDevPtr_* ws = (CuDevPtr_*)(unsigned long)g_dp_ws[s];
         if (relu) {
             // y = relu(1 * conv(x) + 0 * z + bias), z aliased to y
-            return cudnnConvolutionBiasActivationForward(g_dnn, (const void*)&one, g_dp_x[s], (const void*)x,
-                       g_dp_w[s], (const void*)layer.weight.dev, g_dp_conv[s], g_dp_algo[s], ws, g_dp_wsBytes[s],
-                       (const void*)&zero, g_dp_y[s], (const void*)y, g_dp_b[s], (const void*)layer.bias.dev,
-                       g_dnn_relu, g_dp_y[s], (void*)y) == 0;
+            return cudnnConvolutionBiasActivationForward(g_dnn, (const float*)&one, g_dp_x[s], (const CuDevPtr_*)x,
+                       g_dp_w[s], (const CuDevPtr_*)layer.weight.dev, g_dp_conv[s], g_dp_algo[s], ws, g_dp_wsBytes[s],
+                       (const float*)&zero, g_dp_y[s], (const CuDevPtr_*)y, g_dp_b[s], (const CuDevPtr_*)layer.bias.dev,
+                       g_dnn_relu, g_dp_y[s], (CuDevPtr_*)y) == 0;
         }
         // (BiasActivation with an identity activation is limited to one
         // algorithm, so the plain case is convolution + broadcast bias add.)
-        if (cudnnConvolutionForward(g_dnn, (const void*)&one, g_dp_x[s], (const void*)x,
-                g_dp_w[s], (const void*)layer.weight.dev, g_dp_conv[s], g_dp_algo[s], ws, g_dp_wsBytes[s],
-                (const void*)&zero, g_dp_y[s], (void*)y) != 0) return 0;
-        return cudnnAddTensor(g_dnn, (const void*)&one, g_dp_b[s], (const void*)layer.bias.dev,
-                              (const void*)&one, g_dp_y[s], (void*)y) == 0;
+        if (cudnnConvolutionForward(g_dnn, (const float*)&one, g_dp_x[s], (const CuDevPtr_*)x,
+                g_dp_w[s], (const CuDevPtr_*)layer.weight.dev, g_dp_conv[s], g_dp_algo[s], ws, g_dp_wsBytes[s],
+                (const float*)&zero, g_dp_y[s], (CuDevPtr_*)y) != 0) return 0;
+        return cudnnAddTensor(g_dnn, (const float*)&one, g_dp_b[s], (const CuDevPtr_*)layer.bias.dev,
+                              (const float*)&one, g_dp_y[s], (CuDevPtr_*)y) == 0;
     }
 }
 
@@ -788,8 +801,8 @@ static int dnn_pool_(int mode, struct CudaBuf x, struct CudaBuf y, unsigned long
                                        (int)channels, (int)height, (int)width) != 0 ||
             cudnnSetTensor4dDescriptor(g_dnn_pool_y, DNN_TENSOR_NCHW, DNN_DATA_FLOAT, (int)batch,
                                        (int)channels, (int)outH, (int)outW) != 0) return 0;
-        return cudnnPoolingForward(g_dnn, g_dnn_pool, (const void*)&one, g_dnn_pool_x, (const void*)x.dev,
-                                   (const void*)&zero, g_dnn_pool_y, (void*)y.dev) == 0;
+        return cudnnPoolingForward(g_dnn, g_dnn_pool, (const float*)&one, g_dnn_pool_x, (const CuDevPtr_*)x.dev,
+                                   (const float*)&zero, g_dnn_pool_y, (CuDevPtr_*)y.dev) == 0;
     }
 }
 
@@ -822,10 +835,10 @@ int cuda_concat_channels(struct CudaBuf a, unsigned long aChannels, struct CudaB
 
 static unsigned long g_dh_key[DNN_PLANS * 8];
 static int   g_dh_used[DNN_PLANS];
-static void* g_dh_x[DNN_PLANS];
-static void* g_dh_w[DNN_PLANS];
-static void* g_dh_conv[DNN_PLANS];
-static void* g_dh_y[DNN_PLANS];
+static CudnnTensorDesc_* g_dh_x[DNN_PLANS];
+static CudnnFilterDesc_* g_dh_w[DNN_PLANS];
+static CudnnConvDesc_* g_dh_conv[DNN_PLANS];
+static CudnnTensorDesc_* g_dh_y[DNN_PLANS];
 static int   g_dh_algo[DNN_PLANS];
 static unsigned long long g_dh_ws[DNN_PLANS];
 static unsigned long g_dh_wsBytes[DNN_PLANS];
@@ -878,10 +891,10 @@ static int dnn_half_plan_(const &CudaHalfConv2D layer, int dt, unsigned long bat
         dnn_half_release_(slot);
     }
     unsafe {
-        void* xd = (void*)0;
-        void* wd = (void*)0;
-        void* cd = (void*)0;
-        void* yd = (void*)0;
+        CudnnTensorDesc_* xd = null;
+        CudnnFilterDesc_* wd = null;
+        CudnnConvDesc_* cd = null;
+        CudnnTensorDesc_* yd = null;
         int ok = cudnnCreateTensorDescriptor(&xd) == 0 && cudnnCreateFilterDescriptor(&wd) == 0 &&
                  cudnnCreateConvolutionDescriptor(&cd) == 0 && cudnnCreateTensorDescriptor(&yd) == 0;
         ok = ok && cudnnSetTensor4dDescriptor(xd, DNN_TENSOR_NCHW, dt, (int)batch, (int)layer.inChannels,
@@ -901,11 +914,11 @@ static int dnn_half_plan_(const &CudaHalfConv2D layer, int dt, unsigned long bat
         int algoMath = DNN_TENSOR_OP_MATH;
         unsigned long wsBytes = 0UL;
         ok = ok && cudnnFindConvolutionForwardAlgorithm(g_dnn, xd, wd, cd, yd, DNN_PERF_COUNT, &returned,
-                                                        (void*)&perf[0]) == 0;
+                                                        &perf[0]) == 0;
         int r = 0;
         while (ok && algo < 0 && r < returned) {
             int* p = (int*)&perf[r * DNN_PERF_INTS];
-            unsigned long mem = *(unsigned long*)(void*)&p[4];
+            unsigned long mem = *(unsigned long*)&p[4];
             if (p[1] == 0 && mem <= DNN_MAX_WORKSPACE) {
                 algo = p[0];
                 wsBytes = mem;
@@ -917,10 +930,10 @@ static int dnn_half_plan_(const &CudaHalfConv2D layer, int dt, unsigned long bat
         unsigned long long ws = 0ULL;
         if (ok && wsBytes > 0UL) ok = cuMemAlloc_v2(&ws, wsBytes) == 0;
         if (!ok) {
-            if (xd != (void*)0) cudnnDestroyTensorDescriptor(xd);
-            if (wd != (void*)0) cudnnDestroyFilterDescriptor(wd);
-            if (cd != (void*)0) cudnnDestroyConvolutionDescriptor(cd);
-            if (yd != (void*)0) cudnnDestroyTensorDescriptor(yd);
+            if (xd != null) cudnnDestroyTensorDescriptor(xd);
+            if (wd != null) cudnnDestroyFilterDescriptor(wd);
+            if (cd != null) cudnnDestroyConvolutionDescriptor(cd);
+            if (yd != null) cudnnDestroyTensorDescriptor(yd);
             return -1;
         }
         g_dh_x[slot] = xd;
@@ -973,10 +986,10 @@ static int dnn_half_conv_(const &CudaHalfConv2D layer, struct CudaHalfBuf x, str
     float one = 1.0f;
     float zero = 0.0f;
     unsafe {
-        if (cudnnConvolutionForward(g_dnn, (const void*)&one, g_dh_x[p], (const void*)x.dev,
-                g_dh_w[p], (const void*)layer.weight.dev, g_dh_conv[p], g_dh_algo[p],
-                (void*)(unsigned long)g_dh_ws[p], g_dh_wsBytes[p],
-                (const void*)&zero, g_dh_y[p], (void*)y.dev) != 0) return 0;
+        if (cudnnConvolutionForward(g_dnn, (const float*)&one, g_dh_x[p], (const CuDevPtr_*)x.dev,
+                g_dh_w[p], (const CuDevPtr_*)layer.weight.dev, g_dh_conv[p], g_dh_algo[p],
+                (CuDevPtr_*)(unsigned long)g_dh_ws[p], g_dh_wsBytes[p],
+                (const float*)&zero, g_dh_y[p], (CuDevPtr_*)y.dev) != 0) return 0;
     }
     return cuda_half_bias(y, layer.bias, batch, layer.outChannels, outH * outW, relu);
 }

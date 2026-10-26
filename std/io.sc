@@ -11,22 +11,22 @@
 namespace std {
 
 extern int   printf(const char* fmt, ...);
-extern int   fprintf(void* stream, const char* fmt, ...);
-extern int   fputs(const char* s, void* stream);
-extern int   fputc(int c, void* stream);
-extern int   fflush(void* stream);
+extern int   fprintf(CFile_* stream, const char* fmt, ...);
+extern int   fputs(const char* s, CFile_* stream);
+extern int   fputc(int c, CFile_* stream);
+extern int   fflush(CFile_* stream);
 extern int   puts(const char* s);
 extern int   putchar(int c);
-extern char* fgets(char* buf, int n, void* stream);
+extern char* fgets(char* buf, int n, CFile_* stream);
 extern int   getchar();
-extern int   ungetc(int c, void* stream);
+extern int   ungetc(int c, CFile_* stream);
 extern int   scanf(const char* fmt, ...);
-extern int   fscanf(void* stream, const char* fmt, ...);
+extern int   fscanf(CFile_* stream, const char* fmt, ...);
 extern int   sscanf(const char* buf, const char* fmt, ...);
 extern int   snprintf(char* buf, size_t n, const char* fmt, ...);
 extern int   remove(const char* path);
 extern int   rename(const char* oldpath, const char* newpath);
-extern void* tmpfile();
+extern CFile_* tmpfile();
 extern size_t strlen(const char* s);
 
 // ── FILE* stream handles ──────────────────────────────────────────────────────
@@ -42,16 +42,16 @@ extern size_t strlen(const char* s);
 // declared locally with the same platform split rather than growing that
 // shared header for consumers that don't need them.
 #if defined(__APPLE__)
-extern void* __stdinp;
-extern void* __stdoutp;
+extern CFile_* __stdinp;
+extern CFile_* __stdoutp;
 #define SAFEC_STDIN_  __stdinp
 #define SAFEC_STDOUT_ __stdoutp
 #elif defined(_WIN32)
 #define SAFEC_STDIN_  __acrt_iob_func(0)
 #define SAFEC_STDOUT_ __acrt_iob_func(1)
 #else
-extern void* stdin;
-extern void* stdout;
+extern CFile_* stdin;
+extern CFile_* stdout;
 #define SAFEC_STDIN_  stdin
 #define SAFEC_STDOUT_ stdout
 #endif
@@ -130,7 +130,7 @@ inline void print_oct(unsigned long long v) {
     unsafe { printf("0%llo", v); }
 }
 
-inline void print_ptr_raw_(const void* p) {
+inline void print_ptr_raw_(const unsigned char* p) {
     unsafe { printf("%p", p); }
 }
 

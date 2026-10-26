@@ -168,8 +168,8 @@ void t_layout() {
     ASSERT_TRUE(k1.load_file("fixtures/fonts/gpos_kern1.ttf"));
     l.build(&k1, 16.0f, str_bytes("AxV"), 0.0f, GUI_TEXT_LEFT);
     unsafe {
-        ASSERT_TRUE((const void*)l.glyphs.at(1UL).face == (const void*)f);
-        ASSERT_TRUE((const void*)l.glyphs.at(0UL).face == (const void*)&k1);
+        ASSERT_TRUE((const unsigned char*)l.glyphs.at(1UL).face == (const unsigned char*)f);
+        ASSERT_TRUE((const unsigned char*)l.glyphs.at(0UL).face == (const unsigned char*)&k1);
     }
     l.free();
     k1.free();
@@ -248,7 +248,7 @@ void t_system_font() {
             ASSERT_TRUE(f.has_glyph((unsigned int)'A'));
             ASSERT_TRUE(f.measure("Hello", 16.0f) > 20.0f);
             ?&GuiTypeface again = GuiTypeface::system("sans");      // cached
-            unsafe { ASSERT_TRUE((const void*)again == (const void*)f); }
+            unsafe { ASSERT_TRUE((const unsigned char*)again == (const unsigned char*)f); }
         }
     }
     struct GuiTypeface dv;

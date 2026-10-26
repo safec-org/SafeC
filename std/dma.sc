@@ -26,7 +26,7 @@ void DmaBuffer::to_device() {
         unsigned long p = mem_align_down((unsigned long)self.virt, (unsigned long)MEM_CACHE_LINE_SIZE);
         unsigned long end = (unsigned long)self.virt + self.size;
         while (p < end) {
-            mem_clflush_raw_((const void*)p);
+            mem_clflush_raw_((const unsigned char*)p);
             p = p + (unsigned long)MEM_CACHE_LINE_SIZE;
         }
         // Memory barrier to ensure writes are visible before DMA starts.
@@ -60,7 +60,7 @@ void DmaBuffer::to_cpu() {
         unsigned long p = mem_align_down((unsigned long)self.virt, (unsigned long)MEM_CACHE_LINE_SIZE);
         unsigned long end = (unsigned long)self.virt + self.size;
         while (p < end) {
-            mem_clflush_raw_((const void*)p);
+            mem_clflush_raw_((const unsigned char*)p);
             p = p + (unsigned long)MEM_CACHE_LINE_SIZE;
         }
         asm volatile ("" : : : "memory");

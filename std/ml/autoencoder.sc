@@ -12,12 +12,12 @@
 namespace std {
 
 static float ae_cols_(const &FloatTensor t) {
-    unsafe { tensor_host_raw_((void*)t); }
+    unsafe { tensor_host_raw_((FloatTensor*)t); }
     unsafe { return (float)t->shape[t->ndim - 1UL]; }
 }
 
 static unsigned long ae_rows_(const &FloatTensor t) {
-    unsafe { tensor_host_raw_((void*)t); }
+    unsafe { tensor_host_raw_((FloatTensor*)t); }
     unsafe { return t->ndim >= 2UL ? t->shape[0] : 1UL; }
 }
 
@@ -34,7 +34,7 @@ static &FloatTensor ae_output_(&FloatTensor out, int recon) {
 }
 
 static float ae_value_(const &FloatTensor t) {
-    unsafe { tensor_host_raw_((void*)t); }
+    unsafe { tensor_host_raw_((FloatTensor*)t); }
     unsafe { return t->data[0]; }
 }
 
@@ -79,7 +79,7 @@ struct Autoencoder Autoencoder::new(unsigned long inDim, const &AutoencoderConfi
 &FloatTensor Autoencoder::loss(const &FloatTensor x, const &FloatTensor y) {
     // the encoder's input: a copy of x, corrupted for a denoising AE
     &FloatTensor noisy = x.detach();
-    unsafe { tensor_host_write_raw_((void*)noisy); }
+    unsafe { tensor_host_write_raw_((FloatTensor*)noisy); }
     int corrupt = self.cfg.noiseStd > (float)0.0 || self.cfg.dropProb > (float)0.0;
     if (corrupt) {
         unsafe {
@@ -247,7 +247,7 @@ struct VqVae VqVae::new(unsigned long inDim, const &VqVaeConfig cfg) {
 
 // Index of the nearest code for every row of ze.
 static &FloatTensor vq_nearest_(const &VqVae v, const &FloatTensor ze) {
-    unsafe { tensor_host_raw_((void*)ze); }
+    unsafe { tensor_host_raw_((FloatTensor*)ze); }
     unsigned long m = ae_rows_(ze);
     unsigned long d = v.cfg.latent;
     unsigned long K = v.cfg.codes;
@@ -277,7 +277,7 @@ static &FloatTensor vq_nearest_(const &VqVae v, const &FloatTensor ze) {
 }
 
 static float vq_perplexity_(const &FloatTensor idx, unsigned long K) {
-    unsafe { tensor_host_raw_((void*)idx); }
+    unsafe { tensor_host_raw_((FloatTensor*)idx); }
     float H = (float)0.0;
     unsafe {
         unsigned long m = idx->size;
@@ -291,14 +291,14 @@ static float vq_perplexity_(const &FloatTensor idx, unsigned long K) {
             if (counts[k] > (float)0.0) { float p = counts[k] / (float)m; H = H - p * log_f(p); }
             k = k + 1UL;
         }
-        free((void*)counts);
+        free((unsigned char*)counts);
     }
     return exp_f(H);
 }
 
 // Copies encoder output row 'row' into code 'k'.
 static void vq_set_code_(&VqVae v, unsigned long k, const &FloatTensor ze, unsigned long row) {
-    unsafe { tensor_host_raw_((void*)ze); }
+    unsafe { tensor_host_raw_((FloatTensor*)ze); }
     unsigned long d = v.cfg.latent;
     unsafe {
         unsigned long c = 0UL;
@@ -329,7 +329,7 @@ static void vq_maintain_(&VqVae v, const &FloatTensor ze) {
 }
 
 static void vq_count_use_(&VqVae v, const &FloatTensor idx) {
-    unsafe { tensor_host_raw_((void*)idx); }
+    unsafe { tensor_host_raw_((FloatTensor*)idx); }
     unsafe {
         unsigned long k = 0UL;
         while (k < v.cfg.codes) { v.idle->data[k] = v.idle->data[k] + (float)1.0; k = k + 1UL; }
@@ -372,7 +372,7 @@ void VqVae::drop() {
     self.dec.free();
     self.codebook->free();
     self.idle->free();
-    unsafe { free((void*)self.codebook); free((void*)self.idle); }
+    unsafe { free((unsigned char*)self.codebook); free((unsigned char*)self.idle); }
 }
 
 // ══ Convolutional autoencoder / VAE ══════════════════════════════════════════

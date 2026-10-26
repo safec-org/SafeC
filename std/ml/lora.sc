@@ -25,16 +25,16 @@ static void lora_drop_(&FloatTensor t) {
     // A heap tensor: destroyed in place through the reference, then its
     // memory released (a Box the checker can't see).
     unsafe { t->free(); }
-    unsafe { free((void*)t); }
+    unsafe { free((unsigned char*)t); }
 }
 
 static unsigned long lora_rows_(const &FloatTensor t) {
-    unsafe { tensor_host_raw_((void*)t); }
+    unsafe { tensor_host_raw_((FloatTensor*)t); }
     unsafe { return t->shape[0]; }
 }
 
 static unsigned long lora_cols_(const &FloatTensor t) {
-    unsafe { tensor_host_raw_((void*)t); }
+    unsafe { tensor_host_raw_((FloatTensor*)t); }
     unsafe { return t->shape[t->ndim - 1UL]; }
 }
 
@@ -128,11 +128,11 @@ void LoraMlp::merge() {
     unsigned long k = 0UL;
     while (k < self.base.nLayers) {
         &FloatTensor W = *self.base.params.at(2UL * k);
-        unsafe { tensor_host_write_raw_((void*)W); }
+        unsafe { tensor_host_write_raw_((FloatTensor*)W); }
         &FloatTensor A = *self.A.at(k);
-        unsafe { tensor_host_raw_((void*)A); }
+        unsafe { tensor_host_raw_((FloatTensor*)A); }
         &FloatTensor B = *self.B.at(k);
-        unsafe { tensor_host_raw_((void*)B); }
+        unsafe { tensor_host_raw_((FloatTensor*)B); }
         unsigned long in = lora_rows_(W);
         unsigned long out = lora_cols_(W);
         unsigned long r = self.cfg.rank;
@@ -266,7 +266,7 @@ struct Nf4Tensor Nf4Tensor::quantize(const &FloatTensor w, unsigned long blockSi
                 }
                 g = g + 1UL;
             }
-            free((void*)absmax);
+            free((unsigned char*)absmax);
             q.absmaxMean = mean;
             q.absmaxQ = (&heap unsigned char)aq;
             q.absmaxScale = (&heap float)gs;
@@ -324,10 +324,10 @@ void Nf4Tensor::free() { self.drop(); }
 
 void Nf4Tensor::drop() {
     unsafe {
-        free((void*)self.codes);
-        if (self.absmax != (float*)0) free((void*)self.absmax);
-        if (self.absmaxQ != (unsigned char*)0) free((void*)self.absmaxQ);
-        if (self.absmaxScale != (float*)0) free((void*)self.absmaxScale);
+        free((unsigned char*)self.codes);
+        if (self.absmax != (float*)0) free((unsigned char*)self.absmax);
+        if (self.absmaxQ != (unsigned char*)0) free((unsigned char*)self.absmaxQ);
+        if (self.absmaxScale != (float*)0) free((unsigned char*)self.absmaxScale);
     }
 }
 

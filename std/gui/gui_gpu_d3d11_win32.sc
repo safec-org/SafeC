@@ -23,12 +23,26 @@
 #include <std/gui/gui_backend.h>
 #include <std/gui/gui_gpu.h>
 #include <std/mem.h>
-extern void* memset(void* ptr, int val, size_t n);
 
 namespace std {
 
-extern void* LoadLibraryA(const char* name);
-extern void* GetProcAddress(void* module, const char* name);
+// A loaded DLL (HMODULE), and a function looked up in one (FARPROC):
+// untyped until cast to its real signature (in 'unsafe').
+struct D3dLib_ { char opaque_; };
+typedef ?fn void() D3dSym_;
+extern D3dLib_* LoadLibraryA(const char* name);
+extern D3dSym_ GetProcAddress(D3dLib_* module, const char* name);
+
+// A COM interface pointer (ID3D11Device, IDXGISwapChain1, ...): an object
+// whose first field is its method table (IUnknown's three methods, then
+// the interface's, in order). Each method is cast to its signature below.
+typedef fn void() D3dMethod_;
+struct D3dCom_ { const D3dMethod_* vtbl; };
+// An HWND, and the structs passed only as null (D3D11_SUBRESOURCE_DATA,
+// DXGI_SWAP_CHAIN_FULLSCREEN_DESC).
+struct D3dHwnd_ { char opaque_; };
+struct D3dSubresourceData_ { char opaque_; };
+struct D3dFullscreenDesc_ { char opaque_; };
 
 struct GuiD3dGuid {
     unsigned int d1;
@@ -102,11 +116,12 @@ struct GuiD3dBox {
 
 // RECT, DXGI_PRESENT_PARAMETERS
 struct GuiD3dRect { int left; int top; int right; int bottom; };
+struct GuiD3dPoint { int x; int y; };
 struct GuiD3dPresentParams {
     unsigned int dirtyRectsCount;
     struct GuiD3dRect* dirtyRects;
-    void* scrollRect;
-    void* scrollOffset;
+    struct GuiD3dRect* scrollRect;
+    struct GuiD3dPoint* scrollOffset;
 };
 
 #define GUI_DXGI_FORMAT_R8G8B8A8_UNORM 28U
@@ -117,31 +132,29 @@ struct GuiD3dPresentParams {
 #define GUI_DXGI_SWAP_EFFECT_FLIP_DISCARD 4U
 #define GUI_DXGI_MWA_NO_ALT_ENTER 2U
 
-typedef fn int(void*, int, void*, unsigned int, const unsigned int*, unsigned int, unsigned int,
-               void**, unsigned int*, void**) D3d11CreateDevice_;
-typedef fn unsigned int(void*) D3dRelease_;                                        // IUnknown 2
-typedef fn int(void*, const GuiD3dGuid*, void**) D3dQueryInterface_;               // IUnknown 0, IDXGIObject::GetParent 6
-typedef fn int(void*, void**) D3dGetAdapter_;                                      // IDXGIDevice 7
-typedef fn int(void*, void*, void*, const GuiD3dSwapDesc*, const void*, void*, void**) D3dCreateSwapChainForHwnd_; // IDXGIFactory2 15
-typedef fn int(void*, void*, unsigned int) D3dMakeWindowAssociation_;             // IDXGIFactory 8
-typedef fn int(void*, unsigned int, const GuiD3dGuid*, void**) D3dGetBuffer_;      // IDXGISwapChain 9
-typedef fn int(void*, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int) D3dResizeBuffers_; // 13
-typedef fn int(void*, unsigned int, unsigned int) D3dPresent_;                     // IDXGISwapChain 8
-typedef fn int(void*, unsigned int, unsigned int, const GuiD3dPresentParams*) D3dPresent1_; // IDXGISwapChain1 22
-typedef fn int(void*, const GuiD3dTexDesc*, const void*, void**) D3dCreateTexture2D_; // ID3D11Device 5
-typedef fn void(void*, void*, void*) D3dCopyResource_;                             // ID3D11DeviceContext 47
-typedef fn void(void*, void*, unsigned int, const GuiD3dBox*, const void*, unsigned int, unsigned int) D3dUpdateSubresource_; // 48
+typedef fn int(D3dCom_*, int, D3dLib_*, unsigned int, const unsigned int*, unsigned int, unsigned int,
+               D3dCom_**, unsigned int*, D3dCom_**) D3d11CreateDevice_;
+typedef fn unsigned int(D3dCom_*) D3dRelease_;                                     // IUnknown 2
+typedef fn int(D3dCom_*, const GuiD3dGuid*, D3dCom_**) D3dQueryInterface_;         // IUnknown 0, IDXGIObject::GetParent 6
+typedef fn int(D3dCom_*, D3dCom_**) D3dGetAdapter_;                                // IDXGIDevice 7
+typedef fn int(D3dCom_*, D3dCom_*, D3dHwnd_*, const GuiD3dSwapDesc*, const D3dFullscreenDesc_*, D3dCom_*, D3dCom_**) D3dCreateSwapChainForHwnd_; // IDXGIFactory2 15
+typedef fn int(D3dCom_*, D3dHwnd_*, unsigned int) D3dMakeWindowAssociation_;      // IDXGIFactory 8
+typedef fn int(D3dCom_*, unsigned int, const GuiD3dGuid*, D3dCom_**) D3dGetBuffer_; // IDXGISwapChain 9
+typedef fn int(D3dCom_*, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int) D3dResizeBuffers_; // 13
+typedef fn int(D3dCom_*, unsigned int, unsigned int) D3dPresent_;                  // IDXGISwapChain 8
+typedef fn int(D3dCom_*, unsigned int, unsigned int, const GuiD3dPresentParams*) D3dPresent1_; // IDXGISwapChain1 22
+typedef fn int(D3dCom_*, const GuiD3dTexDesc*, const D3dSubresourceData_*, D3dCom_**) D3dCreateTexture2D_; // ID3D11Device 5
+typedef fn void(D3dCom_*, D3dCom_*, D3dCom_*) D3dCopyResource_;                    // ID3D11DeviceContext 47
+typedef fn void(D3dCom_*, D3dCom_*, unsigned int, const GuiD3dBox*, const unsigned char*, unsigned int, unsigned int) D3dUpdateSubresource_; // 48
 
-static void* __d3d_method(void* obj, int index) {
-    unsafe {
-        void** vtbl = *(void***)obj;
-        return vtbl[index];
-    }
+// Method 'index' of a COM object's table (the caller casts it to its signature).
+static D3dMethod_ __d3d_method(D3dCom_* obj, int index) {
+    unsafe { return obj->vtbl[index]; }
 }
 
-static void __d3d_release(void* obj) {
+static void __d3d_release(D3dCom_* obj) {
     unsafe {
-        if (obj == (void*)0) { return; }
+        if (obj == (D3dCom_*)0) { return; }
         D3dRelease_ f = (D3dRelease_)__d3d_method(obj, 2);
         f(obj);
     }
@@ -154,20 +167,22 @@ static int __d3d_load() {
     if (gD3dLoaded != 0) { return gD3dLoaded > 0 ? 1 : 0; }
     gD3dLoaded = -1;
     unsafe {
-        void* lib = LoadLibraryA("d3d11.dll");
-        if (lib == (void*)0) { return 0; }
-        gD3dCreateDevice = (D3d11CreateDevice_)GetProcAddress(lib, "D3D11CreateDevice");
-        if (gD3dCreateDevice == (D3d11CreateDevice_)0) { return 0; }
+        D3dLib_* lib = LoadLibraryA("d3d11.dll");
+        if (lib == (D3dLib_*)0) { return 0; }
+        match (GetProcAddress(lib, "D3D11CreateDevice")) {
+            case some(p): { gD3dCreateDevice = (D3d11CreateDevice_)p; }
+            case null: { return 0; }
+        }
     }
     gD3dLoaded = 1;
     return 1;
 }
 
 struct GuiD3dWindow {
-    void* device;       // ID3D11Device
-    void* context;      // ID3D11DeviceContext
-    void* swapChain;    // IDXGISwapChain1
-    void* texture;      // ID3D11Texture2D, the frame
+    D3dCom_* device;       // ID3D11Device
+    D3dCom_* context;      // ID3D11DeviceContext
+    D3dCom_* swapChain;    // IDXGISwapChain1
+    D3dCom_* texture;      // ID3D11Texture2D, the frame
     int texW; int texH;
     int scW; int scH;   // swap chain buffer size
     int flipDiscard;
@@ -190,36 +205,36 @@ static int __d3d_attach(&GuiWindowState st, struct GuiNativeHandle h) {
     unsafe {
         if (h.kind != GUI_NATIVE_WIN32 || h.window == 0ULL) { return 0; }
         if (!__d3d_load()) { return 0; }
-        void* hwnd = (void*)(unsigned long long)h.window;
+        D3dHwnd_* hwnd = (D3dHwnd_*)(unsigned long long)h.window;
         struct GuiD3dWindow* w = (struct GuiD3dWindow*)alloc_zeroed_raw_(sizeof(struct GuiD3dWindow));
         unsigned int level = 0U;
         // HARDWARE (1), else WARP (5); BGRA_SUPPORT (0x20) for DXGI interop.
-        int hr = gD3dCreateDevice((void*)0, 1, (void*)0, 0x20U, (const unsigned int*)0, 0U, 7U /* SDK_VERSION */,
+        int hr = gD3dCreateDevice((D3dCom_*)0, 1, (D3dLib_*)0, 0x20U, (const unsigned int*)0, 0U, 7U /* SDK_VERSION */,
                                   &w->device, &level, &w->context);
         if (hr < 0) {
-            hr = gD3dCreateDevice((void*)0, 5, (void*)0, 0x20U, (const unsigned int*)0, 0U, 7U,
+            hr = gD3dCreateDevice((D3dCom_*)0, 5, (D3dLib_*)0, 0x20U, (const unsigned int*)0, 0U, 7U,
                                   &w->device, &level, &w->context);
         }
-        if (hr < 0 || w->device == (void*)0) { __d3d_free(w); return 0; }
+        if (hr < 0 || w->device == (D3dCom_*)0) { __d3d_free(w); return 0; }
         // device -> IDXGIDevice -> adapter -> IDXGIFactory2
         struct GuiD3dGuid iidDev = __d3d_iid_dxgi_device();
-        void* dxgiDev = (void*)0;
+        D3dCom_* dxgiDev = (D3dCom_*)0;
         D3dQueryInterface_ qi = (D3dQueryInterface_)__d3d_method(w->device, 0);
         if (qi(w->device, &iidDev, &dxgiDev) < 0) { __d3d_free(w); return 0; }
-        void* adapter = (void*)0;
+        D3dCom_* adapter = (D3dCom_*)0;
         D3dGetAdapter_ getAdapter = (D3dGetAdapter_)__d3d_method(dxgiDev, 7);
         hr = getAdapter(dxgiDev, &adapter);
         __d3d_release(dxgiDev);
         if (hr < 0) { __d3d_free(w); return 0; }
         struct GuiD3dGuid iidFac = __d3d_iid_factory2();
-        void* factory = (void*)0;
+        D3dCom_* factory = (D3dCom_*)0;
         D3dQueryInterface_ getParent = (D3dQueryInterface_)__d3d_method(adapter, 6);
         hr = getParent(adapter, &iidFac, &factory);
         __d3d_release(adapter);
         if (hr < 0) { __d3d_free(w); return 0; }   // no IDXGIFactory2: Windows 7
 
         struct GuiD3dSwapDesc d;
-        memset((void*)&d, 0, sizeof(struct GuiD3dSwapDesc));
+        safe_memset_obj(&d, 0);
         d.width = (unsigned int)(st.pixelW > 0 ? st.pixelW : 1);
         d.height = (unsigned int)(st.pixelH > 0 ? st.pixelH : 1);
         d.format = GUI_DXGI_FORMAT_R8G8B8A8_UNORM;
@@ -229,26 +244,26 @@ static int __d3d_attach(&GuiWindowState st, struct GuiNativeHandle h) {
         d.scaling = GUI_DXGI_SCALING_NONE;
         d.swapEffect = GUI_DXGI_SWAP_EFFECT_FLIP_DISCARD;
         D3dCreateSwapChainForHwnd_ create = (D3dCreateSwapChainForHwnd_)__d3d_method(factory, 15);
-        hr = create(factory, w->device, hwnd, &d, (const void*)0, (void*)0, &w->swapChain);
+        hr = create(factory, w->device, hwnd, &d, (const D3dFullscreenDesc_*)0, (D3dCom_*)0, &w->swapChain);
         w->flipDiscard = 1;
         if (hr < 0) {   // Windows 8: no FLIP_DISCARD
             d.swapEffect = GUI_DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL;
             w->flipDiscard = 0;
-            hr = create(factory, w->device, hwnd, &d, (const void*)0, (void*)0, &w->swapChain);
+            hr = create(factory, w->device, hwnd, &d, (const D3dFullscreenDesc_*)0, (D3dCom_*)0, &w->swapChain);
         }
         if (hr < 0) {   // a driver without SCALING_NONE
             d.scaling = GUI_DXGI_SCALING_STRETCH;
-            hr = create(factory, w->device, hwnd, &d, (const void*)0, (void*)0, &w->swapChain);
+            hr = create(factory, w->device, hwnd, &d, (const D3dFullscreenDesc_*)0, (D3dCom_*)0, &w->swapChain);
         }
         if (hr >= 0) {
             D3dMakeWindowAssociation_ mwa = (D3dMakeWindowAssociation_)__d3d_method(factory, 8);
             mwa(factory, hwnd, GUI_DXGI_MWA_NO_ALT_ENTER);
         }
         __d3d_release(factory);
-        if (hr < 0 || w->swapChain == (void*)0) { __d3d_free(w); return 0; }
+        if (hr < 0 || w->swapChain == (D3dCom_*)0) { __d3d_free(w); return 0; }
         w->scW = (int)d.width;
         w->scH = (int)d.height;
-        st.presenterData = (void*)w;
+        st.presenterData = (?&Erased)w;
         return 1;
     }
 }
@@ -284,9 +299,9 @@ static void __d3d_present(&GuiWindowState st, const &unsigned char px, int bw, i
         }
         if (w->texW != bw || w->texH != bh) {
             __d3d_release(w->texture);
-            w->texture = (void*)0;
+            w->texture = (D3dCom_*)0;
             struct GuiD3dTexDesc td;
-            memset((void*)&td, 0, sizeof(struct GuiD3dTexDesc));
+            safe_memset_obj(&td, 0);
             td.width = (unsigned int)bw;
             td.height = (unsigned int)bh;
             td.mipLevels = 1U;
@@ -295,7 +310,7 @@ static void __d3d_present(&GuiWindowState st, const &unsigned char px, int bw, i
             td.sampleCount = 1U;
             td.usage = 0U;   // DEFAULT: a copy source the GPU keeps
             D3dCreateTexture2D_ mk = (D3dCreateTexture2D_)__d3d_method(w->device, 5);
-            if (mk(w->device, &td, (const void*)0, &w->texture) < 0 || w->texture == (void*)0) {
+            if (mk(w->device, &td, (const D3dSubresourceData_*)0, &w->texture) < 0 || w->texture == (D3dCom_*)0) {
                 __d3d_fallback(st, px, bw, bh);
                 return;
             }
@@ -308,11 +323,11 @@ static void __d3d_present(&GuiWindowState st, const &unsigned char px, int bw, i
         box.right = (unsigned int)(x + rw); box.bottom = (unsigned int)(y + rh); box.back = 1U;
         const unsigned char* src = (const unsigned char*)px + ((unsigned long long)y * (unsigned long long)bw + (unsigned long long)x) * 4ULL;
         D3dUpdateSubresource_ upd = (D3dUpdateSubresource_)__d3d_method(w->context, 48);
-        upd(w->context, w->texture, 0U, &box, (const void*)src, (unsigned int)bw * 4U, 0U);
+        upd(w->context, w->texture, 0U, &box, src, (unsigned int)bw * 4U, 0U);
         struct GuiD3dGuid iidTex = __d3d_iid_texture2d();
-        void* back = (void*)0;
+        D3dCom_* back = (D3dCom_*)0;
         D3dGetBuffer_ getBuffer = (D3dGetBuffer_)__d3d_method(w->swapChain, 9);
-        if (getBuffer(w->swapChain, 0U, &iidTex, &back) < 0 || back == (void*)0) {
+        if (getBuffer(w->swapChain, 0U, &iidTex, &back) < 0 || back == (D3dCom_*)0) {
             __d3d_fallback(st, px, bw, bh);
             return;
         }
@@ -322,10 +337,10 @@ static void __d3d_present(&GuiWindowState st, const &unsigned char px, int bw, i
         struct GuiD3dRect dirty;
         dirty.left = x; dirty.top = y; dirty.right = x + rw; dirty.bottom = y + rh;
         struct GuiD3dPresentParams pp;
-        memset((void*)&pp, 0, sizeof(struct GuiD3dPresentParams));
+        safe_memset_obj(&pp, 0);
         if (!(x == 0 && y == 0 && rw == bw && rh == bh)) {
             pp.dirtyRectsCount = 1U;
-            pp.dirtyRects = (struct GuiD3dRect*)(void*)&dirty;
+            pp.dirtyRects = (struct GuiD3dRect*)&dirty;
         }
         D3dPresent1_ present1 = (D3dPresent1_)__d3d_method(w->swapChain, 22);
         int hr = present1(w->swapChain, 1U, 0U, &pp);

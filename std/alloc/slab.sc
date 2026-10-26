@@ -7,11 +7,11 @@
 
 namespace std {
 
-extern void* malloc(size_t size);
-extern void  free(void* ptr);
+extern unsigned char* malloc(size_t size);
+extern void  free(unsigned char* ptr);
 // Same rationale as mem.sc/pool.sc for not using panic.h/panic_at here.
 extern void  abort();
-extern int   fprintf(void* stream, const char* fmt, ...);
+extern int   fprintf(CFile_* stream, const char* fmt, ...);
 
 static void slab_abort_(const char* msg) {
     unsafe { fprintf(SAFEC_STDERR_, "std::alloc (slab) fatal: %s\n", msg); }
@@ -35,23 +35,23 @@ inline void SlabAllocator::build_freelist_() {
     if (self.has_tags) { payloadOff = SLAB_TAG_SIZE_; }
 
     unsigned long i = (unsigned long)0;
-    if (self.cap == (unsigned long)0) { self.free_head = (void*)0; return; }  // cap - 1 would wrap
+    if (self.cap == (unsigned long)0) { self.free_head = null; return; }  // cap - 1 would wrap
     unsafe {
         while (i < self.cap - (unsigned long)1) {
-            void* slotBase = (void*)((unsigned long)self.base + i * stride);
-            void* slot     = (void*)((unsigned long)slotBase + payloadOff);
-            void* nextBase = (void*)((unsigned long)self.base + (i + (unsigned long)1) * stride);
-            void* next     = (void*)((unsigned long)nextBase + payloadOff);
+            unsigned char* slotBase = (unsigned char*)((unsigned long)self.base + i * stride);
+            unsigned char* slot     = (unsigned char*)((unsigned long)slotBase + payloadOff);
+            unsigned char* nextBase = (unsigned char*)((unsigned long)self.base + (i + (unsigned long)1) * stride);
+            unsigned char* next     = (unsigned char*)((unsigned long)nextBase + payloadOff);
             if (self.has_tags) { *(unsigned long*)slotBase = SLAB_FREE_MAGIC_; }
-            *(void**)slot = next;
+            *(unsigned char**)slot = next;
             i = i + (unsigned long)1;
         }
         // Last slot points to NULL
-        void* lastBase = (void*)((unsigned long)self.base + i * stride);
-        void* last     = (void*)((unsigned long)lastBase + payloadOff);
+        unsigned char* lastBase = (unsigned char*)((unsigned long)self.base + i * stride);
+        unsigned char* last     = (unsigned char*)((unsigned long)lastBase + payloadOff);
         if (self.has_tags) { *(unsigned long*)lastBase = SLAB_FREE_MAGIC_; }
-        *(void**)last = (void*)0;
-        self.free_head = (void*)((unsigned long)self.base + payloadOff);
+        *(unsigned char**)last = (unsigned char*)0;
+        self.free_head = (?&SlabLink_)((unsigned long)self.base + payloadOff);
     }
 }
 
@@ -70,12 +70,12 @@ inline struct SlabAllocator SlabAllocator::over([]unsigned char buffer, unsigned
     unsigned long addr;
     unsafe { addr = (unsigned long)buffer.ptr; }
     unsigned long skip = ((addr + 7UL) & ~7UL) - addr;
-    unsafe { a.base = (&heap void)(addr + skip); }
+    unsafe { a.base = (&heap unsigned char)(addr + skip); }
     a.owned = 0;
     a.obj_size  = slab_slot_size_(obj_size);
     a.cap       = bytes > skip ? (bytes - skip) / a.obj_size : 0UL;
     a.used      = (unsigned long)0;
-    a.free_head = (void*)0;
+    a.free_head = null;
     a.has_tags  = 0;
     a.build_freelist_();
     return a;
@@ -87,9 +87,9 @@ inline struct SlabAllocator SlabAllocator::new(unsigned long obj_size, unsigned 
     a.cap      = count;
     a.used     = (unsigned long)0;
     a.has_tags = 1;
-    unsafe { a.base = (&heap void)malloc(checked_mul_size(a.obj_size + SLAB_TAG_SIZE_, count)); }
+    unsafe { a.base = (&heap unsigned char)malloc(checked_mul_size(a.obj_size + SLAB_TAG_SIZE_, count)); }
     a.owned = 1;
-    a.free_head = (void*)0;
+    a.free_head = null;
     a.build_freelist_();
     return a;
 }
@@ -102,27 +102,27 @@ inline unsigned long SlabAllocator::max_align() const {
     return low;
 }
 
-?&heap void SlabAllocator::alloc(unsigned long size, unsigned long align) {
+?&heap unsigned char SlabAllocator::alloc(unsigned long size, unsigned long align) {
     if ((align & (align - 1UL)) != 0UL || align > self.max_align()) { return null; }
     if (size > self.obj_size) { return null; }
-    if (self.free_head == (void*)0) {
+    if (self.free_head.is_null()) {
         return null;
     }
     unsafe {
-        void* obj    = self.free_head;
-        self.free_head = *(void**)obj;
+        struct SlabLink_* obj = (struct SlabLink_*)self.free_head;
+        self.free_head = obj->next;
         self.used    = self.used + (unsigned long)1;
         if (self.has_tags) {
             unsigned long* tag = (unsigned long*)((unsigned long)obj - SLAB_TAG_SIZE_);
             *tag = SLAB_LIVE_MAGIC_;
         }
-        return (?&heap void)obj;
+        return (?&heap unsigned char)obj;
     }
 }
 
-void SlabAllocator::dealloc(?&heap void ptr_ref) {
-    void* ptr = ptr_ref;
-    if (ptr == (void*)0) { return; }
+void SlabAllocator::dealloc(?&heap unsigned char ptr_ref) {
+    unsigned char* ptr = ptr_ref;
+    if (ptr == (unsigned char*)0) { return; }
     unsafe {
         if (self.has_tags) {
             unsigned long* tag = (unsigned long*)((unsigned long)ptr - SLAB_TAG_SIZE_);
@@ -137,8 +137,9 @@ void SlabAllocator::dealloc(?&heap void ptr_ref) {
             }
             *tag = SLAB_FREE_MAGIC_;
         }
-        *(void**)ptr   = self.free_head;
-        self.free_head = ptr;
+        struct SlabLink_* link = (struct SlabLink_*)ptr;
+        link->next     = self.free_head;
+        self.free_head = (?&SlabLink_)link;
         self.used      = self.used - (unsigned long)1;
     }
 }
@@ -155,8 +156,8 @@ inline void SlabAllocator::reset() {
 inline void SlabAllocator::destroy() { self.drop(); }
 
 inline void SlabAllocator::drop() {
-    if (self.owned) { unsafe { free((void*)self.base); } }
-    self.free_head = (void*)0;
+    if (self.owned) { unsafe { free((unsigned char*)self.base); } }
+    self.free_head = null;
     self.used      = (unsigned long)0;
     self.cap       = (unsigned long)0;
 }

@@ -68,7 +68,7 @@ static int rpc_unframe_(const char* raw, unsigned long rawLen,
     if (len > 0UL) {
         unsafe { copy = (unsigned char*)alloc_raw_(len); }
         if (copy == (unsigned char*)0) { return 0; }
-        unsafe { safe_memcpy_raw_((void*)copy, (const void*)(raw + 5), len); }
+        unsafe { safe_memcpy_raw_((unsigned char*)copy, (const unsigned char*)(raw + 5), len); }
     }
     unsafe { *outData = copy; *outLen = len; }
     return 1;

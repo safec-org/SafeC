@@ -17,7 +17,6 @@
 #include <std/math.h>
 #include <std/collections/vec.h>
 #include <std/collections/string.h>
-extern void* memset(void* ptr, int val, size_t n);
 extern char* getenv(const char* name);
 
 namespace std {
@@ -400,7 +399,7 @@ void Widget::insert_child(unsigned long index, &Widget child) {
 }
 
 static int __w_same(const ?&Widget a, const &Widget b) {
-    unsafe { return (const void*)a == (const void*)b ? 1 : 0; }
+    unsafe { return (const unsigned char*)a == (const unsigned char*)b ? 1 : 0; }
 }
 
 // Forgets references to 'gone' (and its subtree) held by the UI.
@@ -1311,7 +1310,7 @@ void GuiUi::set_focus(?&Widget w) {
     match (self.focus) {
         case some(old): {
             int same = 0;
-            unsafe { same = ((void*)old == (void*)w) ? 1 : 0; }
+            unsafe { same = ((const unsigned char*)old == (const unsigned char*)w) ? 1 : 0; }
             if (!same) {
                 old.focused = 0;
                 if (old.kind == WIDGET_SPINNER) { __w_spinner_commit(old); }
@@ -1352,7 +1351,7 @@ static void __w_ui_win_size(const &GuiUi ui, &int ww, &int wh) {
 }
 
 void GuiUi::popup(&Widget menu, float x, float y) {
-    unsafe { menu.uiPtr = (?&GuiUi)(void*)self; }
+    unsafe { menu.uiPtr = (?&GuiUi)self; }
     menu.open = 1;
     menu.hotIndex = -1;
     menu.parent = null;
@@ -1406,7 +1405,7 @@ static ?&Widget __w_first_focusable(&Widget w);
 
 void GuiUi::show_modal(&Widget dialog) {
     self.close_popups();
-    unsafe { dialog.uiPtr = (?&GuiUi)(void*)self; }
+    unsafe { dialog.uiPtr = (?&GuiUi)self; }
     dialog.open = 1;
     dialog.result = GUI_RESULT_NONE;
     self.overlays.push(dialog);
@@ -1924,13 +1923,13 @@ int GuiUi::dispatch(&GuiEvent ev) {
         ?&Widget hit = __w_hit_ui(self, (float)ev.x, (float)ev.y);
         if (k == GUI_EVENT_MOUSE_MOVE) {
             int changed = 0;
-            unsafe { changed = ((void*)hit != (void*)self.hoverW) ? 1 : 0; }
+            unsafe { changed = ((const unsigned char*)hit != (const unsigned char*)self.hoverW) ? 1 : 0; }
             if (changed) {
                 __w_set_hover(self, hit);
                 self.dirty = 1;
                 ?&Widget tt = __w_tip_target(hit);
                 int tipChanged = 0;
-                unsafe { tipChanged = ((void*)tt != (void*)self.tipFor) ? 1 : 0; }
+                unsafe { tipChanged = ((const unsigned char*)tt != (const unsigned char*)self.tipFor) ? 1 : 0; }
                 if (tipChanged) {
                     __w_hide_tip(self);
                     self.tipFor = tt;
@@ -2011,7 +2010,7 @@ int GuiUi::dispatch(&GuiEvent ev) {
                     }
                     // (a click on nothing focusable leaves the focus alone)
                     int same = 0;
-                    unsafe { same = ((void*)newFocus == (void*)self.focus) ? 1 : 0; }
+                    unsafe { same = ((const unsigned char*)newFocus == (const unsigned char*)self.focus) ? 1 : 0; }
                     if (!same && !newFocus.is_null()) { self.set_focus(newFocus); }
                     self.capture = h;
                     handled = __w_bubble(self, h, ev);

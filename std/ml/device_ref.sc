@@ -13,8 +13,8 @@
 
 namespace std {
 
-extern void* malloc(size_t size);
-extern void  free(void* ptr);
+extern unsigned char* malloc(size_t size);
+extern void  free(unsigned char* ptr);
 
 // The EW codes (device_kernels.cu).
 #define REF_EW_ADD 0
@@ -1064,7 +1064,7 @@ int device_ref_gemm_batched_(const &DevGemm g) {
             unsafe {
                 device_ref_gemm_(g.ta, g.tb, g.m, g.n, g.k, g.alpha, (unsigned long)a, g.lda, (unsigned long)b, g.ldb,
                                  g.beta, g.c + 4UL * i * g.sc, g.ldc);
-                free((void*)a); free((void*)b);
+                free((unsigned char*)a); free((unsigned char*)b);
             }
             i = i + 1UL;
         }

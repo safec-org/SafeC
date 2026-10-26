@@ -167,12 +167,12 @@ static void t_ring_alloc() {
         CHECK(out[9] == 39);
 
         struct TlsfAllocator t = std::TlsfAllocator::new(32768UL);
-        ?&heap void a = t.alloc(100UL, 8UL);
-        ?&heap void b = t.alloc(3000UL, 8UL);
+        ?&heap unsigned char a = t.alloc(100UL, 8UL);
+        ?&heap unsigned char b = t.alloc(3000UL, 8UL);
         CHECK(!a.is_null() && !b.is_null());
         match (a) { case null: { } case some(x): { t.dealloc(x); } }
         match (b) { case null: { } case some(x): { t.dealloc(x); } }
-        ?&heap void c = t.alloc(30000UL, 8UL);   // fits only if freed blocks coalesced
+        ?&heap unsigned char c = t.alloc(30000UL, 8UL);   // fits only if freed blocks coalesced
         CHECK(!c.is_null());
         t.destroy();
 
@@ -184,7 +184,7 @@ static void t_ring_alloc() {
 
         struct PoolAllocator p = std::PoolAllocator::new(2048UL);
         unsigned long before = p.available();
-        ?&heap void pa = p.alloc(200UL, 8UL);
+        ?&heap unsigned char pa = p.alloc(200UL, 8UL);
         CHECK(!pa.is_null());
         match (pa) { case null: { } case some(x): { p.dealloc(x); } }
         CHECK(p.available() == before);

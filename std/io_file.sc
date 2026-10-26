@@ -1,26 +1,27 @@
 // SafeC Standard Library — File I/O implementation
-// &File handles wrap the C FILE* (the libc externs below stay untyped).
+// &File handles wrap the C FILE (stderr_compat.h's opaque CFile_).
 #pragma once
+#include <std/stderr_compat.h>
 #include <std/stddef.h>
 #include <std/io_file.h>
 #include <std/io_traits.h>
 
 namespace std {
 
-extern void*          fopen(const char* path, const char* mode);
-extern int            fclose(void* stream);
-extern size_t  fread(void* buf, size_t size, size_t count, void* stream);
-extern int            fgetc(void* stream);
-extern char*          fgets(char* buf, int n, void* stream);
-extern size_t  fwrite(const void* buf, size_t size, size_t count, void* stream);
-extern int            fputc(int c, void* stream);
-extern int            fputs(const char* s, void* stream);
-extern int            fseek(void* stream, long offset, int whence);
-extern long           ftell(void* stream);
-extern void           rewind(void* stream);
-extern int            feof(void* stream);
-extern int            ferror(void* stream);
-extern int            fflush(void* stream);
+extern CFile_*          fopen(const char* path, const char* mode);
+extern int            fclose(CFile_* stream);
+extern size_t  fread(unsigned char* buf, size_t size, size_t count, CFile_* stream);
+extern int            fgetc(CFile_* stream);
+extern char*          fgets(char* buf, int n, CFile_* stream);
+extern size_t  fwrite(const unsigned char* buf, size_t size, size_t count, CFile_* stream);
+extern int            fputc(int c, CFile_* stream);
+extern int            fputs(const char* s, CFile_* stream);
+extern int            fseek(CFile_* stream, long offset, int whence);
+extern long           ftell(CFile_* stream);
+extern void           rewind(CFile_* stream);
+extern int            feof(CFile_* stream);
+extern int            ferror(CFile_* stream);
+extern int            fflush(CFile_* stream);
 
 inline ?&File File::open(const &char path, const &char mode) {
     unsafe { return (?&File)fopen(path, mode); }
@@ -29,7 +30,7 @@ inline ?&File File::open(const &char path, const &char mode) {
 inline void File::drop() { self.close(); }
 
 inline int File::close() {
-    unsafe { return fclose((void*)self); }
+    unsafe { return fclose((CFile_*)self); }
 }
 
 inline long long File::read([]unsigned char buf_s) {
@@ -38,20 +39,20 @@ inline long long File::read([]unsigned char buf_s) {
     &unsigned char buf;
     unsafe { buf = (&unsigned char)buf_s.ptr; }
     unsafe {
-        unsigned long got = fread((void*)buf, (unsigned long)1, n, (void*)self);
-        if (got == 0UL && n > 0UL && ferror((void*)self) != 0) { return -1LL; }
+        unsigned long got = fread((unsigned char*)buf, (unsigned long)1, n, (CFile_*)self);
+        if (got == 0UL && n > 0UL && ferror((CFile_*)self) != 0) { return -1LL; }
         return (long long)got;
     }
 }
 
 inline int File::getc() {
-    unsafe { return fgetc((void*)self); }
+    unsafe { return fgetc((CFile_*)self); }
 }
 
 inline ?&char File::gets([]char buf) {
     if (buf.len == 0UL) { return null; }
     int n = buf.len > 2147483647UL ? 2147483647 : (int)buf.len;
-    unsafe { return fgets((char*)buf.ptr, n, (void*)self); }
+    unsafe { return fgets((char*)buf.ptr, n, (CFile_*)self); }
 }
 
 inline long long File::write([]const unsigned char buf_s) {
@@ -60,42 +61,42 @@ inline long long File::write([]const unsigned char buf_s) {
     const &unsigned char buf;
     unsafe { buf = (const &unsigned char)buf_s.ptr; }
     unsafe {
-        unsigned long put = fwrite((const void*)buf, (unsigned long)1, n, (void*)self);
+        unsigned long put = fwrite((const unsigned char*)buf, (unsigned long)1, n, (CFile_*)self);
         if (put == 0UL && n > 0UL) { return -1LL; }
         return (long long)put;
     }
 }
 
 inline int File::putc(int c) {
-    unsafe { return fputc(c, (void*)self); }
+    unsafe { return fputc(c, (CFile_*)self); }
 }
 
 inline int File::puts(const &char s) {
-    unsafe { return fputs(s, (void*)self); }
+    unsafe { return fputs(s, (CFile_*)self); }
 }
 
 inline int File::seek(long long offset, int whence) {
-    unsafe { return fseek((void*)self, (long)offset, whence); }
+    unsafe { return fseek((CFile_*)self, (long)offset, whence); }
 }
 
 inline long long File::tell() {
-    unsafe { return (long long)ftell((void*)self); }
+    unsafe { return (long long)ftell((CFile_*)self); }
 }
 
 inline void File::rewind() {
-    unsafe { rewind((void*)self); }
+    unsafe { rewind((CFile_*)self); }
 }
 
 inline int File::eof() {
-    unsafe { return feof((void*)self); }
+    unsafe { return feof((CFile_*)self); }
 }
 
 inline int File::error() {
-    unsafe { return ferror((void*)self); }
+    unsafe { return ferror((CFile_*)self); }
 }
 
 inline int File::flush() {
-    unsafe { return fflush((void*)self); }
+    unsafe { return fflush((CFile_*)self); }
 }
 
 inline long long File::size() {

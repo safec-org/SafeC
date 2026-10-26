@@ -28,85 +28,140 @@
 #include <std/mem.h>
 #include <std/time.h>
 #include <std/collections/string.h>
-extern void* memset(void* ptr, int val, size_t n);
-extern void* memcpy(void* dst, const void* src, size_t n);
 extern char* getenv(const char* name);
 extern double atof(const char* s);
 extern int pipe(int* fds);
-extern long write(int fd, const void* buf, unsigned long n);
-extern long read(int fd, void* buf, unsigned long n);
-extern int poll(void* fds, unsigned long nfds, int timeout);
+extern long write(int fd, const unsigned char* buf, unsigned long n);
+extern long read(int fd, unsigned char* buf, unsigned long n);
+
 extern int fcntl(int fd, int cmd, ...);
 
 namespace std {
 
-extern void* XOpenDisplay(const char* displayName);
-extern unsigned long XDefaultRootWindow(void* display);
-extern int XDefaultScreen(void* display);
-extern int XConnectionNumber(void* display);
-extern unsigned long XCreateSimpleWindow(void* display, unsigned long parent,
+// Opaque Xlib types (Display, GC, XIM, XIC, XrmDatabase); XImage, Visual
+// and the events are declared below as far as this file reads them.
+struct XDisplay_ { char opaque_; };
+struct XGC_      { char opaque_; };
+struct XIM_      { char opaque_; };
+struct XIC_      { char opaque_; };
+struct XrmDb_    { char opaque_; };
+
+// XImage's head: four ints, then the data pointer (offset 16) and the
+// byte order (offset 24) -- the two fields this file writes.
+struct X11ImageHead {
+    int width; int height; int xoffset; int format;
+    unsigned char* data;
+    int byteOrder;
+};
+
+// Visual's head: the channel masks tell where R, G and B go in a pixel.
+struct X11VisualHead {
+    unsigned char* extData;
+    unsigned long visualid;
+    int cls;
+    unsigned long redMask;
+    unsigned long greenMask;
+    unsigned long blueMask;
+};
+
+// Padded to >= a real XEvent union's size (24 'long's on a 64-bit build)
+// so XNextEvent has room to write whichever variant actually arrived.
+struct X11EventBuf {
+    long pad[24];
+};
+
+struct X11SizeHints {
+    long flags;
+    int x; int y; int width; int height;
+    int minWidth; int minHeight; int maxWidth; int maxHeight;
+    int widthInc; int heightInc;
+    int minAspectX; int minAspectY; int maxAspectX; int maxAspectY;
+    int baseWidth; int baseHeight;
+    int winGravity;
+};
+
+// XColor (pixel, red, green, blue, flags, pad).
+struct X11Color {
+    unsigned long pixel;
+    unsigned short red; unsigned short green; unsigned short blue;
+    char flags; char pad;
+};
+
+struct GuiX11PollFd {
+    int fd;
+    short events;
+    short revents;
+};
+
+extern int poll(GuiX11PollFd* fds, unsigned long nfds, int timeout);
+
+extern XDisplay_* XOpenDisplay(const char* displayName);
+extern unsigned long XDefaultRootWindow(XDisplay_* display);
+extern int XDefaultScreen(XDisplay_* display);
+extern int XConnectionNumber(XDisplay_* display);
+extern unsigned long XCreateSimpleWindow(XDisplay_* display, unsigned long parent,
                                           int x, int y, unsigned int w, unsigned int h,
                                           unsigned int borderWidth, unsigned long border,
                                           unsigned long background);
-extern int XSelectInput(void* display, unsigned long window, long eventMask);
-extern int XMapWindow(void* display, unsigned long window);
-extern int XUnmapWindow(void* display, unsigned long window);
-extern int XStoreName(void* display, unsigned long window, const char* name);
-extern int XPending(void* display);
-extern int XNextEvent(void* display, void* eventOut);
-extern int XCheckTypedWindowEvent(void* display, unsigned long w, int type, void* eventOut);
-extern int XDestroyWindow(void* display, unsigned long window);
-extern int XSetWMProtocols(void* display, unsigned long window, void* protocols, int count);
-extern unsigned long XInternAtom(void* display, const char* name, int onlyIfExists);
-extern void* XCreateGC(void* display, unsigned long drawable, unsigned long valueMask, void* values);
-extern int XFreeGC(void* display, void* gc);
-extern void* XCreateImage(void* display, void* visual, unsigned int depth, int format,
-                           int offset, const void* data, unsigned int w, unsigned int h,
+extern int XSelectInput(XDisplay_* display, unsigned long window, long eventMask);
+extern int XMapWindow(XDisplay_* display, unsigned long window);
+extern int XUnmapWindow(XDisplay_* display, unsigned long window);
+extern int XStoreName(XDisplay_* display, unsigned long window, const char* name);
+extern int XPending(XDisplay_* display);
+extern int XNextEvent(XDisplay_* display, X11EventBuf* eventOut);
+extern int XCheckTypedWindowEvent(XDisplay_* display, unsigned long w, int type, X11EventBuf* eventOut);
+extern int XDestroyWindow(XDisplay_* display, unsigned long window);
+extern int XSetWMProtocols(XDisplay_* display, unsigned long window, unsigned long* protocols, int count);
+extern unsigned long XInternAtom(XDisplay_* display, const char* name, int onlyIfExists);
+extern XGC_* XCreateGC(XDisplay_* display, unsigned long drawable, unsigned long valueMask, const unsigned char* values);
+extern int XFreeGC(XDisplay_* display, XGC_* gc);
+extern X11ImageHead* XCreateImage(XDisplay_* display, X11VisualHead* visual, unsigned int depth, int format,
+                           int offset, const unsigned char* data, unsigned int w, unsigned int h,
                            int bitmapPad, int bytesPerLine);
-extern int XPutImage(void* display, unsigned long drawable, void* gc, void* image,
+extern int XPutImage(XDisplay_* display, unsigned long drawable, XGC_* gc, X11ImageHead* image,
                       int srcX, int srcY, int destX, int destY, unsigned int w, unsigned int h);
-extern void* XDefaultVisual(void* display, int screen);
-extern unsigned int XDefaultDepth(void* display, int screen);
-extern int XFlush(void* display);
-extern int XSync(void* display, int discard);
-extern int XDestroyImage(void* image);
-extern int XFree(void* data);
-extern int XLookupString(void* keyEvent, char* buf, int len, unsigned long* keysym, void* status);
-extern unsigned long XLookupKeysym(void* keyEvent, int index);
-extern int XRefreshKeyboardMapping(void* mappingEvent);
-extern int XMoveWindow(void* display, unsigned long w, int x, int y);
-extern int XResizeWindow(void* display, unsigned long w, unsigned int width, unsigned int height);
-extern int XRaiseWindow(void* display, unsigned long w);
-extern int XSetInputFocus(void* display, unsigned long w, int revertTo, unsigned long time);
-extern void XSetWMNormalHints(void* display, unsigned long w, void* hints);
-extern int XChangeProperty(void* display, unsigned long w, unsigned long property, unsigned long type,
-                           int format, int mode, const void* data, int nelements);
-extern int XGetWindowProperty(void* display, unsigned long w, unsigned long property, long offset,
+extern X11VisualHead* XDefaultVisual(XDisplay_* display, int screen);
+extern unsigned int XDefaultDepth(XDisplay_* display, int screen);
+extern int XFlush(XDisplay_* display);
+extern int XSync(XDisplay_* display, int discard);
+extern int XDestroyImage(X11ImageHead* image);
+extern int XFree(unsigned char* data);
+extern int XLookupString(X11EventBuf* keyEvent, char* buf, int len, unsigned long* keysym, unsigned char* status);
+extern unsigned long XLookupKeysym(X11EventBuf* keyEvent, int index);
+extern int XRefreshKeyboardMapping(X11EventBuf* mappingEvent);
+extern int XMoveWindow(XDisplay_* display, unsigned long w, int x, int y);
+extern int XResizeWindow(XDisplay_* display, unsigned long w, unsigned int width, unsigned int height);
+extern int XRaiseWindow(XDisplay_* display, unsigned long w);
+extern int XSetInputFocus(XDisplay_* display, unsigned long w, int revertTo, unsigned long time);
+extern void XSetWMNormalHints(XDisplay_* display, unsigned long w, X11SizeHints* hints);
+extern int XChangeProperty(XDisplay_* display, unsigned long w, unsigned long property, unsigned long type,
+                           int format, int mode, const unsigned char* data, int nelements);
+extern int XGetWindowProperty(XDisplay_* display, unsigned long w, unsigned long property, long offset,
                               long length, int del, unsigned long reqType, unsigned long* actualType,
                               int* actualFormat, unsigned long* nitems, unsigned long* bytesAfter,
                               unsigned char** prop);
-extern int XSendEvent(void* display, unsigned long w, int propagate, long mask, void* event);
-extern int XSetSelectionOwner(void* display, unsigned long selection, unsigned long owner, unsigned long time);
-extern unsigned long XGetSelectionOwner(void* display, unsigned long selection);
-extern int XConvertSelection(void* display, unsigned long selection, unsigned long target,
+extern int XSendEvent(XDisplay_* display, unsigned long w, int propagate, long mask, X11EventBuf* event);
+extern int XSetSelectionOwner(XDisplay_* display, unsigned long selection, unsigned long owner, unsigned long time);
+extern unsigned long XGetSelectionOwner(XDisplay_* display, unsigned long selection);
+extern int XConvertSelection(XDisplay_* display, unsigned long selection, unsigned long target,
                              unsigned long property, unsigned long requestor, unsigned long time);
-extern unsigned long XCreateFontCursor(void* display, unsigned int shape);
-extern int XDefineCursor(void* display, unsigned long w, unsigned long cursor);
-extern unsigned long XCreateBitmapFromData(void* display, unsigned long d, const char* data,
+extern unsigned long XCreateFontCursor(XDisplay_* display, unsigned int shape);
+extern int XDefineCursor(XDisplay_* display, unsigned long w, unsigned long cursor);
+extern unsigned long XCreateBitmapFromData(XDisplay_* display, unsigned long d, const char* data,
                                            unsigned int w, unsigned int h);
-extern unsigned long XCreatePixmapCursor(void* display, unsigned long src, unsigned long mask,
-                                         void* fg, void* bg, unsigned int x, unsigned int y);
-extern int XFreePixmap(void* display, unsigned long p);
-extern int XTranslateCoordinates(void* display, unsigned long src, unsigned long dst, int x, int y,
+extern unsigned long XCreatePixmapCursor(XDisplay_* display, unsigned long src, unsigned long mask,
+                                         X11Color* fg, X11Color* bg, unsigned int x, unsigned int y);
+extern int XFreePixmap(XDisplay_* display, unsigned long p);
+extern int XTranslateCoordinates(XDisplay_* display, unsigned long src, unsigned long dst, int x, int y,
                                  int* dx, int* dy, unsigned long* child);
-extern char* XResourceManagerString(void* display);
-extern void* XOpenIM(void* display, void* db, char* resName, char* resClass);
-extern void* XCreateIC(void* im, ...);
-extern void XDestroyIC(void* ic);
-extern void XSetICFocus(void* ic);
-extern void XUnsetICFocus(void* ic);
-extern int Xutf8LookupString(void* ic, void* keyEvent, char* buf, int len, unsigned long* keysym, int* status);
-extern int XFilterEvent(void* event, unsigned long w);
+extern char* XResourceManagerString(XDisplay_* display);
+extern XIM_* XOpenIM(XDisplay_* display, XrmDb_* db, char* resName, char* resClass);
+extern XIC_* XCreateIC(XIM_* im, ...);
+extern void XDestroyIC(XIC_* ic);
+extern void XSetICFocus(XIC_* ic);
+extern void XUnsetICFocus(XIC_* ic);
+extern int Xutf8LookupString(XIC_* ic, X11EventBuf* keyEvent, char* buf, int len, unsigned long* keysym, int* status);
+extern int XFilterEvent(X11EventBuf* event, unsigned long w);
 extern char* XSetLocaleModifiers(const char* mods);
 
 #define GUI_X11_KEY_PRESS_MASK       (1L << 0)
@@ -148,7 +203,7 @@ struct X11AnyEvent {
     int type;
     unsigned long serial;
     int sendEvent;
-    void* display;
+    XDisplay_* display;
     unsigned long window;
 };
 
@@ -156,7 +211,7 @@ struct X11ButtonEvent {
     int type;
     unsigned long serial;
     int sendEvent;
-    void* display;
+    XDisplay_* display;
     unsigned long window;
     unsigned long root;
     unsigned long subwindow;
@@ -172,7 +227,7 @@ struct X11MotionEvent {
     int type;
     unsigned long serial;
     int sendEvent;
-    void* display;
+    XDisplay_* display;
     unsigned long window;
     unsigned long root;
     unsigned long subwindow;
@@ -188,7 +243,7 @@ struct X11KeyEvent {
     int type;
     unsigned long serial;
     int sendEvent;
-    void* display;
+    XDisplay_* display;
     unsigned long window;
     unsigned long root;
     unsigned long subwindow;
@@ -204,7 +259,7 @@ struct X11CrossingEvent {
     int type;
     unsigned long serial;
     int sendEvent;
-    void* display;
+    XDisplay_* display;
     unsigned long window;
     unsigned long root;
     unsigned long subwindow;
@@ -222,7 +277,7 @@ struct X11FocusEvent {
     int type;
     unsigned long serial;
     int sendEvent;
-    void* display;
+    XDisplay_* display;
     unsigned long window;
     int mode;
     int detail;
@@ -232,7 +287,7 @@ struct X11ExposeEvent {
     int type;
     unsigned long serial;
     int sendEvent;
-    void* display;
+    XDisplay_* display;
     unsigned long window;
     int x; int y;
     int w; int h;
@@ -243,7 +298,7 @@ struct X11ConfigureEvent {
     int type;
     unsigned long serial;
     int sendEvent;
-    void* display;
+    XDisplay_* display;
     unsigned long event;
     unsigned long window;
     int x; int y;
@@ -257,7 +312,7 @@ struct X11ClientMessageEvent {
     int type;
     unsigned long serial;
     int sendEvent;
-    void* display;
+    XDisplay_* display;
     unsigned long window;
     unsigned long messageType;
     int format;
@@ -268,7 +323,7 @@ struct X11SelectionRequestEvent {
     int type;
     unsigned long serial;
     int sendEvent;
-    void* display;
+    XDisplay_* display;
     unsigned long owner;
     unsigned long requestor;
     unsigned long selection;
@@ -281,44 +336,12 @@ struct X11SelectionEvent {
     int type;
     unsigned long serial;
     int sendEvent;
-    void* display;
+    XDisplay_* display;
     unsigned long requestor;
     unsigned long selection;
     unsigned long target;
     unsigned long property;
     unsigned long time;
-};
-
-// Padded to >= a real XEvent union's size (24 'long's on a 64-bit build)
-// so XNextEvent has room to write whichever variant actually arrived.
-struct X11EventBuf {
-    long pad[24];
-};
-
-struct X11SizeHints {
-    long flags;
-    int x; int y; int width; int height;
-    int minWidth; int minHeight; int maxWidth; int maxHeight;
-    int widthInc; int heightInc;
-    int minAspectX; int minAspectY; int maxAspectX; int maxAspectY;
-    int baseWidth; int baseHeight;
-    int winGravity;
-};
-
-// Visual's head: the channel masks tell where R, G and B go in a pixel.
-struct X11VisualHead {
-    void* extData;
-    unsigned long visualid;
-    int cls;
-    unsigned long redMask;
-    unsigned long greenMask;
-    unsigned long blueMask;
-};
-
-struct GuiX11PollFd {
-    int fd;
-    short events;
-    short revents;
 };
 
 #ifdef __linux__
@@ -329,22 +352,22 @@ struct GuiX11PollFd {
 
 struct GuiX11Window {
     unsigned long window;
-    void* gc;
-    void* ic;                 // input context, or null
-    void* image;              // XImage over 'staging', rebuilt when the size changes
+    XGC_* gc;
+    XIC_* ic;                 // input context, or null
+    X11ImageHead* image;              // XImage over 'staging', rebuilt when the size changes
     unsigned int* staging;    // native-order copy of the buffer
     int stagingW;
     int stagingH;
 };
 
 struct GuiX11 {
-    void* display;
+    XDisplay_* display;
     int screen;
     unsigned long root;
-    void* visual;
+    X11VisualHead* visual;
     unsigned int depth;
     int rShift; int gShift; int bShift;
-    void* im;
+    XIM_* im;
     unsigned long helper;     // hidden window: owns the clipboard selection
     int wakeR; int wakeW;     // self-pipe for wake()
     double scale;
@@ -378,7 +401,7 @@ static int __gui_x11_shift(unsigned long mask) {
 
 // The scale factor for hiDpi windows: $SAFEC_GUI_SCALE, else Xft.dpi / 96
 // rounded to a quarter, else 1.
-static double __gui_x11_scale(void* display) {
+static double __gui_x11_scale(XDisplay_* display) {
     unsafe {
         char* env = getenv("SAFEC_GUI_SCALE");
         if (env != (char*)0) {
@@ -408,16 +431,16 @@ static double __gui_x11_scale(void* display) {
 
 static int __gui_x11_init() {
     unsafe {
-        memset((void*)&gX, 0, sizeof(struct GuiX11));
+        safe_memset_obj(&gX, 0);
         XSetLocaleModifiers("");
-        void* display = XOpenDisplay((const char*)0);
-        if (display == (void*)0) { return 0; }
+        XDisplay_* display = XOpenDisplay((const char*)0);
+        if (display == (XDisplay_*)0) { return 0; }
         gX.display = display;
         gX.screen = XDefaultScreen(display);
         gX.root = XDefaultRootWindow(display);
         gX.visual = XDefaultVisual(display, gX.screen);
         gX.depth = XDefaultDepth(display, gX.screen);
-        struct X11VisualHead* vh = (struct X11VisualHead*)gX.visual;
+        struct X11VisualHead* vh = gX.visual;
         gX.rShift = __gui_x11_shift(vh->redMask);
         gX.gShift = __gui_x11_shift(vh->greenMask);
         gX.bShift = __gui_x11_shift(vh->blueMask);
@@ -437,7 +460,7 @@ static int __gui_x11_init() {
         gX.aMotifHints = XInternAtom(display, "_MOTIF_WM_HINTS", 0);
         gX.helper = XCreateSimpleWindow(display, gX.root, 0, 0, 1U, 1U, 0U, 0UL, 0UL);
         XSelectInput(display, gX.helper, GUI_X11_PROPERTY_CHANGE_MASK);
-        gX.im = XOpenIM(display, (void*)0, (char*)0, (char*)0);
+        gX.im = XOpenIM(display, (XrmDb_*)0, (char*)0, (char*)0);
         gX.clip = String::new();
         gX.clipOwned = 0;
         int fds[2];
@@ -470,7 +493,7 @@ static void __gui_x11_set_title(&GuiWindowState st, const &char title) {
         int n = 0;
         while (title[n] != '\0') { n = n + 1; }
         XStoreName(gX.display, w->window, title);
-        XChangeProperty(gX.display, w->window, gX.aNetWmName, gX.aUtf8, 8, 0, (const void*)title, n);
+        XChangeProperty(gX.display, w->window, gX.aNetWmName, gX.aUtf8, 8, 0, (const unsigned char*)title, n);
         XFlush(gX.display);
     }
 }
@@ -480,7 +503,7 @@ static void __gui_x11_update_limits(&GuiWindowState st) {
     unsafe {
         if (w == (struct GuiX11Window*)0) { return; }
         struct X11SizeHints h;
-        memset((void*)&h, 0, sizeof(struct X11SizeHints));
+        safe_memset_obj(&h, 0);
         double s = st.scale;
         if (!st.resizable) {
             h.flags = 16L | 32L;
@@ -502,14 +525,14 @@ static void __gui_x11_update_limits(&GuiWindowState st) {
             h.flags = h.flags | 1L;   // USPosition
             h.x = st.x; h.y = st.y;
         }
-        XSetWMNormalHints(gX.display, w->window, (void*)&h);
+        XSetWMNormalHints(gX.display, w->window, &h);
         XFlush(gX.display);
     }
 }
 
 static int __gui_x11_create(&GuiWindowState st, const &GuiWindowOptions opts) {
     unsafe {
-        void* d = gX.display;
+        XDisplay_* d = gX.display;
         st.scale = opts.hiDpi ? gX.scale : 1.0;
         st.pixelW = (int)((double)st.logicalW * st.scale + 0.5);
         st.pixelH = (int)((double)st.logicalH * st.scale + 0.5);
@@ -527,17 +550,17 @@ static int __gui_x11_create(&GuiWindowState st, const &GuiWindowOptions opts) {
                      GUI_X11_STRUCTURE_NOTIFY_MASK | GUI_X11_FOCUS_CHANGE_MASK);
         unsigned long protocols[1];
         protocols[0] = gX.aWmDelete;
-        XSetWMProtocols(d, window, (void*)&protocols[0], 1);
+        XSetWMProtocols(d, window, &protocols[0], 1);
 
         struct GuiX11Window* w = (struct GuiX11Window*)alloc_zeroed_raw_(sizeof(struct GuiX11Window));
         w->window = window;
-        w->gc = XCreateGC(d, window, 0UL, (void*)0);
-        w->ic = (void*)0;
-        if (gX.im != (void*)0) {
+        w->gc = XCreateGC(d, window, 0UL, (const unsigned char*)0);
+        w->ic = (XIC_*)0;
+        if (gX.im != (XIM_*)0) {
             w->ic = XCreateIC(gX.im, "inputStyle", 0x0008L | 0x0400L /* PreeditNothing|StatusNothing */,
-                              "clientWindow", window, "focusWindow", window, (void*)0);
+                              "clientWindow", window, "focusWindow", window, (const char*)0);
         }
-        st.native = (void*)w;
+        st.native = (?&Erased)w;
         st.key = (unsigned long long)window;
 
         __gui_x11_set_title(st, (const char*)st.title.data);
@@ -545,12 +568,12 @@ static int __gui_x11_create(&GuiWindowState st, const &GuiWindowOptions opts) {
         if (!opts.decorated) {
             long hints[5];
             hints[0] = 2L; hints[1] = 0L; hints[2] = 0L; hints[3] = 0L; hints[4] = 0L;
-            XChangeProperty(d, window, gX.aMotifHints, gX.aMotifHints, 32, 0, (const void*)&hints[0], 5);
+            XChangeProperty(d, window, gX.aMotifHints, gX.aMotifHints, 32, 0, (const unsigned char*)&hints[0], 5);
         }
         if (opts.topmost) {
             unsigned long above[1];
             above[0] = gX.aNetWmStateAbove;
-            XChangeProperty(d, window, gX.aNetWmState, GUI_X11_XA_ATOM, 32, 0, (const void*)&above[0], 1);
+            XChangeProperty(d, window, gX.aNetWmState, GUI_X11_XA_ATOM, 32, 0, (const unsigned char*)&above[0], 1);
         }
         if (opts.visible) { XMapWindow(d, window); }
         XFlush(d);
@@ -561,13 +584,12 @@ static int __gui_x11_create(&GuiWindowState st, const &GuiWindowOptions opts) {
 
 static void __gui_x11_free_image(struct GuiX11Window* w) {
     unsafe {
-        if (w->image != (void*)0) {
+        if (w->image != (X11ImageHead*)0) {
             // XDestroyImage would free 'data' too; the staging buffer is
-            // ours, so detach it first (XImage starts with four ints, then
-            // the data pointer).
-            *(void**)((unsigned long)w->image + 16UL) = (void*)0;
+            // ours, so detach it first.
+            w->image->data = (unsigned char*)0;
             XDestroyImage(w->image);
-            w->image = (void*)0;
+            w->image = (X11ImageHead*)0;
         }
         if (w->staging != (unsigned int*)0) {
             dealloc(w->staging);
@@ -583,8 +605,8 @@ static void __gui_x11_destroy(&GuiWindowState st) {
     unsafe {
         if (w == (struct GuiX11Window*)0) { return; }
         __gui_x11_free_image(w);
-        if (w->ic != (void*)0) { XDestroyIC(w->ic); }
-        if (w->gc != (void*)0) { XFreeGC(gX.display, w->gc); }
+        if (w->ic != (XIC_*)0) { XDestroyIC(w->ic); }
+        if (w->gc != (XGC_*)0) { XFreeGC(gX.display, w->gc); }
         XDestroyWindow(gX.display, w->window);
         XFlush(gX.display);
         dealloc(w);
@@ -597,19 +619,19 @@ static void __gui_x11_present(&GuiWindowState st, const &unsigned char px, int b
     struct GuiX11Window* w = __gui_x11_win(st);
     unsafe {
         if (w == (struct GuiX11Window*)0) { return; }
-        if (w->stagingW != bw || w->stagingH != bh || w->image == (void*)0) {
+        if (w->stagingW != bw || w->stagingH != bh || w->image == (X11ImageHead*)0) {
             __gui_x11_free_image(w);
             w->staging = (unsigned int*)alloc_zeroed_raw_((unsigned long)bw * (unsigned long)bh * 4UL);
             w->stagingW = bw;
             w->stagingH = bh;
             w->image = XCreateImage(gX.display, gX.visual, gX.depth, 2 /* ZPixmap */, 0,
-                                    (const void*)w->staging, (unsigned int)bw, (unsigned int)bh, 32, 0);
-            if (w->image == (void*)0) { return; }
+                                    (const unsigned char*)w->staging, (unsigned int)bw, (unsigned int)bh, 32, 0);
+            if (w->image == (X11ImageHead*)0) { return; }
             // Our words are in this machine's byte order; Xlib swaps for the
-            // server if it differs (XImage.byte_order at offset 24).
+            // server if it differs (XImage.byte_order).
             unsigned int probe = 1U;
             int little = (*(unsigned char*)&probe == (unsigned char)1) ? 1 : 0;
-            *(int*)((unsigned long)w->image + 24UL) = little ? 0 /* LSBFirst */ : 1 /* MSBFirst */;
+            w->image->byteOrder = little ? 0 /* LSBFirst */ : 1 /* MSBFirst */;
         }
         int rs = gX.rShift; int gs = gX.gShift; int bs = gX.bShift;
         int yy = y;
@@ -671,16 +693,17 @@ static void __gui_x11_focus(&GuiWindowState st) {
         // Ask the window manager (EWMH), and set it directly for when there
         // is none.
         struct X11ClientMessageEvent cm;
-        memset((void*)&cm, 0, sizeof(struct X11ClientMessageEvent));
+        safe_memset_obj(&cm, 0);
         cm.type = GUI_X11_CLIENT_MESSAGE_TYPE;
         cm.window = w->window;
         cm.messageType = gX.aNetActiveWindow;
         cm.format = 32;
         cm.data0 = 1L;
         struct X11EventBuf buf;
-        memset((void*)&buf, 0, sizeof(struct X11EventBuf));
-        memcpy((void*)&buf, (const void*)&cm, sizeof(struct X11ClientMessageEvent));
-        XSendEvent(gX.display, gX.root, 0, (1L << 20) | (1L << 19), (void*)&buf);
+        safe_memset_obj(&buf, 0);
+        unsigned long cmSize = sizeof(struct X11ClientMessageEvent);
+        safe_memcpy(((unsigned char*)&buf)[0..cmSize], ((const unsigned char*)&cm)[0..cmSize]);
+        XSendEvent(gX.display, gX.root, 0, (1L << 20) | (1L << 19), &buf);
         XSetInputFocus(gX.display, w->window, 2 /* RevertToParent */, 0UL);
         XFlush(gX.display);
     }
@@ -694,10 +717,9 @@ static unsigned long __gui_x11_cursor(int c) {
             char bits[1];
             bits[0] = (char)0;
             unsigned long pm = XCreateBitmapFromData(gX.display, gX.root, &bits[0], 1U, 1U);
-            unsigned short color[6];
-            int i = 0;
-            while (i < 6) { color[i] = (unsigned short)0; i = i + 1; }
-            cur = XCreatePixmapCursor(gX.display, pm, pm, (void*)&color[0], (void*)&color[0], 0U, 0U);
+            struct X11Color color;
+            safe_memset_obj(&color, 0);
+            cur = XCreatePixmapCursor(gX.display, pm, pm, &color, &color, 0U, 0U);
             XFreePixmap(gX.display, pm);
         } else {
             // X cursor font glyphs.
@@ -790,7 +812,7 @@ static int __gui_x11_mods(unsigned int state) {
 static void __gui_x11_serve_selection(struct X11SelectionRequestEvent* rq) {
     unsafe {
         struct X11SelectionEvent reply;
-        memset((void*)&reply, 0, sizeof(struct X11SelectionEvent));
+        safe_memset_obj(&reply, 0);
         reply.type = GUI_X11_SELECTION_NOTIFY_TYPE;
         reply.sendEvent = 1;
         reply.display = gX.display;
@@ -805,18 +827,19 @@ static void __gui_x11_serve_selection(struct X11SelectionRequestEvent* rq) {
             unsigned long targets[4];
             targets[0] = gX.aTargets; targets[1] = gX.aUtf8; targets[2] = GUI_X11_XA_STRING; targets[3] = gX.aText;
             XChangeProperty(gX.display, rq->requestor, reply.property, GUI_X11_XA_ATOM, 32, 0,
-                            (const void*)&targets[0], 4);
+                            (const unsigned char*)&targets[0], 4);
         } else if (rq->target == gX.aUtf8 || rq->target == gX.aText || rq->target == GUI_X11_XA_STRING) {
             unsigned long type = rq->target == GUI_X11_XA_STRING ? GUI_X11_XA_STRING : gX.aUtf8;
             XChangeProperty(gX.display, rq->requestor, reply.property, type, 8, 0,
-                            (const void*)gX.clip.data, (int)gX.clip.len);
+                            (const unsigned char*)gX.clip.data, (int)gX.clip.len);
         } else {
             reply.property = 0UL;
         }
         struct X11EventBuf buf;
-        memset((void*)&buf, 0, sizeof(struct X11EventBuf));
-        memcpy((void*)&buf, (const void*)&reply, sizeof(struct X11SelectionEvent));
-        XSendEvent(gX.display, rq->requestor, 0, 0L, (void*)&buf);
+        safe_memset_obj(&buf, 0);
+        unsigned long replySize = sizeof(struct X11SelectionEvent);
+        safe_memcpy(((unsigned char*)&buf)[0..replySize], ((const unsigned char*)&reply)[0..replySize]);
+        XSendEvent(gX.display, rq->requestor, 0, 0L, &buf);
         XFlush(gX.display);
     }
 }
@@ -842,7 +865,7 @@ static int __gui_x11_wait_fd(int timeoutMs) {
         fds[1].events = (short)1;
         fds[1].revents = (short)0;
         unsigned long n = gX.wakeR >= 0 ? 2UL : 1UL;
-        return poll((void*)&fds[0], n, timeoutMs);
+        return poll(&fds[0], n, timeoutMs);
     }
 }
 
@@ -864,7 +887,7 @@ static int __gui_x11_clip_get(&String out) {
             struct X11EventBuf buf;
             int got = 0;
             while (!got) {
-                if (XCheckTypedWindowEvent(gX.display, gX.helper, GUI_X11_SELECTION_NOTIFY_TYPE, (void*)&buf)) {
+                if (XCheckTypedWindowEvent(gX.display, gX.helper, GUI_X11_SELECTION_NOTIFY_TYPE, &buf)) {
                     got = 1;
                     break;
                 }
@@ -900,7 +923,7 @@ static int __gui_x11_clip_get(&String out) {
                     out.push_n_((const char*)data, nitems);
                 }
             }
-            XFree((void*)data);
+            XFree(data);
             return actualFormat == 8 ? 1 : 0;
         }
         return 0;
@@ -924,7 +947,7 @@ static void __gui_x11_handle(struct X11EventBuf* buf) {
     unsafe {
         struct X11AnyEvent* any = (struct X11AnyEvent*)buf;
         int t = any->type;
-        if (t == GUI_X11_MAPPING_NOTIFY_TYPE) { XRefreshKeyboardMapping((void*)buf); return; }
+        if (t == GUI_X11_MAPPING_NOTIFY_TYPE) { XRefreshKeyboardMapping(buf); return; }
         if (t == GUI_X11_SELECTION_REQUEST_TYPE) {
             __gui_x11_serve_selection((struct X11SelectionRequestEvent*)buf);
             return;
@@ -989,7 +1012,7 @@ static void __gui_x11_handle(struct X11EventBuf* buf) {
             struct X11FocusEvent* fe = (struct X11FocusEvent*)buf;
             if (fe->detail == 7 /* NotifyPointer */) { return; }
             int focus = t == GUI_X11_FOCUS_IN_TYPE ? 1 : 0;
-            if (w != (struct GuiX11Window*)0 && w->ic != (void*)0) {
+            if (w != (struct GuiX11Window*)0 && w->ic != (XIC_*)0) {
                 if (focus) { XSetICFocus(w->ic); } else { XUnsetICFocus(w->ic); }
             }
             if (st->focused == focus) { return; }
@@ -1009,18 +1032,18 @@ static void __gui_x11_handle(struct X11EventBuf* buf) {
             ev.x = (double)ke->x; ev.y = (double)ke->y;
             // The keycode from the unshifted keysym (layout letters stay
             // letters), the text from the input method / shifted keysym.
-            unsigned long ks0 = XLookupKeysym((void*)buf, 0);
+            unsigned long ks0 = XLookupKeysym(buf, 0);
             ev.keycode = __gui_x11_keysym(ks0);
             char text[32];
             unsigned long keysym = 0UL;
             int n = 0;
-            if (t == GUI_X11_KEY_PRESS_TYPE && w != (struct GuiX11Window*)0 && w->ic != (void*)0) {
+            if (t == GUI_X11_KEY_PRESS_TYPE && w != (struct GuiX11Window*)0 && w->ic != (XIC_*)0) {
                 int status = 0;
-                n = Xutf8LookupString(w->ic, (void*)buf, &text[0], 31, &keysym, &status);
+                n = Xutf8LookupString(w->ic, buf, &text[0], 31, &keysym, &status);
                 if (status != 2 && status != 4) { n = 0; }   // XLookupChars / XLookupBoth carry text
                 if (n < 0) { n = 0; }
             } else {
-                n = XLookupString((void*)buf, &text[0], 31, &keysym, (void*)0);
+                n = XLookupString(buf, &text[0], 31, &keysym, (unsigned char*)0);
                 if (n > 0) {
                     unsigned int c = __gui_x11_keysym_char(keysym);
                     n = 0;
@@ -1083,8 +1106,8 @@ static int __gui_x11_drain() {
     unsafe {
         while (XPending(gX.display) > 0) {
             struct X11EventBuf buf;
-            XNextEvent(gX.display, (void*)&buf);
-            if (XFilterEvent((void*)&buf, 0UL)) { continue; }   // consumed by the input method
+            XNextEvent(gX.display, &buf);
+            if (XFilterEvent(&buf, 0UL)) { continue; }   // consumed by the input method
             __gui_x11_handle(&buf);
             any = 1;
         }
@@ -1107,7 +1130,7 @@ static int __gui_x11_pump(int timeoutMs) {
             int r = __gui_x11_wait_fd(left);
             if (gX.wakeR >= 0) {
                 char drainBuf[64];
-                long woke = read(gX.wakeR, (void*)&drainBuf[0], 64UL);
+                long woke = read(gX.wakeR, (unsigned char*)&drainBuf[0], 64UL);
                 if (woke > 0L) { __gui_x11_drain(); break; }
             }
             if (__gui_x11_drain()) { got = 1; }
@@ -1121,7 +1144,7 @@ static void __gui_x11_wake() {
     unsafe {
         if (gX.wakeW >= 0) {
             char b = (char)1;
-            write(gX.wakeW, (const void*)&b, 1UL);
+            write(gX.wakeW, (const unsigned char*)&b, 1UL);
         }
     }
 }

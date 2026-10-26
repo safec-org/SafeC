@@ -81,7 +81,7 @@ struct AdamState {
 
 // ══ Internal helpers (static — each including file gets its own copy) ═══════
 
-static void __relu_backward(void* selfPtr) {
+static void __relu_backward(&FloatTensor selfPtr) {
     unsafe {
         FloatTensor* selfT = (FloatTensor*)selfPtr;
         FloatTensor* a = __tensor_parent(selfT, 0UL);
@@ -92,7 +92,7 @@ static void __relu_backward(void* selfPtr) {
     }
 }
 
-static void __sigmoid_backward(void* selfPtr) {
+static void __sigmoid_backward(&FloatTensor selfPtr) {
     unsafe {
         FloatTensor* selfT = (FloatTensor*)selfPtr;
         FloatTensor* a = __tensor_parent(selfT, 0UL);
@@ -104,7 +104,7 @@ static void __sigmoid_backward(void* selfPtr) {
     }
 }
 
-static void __tanh_t_backward(void* selfPtr) {
+static void __tanh_t_backward(&FloatTensor selfPtr) {
     unsafe {
         FloatTensor* selfT = (FloatTensor*)selfPtr;
         FloatTensor* a = __tensor_parent(selfT, 0UL);
@@ -116,7 +116,7 @@ static void __tanh_t_backward(void* selfPtr) {
     }
 }
 
-static void __softmax_backward(void* selfPtr) {
+static void __softmax_backward(&FloatTensor selfPtr) {
     unsafe {
         FloatTensor* selfT = (FloatTensor*)selfPtr;
         FloatTensor* a = __tensor_parent(selfT, 0UL);
@@ -145,7 +145,7 @@ static void __softmax_backward(void* selfPtr) {
     }
 }
 
-static void __elu_backward(void* selfPtr) {
+static void __elu_backward(&FloatTensor selfPtr) {
     unsafe {
         FloatTensor* selfT = (FloatTensor*)selfPtr;
         FloatTensor* a = __tensor_parent(selfT, 0UL);
@@ -164,7 +164,7 @@ static void __elu_backward(void* selfPtr) {
     }
 }
 
-static void __gelu_backward(void* selfPtr) {
+static void __gelu_backward(&FloatTensor selfPtr) {
     unsafe {
         FloatTensor* selfT = (FloatTensor*)selfPtr;
         FloatTensor* a = __tensor_parent(selfT, 0UL);
@@ -189,12 +189,12 @@ static void __gelu_backward(void* selfPtr) {
                 a->grad[i] = a->grad[i] + selfT->grad[i] * d;
                 i = i + 1UL;
             }
-            free((void*)tb);
+            free((unsigned char*)tb);
         }
     }
 }
 
-static void __silu_backward(void* selfPtr) {
+static void __silu_backward(&FloatTensor selfPtr) {
     unsafe {
         FloatTensor* selfT = (FloatTensor*)selfPtr;
         FloatTensor* a = __tensor_parent(selfT, 0UL);
@@ -211,12 +211,12 @@ static void __silu_backward(void* selfPtr) {
                 a->grad[i] = a->grad[i] + selfT->grad[i] * d;
                 i = i + 1UL;
             }
-            free((void*)sb);
+            free((unsigned char*)sb);
         }
     }
 }
 
-static void __glu_backward(void* selfPtr) {
+static void __glu_backward(&FloatTensor selfPtr) {
     unsafe {
         FloatTensor* selfT = (FloatTensor*)selfPtr;
         FloatTensor* a = __tensor_parent(selfT, 0UL);
@@ -245,7 +245,7 @@ static void __glu_backward(void* selfPtr) {
     }
 }
 
-static void __swiglu_backward(void* selfPtr) {
+static void __swiglu_backward(&FloatTensor selfPtr) {
     unsafe {
         FloatTensor* selfT = (FloatTensor*)selfPtr;
         FloatTensor* a = __tensor_parent(selfT, 0UL);
@@ -276,7 +276,7 @@ static void __swiglu_backward(void* selfPtr) {
     }
 }
 
-static void __maxpool1d_backward(void* selfPtr) {
+static void __maxpool1d_backward(&FloatTensor selfPtr) {
     unsafe {
         FloatTensor* selfT = (FloatTensor*)selfPtr;
         FloatTensor* a = __tensor_parent(selfT, 0UL);
@@ -293,7 +293,7 @@ static void __maxpool1d_backward(void* selfPtr) {
     }
 }
 
-static void __avgpool1d_backward(void* selfPtr) {
+static void __avgpool1d_backward(&FloatTensor selfPtr) {
     unsafe {
         FloatTensor* selfT = (FloatTensor*)selfPtr;
         FloatTensor* a = __tensor_parent(selfT, 0UL);

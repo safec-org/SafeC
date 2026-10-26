@@ -185,7 +185,7 @@ int model_soft_update(&M dst, const &M src, float tau) {
         &FloatTensor b = *s.at(i);
         unsafe {
             if (a->size != b->size) { ok = 0; }
-            else if (a->dev != DEVICE_CPU && a->dev == b->dev && tensor_dev_raw_((void*)a, a->dev) && tensor_dev_raw_((void*)b, a->dev)) {
+            else if (a->dev != DEVICE_CPU && a->dev == b->dev && tensor_dev_raw_((FloatTensor*)a, a->dev) && tensor_dev_raw_((FloatTensor*)b, a->dev)) {
                 // both on one device: a = (1 - tau) a + tau b there (a copy for tau 1)
                 if (tau == (float)1.0) {
                     device_copy_(a->dev, a->dbuf, b->dbuf, a->size);
@@ -194,10 +194,10 @@ int model_soft_update(&M dst, const &M src, float tau) {
                     g.p[0] = b->dbuf; g.p[2] = a->dbuf; g.u[0] = (unsigned int)EW_LERP; g.f[0] = tau;
                     device_launch_(a->dev, DK_EW, a->size, &g);
                 }
-                tensor_dev_wrote_raw_((void*)a);
+                tensor_dev_wrote_raw_((FloatTensor*)a);
             } else {
-                tensor_host_write_raw_((void*)a);
-                tensor_host_raw_((void*)b);
+                tensor_host_write_raw_((FloatTensor*)a);
+                tensor_host_raw_((FloatTensor*)b);
                 unsigned long j = 0UL;
                 while (j < a->size) { a->data[j] = tau * b->data[j] + ((float)1.0 - tau) * a->data[j]; j = j + 1UL; }
             }
@@ -285,7 +285,7 @@ float module_evaluate(&M m, int loss, const &Dataset data, unsigned long batchSi
     stepArena.begin();
     while (dl.next(&b)) {
         &FloatTensor l = module_loss(m, loss, b.x, b.y);
-        unsafe { tensor_host_raw_((void*)l); sum = sum + (double)l->data[0] * (double)b.rows; }
+        unsafe { tensor_host_raw_((FloatTensor*)l); sum = sum + (double)l->data[0] * (double)b.rows; }
         rows = rows + b.rows;
         stepArena.reset();
     }
@@ -373,7 +373,7 @@ float model_evaluate(&M m, const &Dataset data, unsigned long batchSize) {
     stepArena.begin();
     while (dl.next(&b)) {
         &FloatTensor l = m.loss(b.x, b.y);
-        unsafe { tensor_host_raw_((void*)l); sum = sum + (double)l->data[0] * (double)b.rows; }
+        unsafe { tensor_host_raw_((FloatTensor*)l); sum = sum + (double)l->data[0] * (double)b.rows; }
         rows = rows + b.rows;
         stepArena.reset();
     }
