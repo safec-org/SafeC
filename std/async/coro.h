@@ -46,7 +46,7 @@
 //                          points, numbered 1..n (at most ASYNC_MAX_POINTS).
 //   AWAIT(k, fut)          await point k: poll 'fut' (a future lvalue, normally
 //                          a field of self) until it is Ready; its value is
-//                          discarded.
+//                          dropped.
 //   AWAIT_INTO(k, dst, fut) the same, storing the value in 'dst' (a field).
 //   ASYNC_YIELD(k)         await point k: be Pending once (after waking
 //                          ourselves), so the executor runs others first.
