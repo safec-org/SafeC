@@ -251,14 +251,14 @@ static int g_gemm_vendor_state = 0;   // 0 = not yet, 1 = initializing, 2 = read
 static int gemm_vendor_ready_() {
 #if GEMM_VENDOR
     unsafe {
-        if ((unsigned char*)cblas_sgemm == (unsigned char*)0) return 0;
+        if ((unsigned long)cblas_sgemm == 0UL) return 0;
         if (atomic_load_int(&g_gemm_vendor_state) == 2) return 1;
         int expected = 0;
         if (atomic_cas_int(&g_gemm_vendor_state, &expected, 1)) {
 #ifndef __APPLE__
-            if ((unsigned char*)MKL_Set_Num_Threads != (unsigned char*)0) MKL_Set_Num_Threads(1);
-            if ((unsigned char*)bli_thread_set_num_threads != (unsigned char*)0) bli_thread_set_num_threads(1L);
-            if ((unsigned char*)openblas_set_num_threads != (unsigned char*)0) openblas_set_num_threads(1);
+            if ((unsigned long)MKL_Set_Num_Threads != 0UL) MKL_Set_Num_Threads(1);
+            if ((unsigned long)bli_thread_set_num_threads != 0UL) bli_thread_set_num_threads(1L);
+            if ((unsigned long)openblas_set_num_threads != 0UL) openblas_set_num_threads(1);
 #endif
             atomic_store_int(&g_gemm_vendor_state, 2);
         } else {
@@ -273,7 +273,7 @@ static int gemm_vendor_ready_() {
 
 static int gemm_vendor_linked_() {
 #if GEMM_VENDOR
-    unsafe { return (unsigned char*)cblas_sgemm != (unsigned char*)0; }
+    unsafe { return (unsigned long)cblas_sgemm != 0UL; }
 #else
     return 0;
 #endif
@@ -302,9 +302,9 @@ const &char sgemm_backend() {
 #ifdef __APPLE__
         return "Accelerate";
 #else
-        if ((unsigned char*)MKL_Get_Version_String != (unsigned char*)0) return "oneMKL";
-        if ((unsigned char*)bli_info_get_version_str != (unsigned char*)0) return "AOCL-BLAS (BLIS)";
-        if ((unsigned char*)openblas_get_config != (unsigned char*)0) return "OpenBLAS";
+        if ((unsigned long)MKL_Get_Version_String != 0UL) return "oneMKL";
+        if ((unsigned long)bli_info_get_version_str != 0UL) return "AOCL-BLAS (BLIS)";
+        if ((unsigned long)openblas_get_config != 0UL) return "OpenBLAS";
         return "CBLAS";
 #endif
     }

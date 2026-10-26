@@ -23,7 +23,8 @@ extern int   fprintf(CFile_* stream, const char* fmt, ...);
 #if defined(_WIN32)
 // bcrypt.dll: NTSTATUS BCryptGenRandom(BCRYPT_ALG_HANDLE, PUCHAR, ULONG, ULONG);
 // a null algorithm with BCRYPT_USE_SYSTEM_PREFERRED_RNG (2) needs no handle.
-extern int BCryptGenRandom(unsigned char* alg, unsigned char* buf, unsigned int len, unsigned int flags);
+struct BCryptAlg_ { char opaque_; };   // BCRYPT_ALG_HANDLE (null: the system RNG)
+extern int BCryptGenRandom(BCryptAlg_* alg, unsigned char* buf, unsigned int len, unsigned int flags);
 #elif defined(__APPLE__)
 extern int getentropy(unsigned char* buf, size_t len);              // libSystem, at most 256 bytes
 #elif defined(__linux__)
@@ -133,7 +134,7 @@ int RngCtx::init() {
         unsigned char os_seed[32];
         int os_ok = 0;
 #if defined(_WIN32)
-        if (BCryptGenRandom((unsigned char*)0, (unsigned char*)os_seed, (unsigned int)32, (unsigned int)2) == 0) { os_ok = 1; }
+        if (BCryptGenRandom((BCryptAlg_*)0, (unsigned char*)os_seed, (unsigned int)32, (unsigned int)2) == 0) { os_ok = 1; }
 #elif defined(__APPLE__)
         if (getentropy((unsigned char*)os_seed, (size_t)32) == 0) { os_ok = 1; }
 #else

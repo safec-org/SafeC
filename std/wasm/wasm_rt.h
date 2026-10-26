@@ -21,6 +21,9 @@
 // the real libc via std/mem.sc, not this file; including both in the
 // same link would duplicate-symbol on malloc/free/etc.
 #include <std/stddef.h>
+#include <std/stderr_compat.h>   // CFile_
+
+// Untyped memory is bytes (unsigned char*), as in std/mem.h.
 
 unsigned char* malloc(size_t size);
 void  free(unsigned char* ptr);
@@ -57,8 +60,10 @@ long long          atoll(const char* s);
 // Decimal only ('1.5e-3'), good to ~15 significant digits; no inf/nan/hex.
 double             strtod(const char* s, char** end);
 
-// Heapsort (not stable), the same contract as C's qsort.
-void qsort(unsigned char* base, size_t n, size_t size, unsigned char* cmp);
+// Heapsort (not stable), the same contract as C's qsort; cmp compares two
+// elements (given as their bytes).
+typedef fn int(const unsigned char*, const unsigned char*) WasmRtCmp_;
+void qsort(unsigned char* base, size_t n, size_t size, WasmRtCmp_ cmp);
 
 // compiler-rt: 128-bit multiply and shifts (result through 'ret' = lo, hi).
 void __multi3(unsigned long long* ret, unsigned long long alo, unsigned long long ahi,
@@ -72,5 +77,5 @@ void __ashrti3(unsigned long long* ret, unsigned long long lo, unsigned long lon
 // va_arg to decode a varargs list with). snprintf isn't provided: std's
 // float formatting (fmt_float / String::push_float) needs a host on wasm.
 void abort();
-int  fprintf(unsigned char* stream, const char* fmt, ...);
+int  fprintf(CFile_* stream, const char* fmt, ...);
 int  printf(const char* fmt, ...);

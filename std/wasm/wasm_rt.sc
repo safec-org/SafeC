@@ -468,7 +468,6 @@ static void wasm_rt_swap_(unsigned char* a, unsigned char* b, size_t n) {
     }
 }
 
-typedef fn int(const unsigned char*, const unsigned char*) WasmRtCmp_;
 
 // Heapsort: in place, no recursion, O(n log n).
 static void wasm_rt_sift_(unsigned char* base, size_t root, size_t n, size_t sz, WasmRtCmp_ cmp) {
@@ -486,11 +485,10 @@ static void wasm_rt_sift_(unsigned char* base, size_t root, size_t n, size_t sz,
     }
 }
 
-void qsort(unsigned char* base, size_t n, size_t sz, unsigned char* cmp_fn) {
+void qsort(unsigned char* base, size_t n, size_t sz, WasmRtCmp_ cmp) {
     if (n < WRT_U(2)) { return; }
     unsafe {
         unsigned char* b = (unsigned char*)base;
-        WasmRtCmp_ cmp = (WasmRtCmp_)cmp_fn;
         size_t i = n / WRT_U(2);
         while (i > WRT_U(0)) { i = i - WRT_U(1); wasm_rt_sift_(b, i, n, sz, cmp); }
         size_t end = n;
@@ -561,5 +559,5 @@ void abort() {
     unsafe { asm volatile ("unreachable"); }
 }
 
-int fprintf(unsigned char* stream, const char* fmt, ...) { return 0; }
+int fprintf(CFile_* stream, const char* fmt, ...) { return 0; }
 int printf(const char* fmt, ...) { return 0; }

@@ -44,55 +44,31 @@
 
 namespace std {
 
-// CoreFoundation / Security (opaque refs are pointers).
+// CoreFoundation / Security objects, opaque: CFTypeRef (any of them, for
+// CFRelease and CFArray values), the allocator (std passes null for the
+// default), CFData, CFArray, CFString, CFError, SSLContext, SecTrust,
+// SecPolicy and SecCertificate.
+struct CFType_ { char opaque_; };
+struct CFAllocator_ { char opaque_; };
+struct CFData_ { char opaque_; };
+struct CFArray_ { char opaque_; };
+struct CFString_ { char opaque_; };
+struct CFError_ { char opaque_; };
+struct SSLContext_ { char opaque_; };
+struct SecTrust_ { char opaque_; };
+struct SecPolicy_ { char opaque_; };
+struct SecCertificate_ { char opaque_; };
+
 struct StArrayCallBacks_ {
     long  version;
-    unsigned char* retain;
-    unsigned char* release;
-    unsigned char* copyDescription;
-    unsigned char* equal;
+    ?fn void() retain;            // CFArrayRetainCallBack & co. (std only takes
+    ?fn void() release;           // kCFTypeArrayCallBacks' address)
+    ?fn void() copyDescription;
+    ?fn void() equal;
 };
-extern struct StArrayCallBacks_ kCFTypeArrayCallBacks;
-extern unsigned char* CFDataCreate(unsigned char* alloc, const unsigned char* bytes, long len);
-extern const unsigned char* CFDataGetBytePtr(unsigned char* data);
-extern long CFDataGetLength(unsigned char* data);
-extern unsigned char* CFArrayCreateMutable(unsigned char* alloc, long cap, const struct StArrayCallBacks_* cb);
-extern void  CFArrayAppendValue(unsigned char* array, const unsigned char* value);
-extern long  CFArrayGetCount(unsigned char* array);
-extern const unsigned char* CFArrayGetValueAtIndex(unsigned char* array, long i);
-extern unsigned char* CFStringCreateWithCString(unsigned char* alloc, const char* s, unsigned int encoding);
-extern int   CFStringGetCString(unsigned char* s, char* buf, long size, unsigned int encoding);
-extern long  CFErrorGetCode(unsigned char* err);
-extern void  CFRelease(const unsigned char* ref);
-
-extern unsigned char* SSLCreateContext(unsigned char* alloc, int side, int type);
-extern int   SSLSetIOFuncs(unsigned char* ctx, unsigned char* readFn, unsigned char* writeFn);
-extern int   SSLSetConnection(unsigned char* ctx, const unsigned char* conn);
-extern int   SSLSetPeerDomainName(unsigned char* ctx, const char* name, size_t len);
-extern int   SSLSetProtocolVersionMin(unsigned char* ctx, int proto);
-extern int   SSLSetProtocolVersionMax(unsigned char* ctx, int proto);
-extern int   SSLSetSessionOption(unsigned char* ctx, int option, unsigned char value);
-extern int   SSLSetALPNProtocols(unsigned char* ctx, unsigned char* protocols);
-extern int   SSLCopyALPNProtocols(unsigned char* ctx, unsigned char** protocols);
-extern int   SSLHandshake(unsigned char* ctx);
-extern int   SSLRead(unsigned char* ctx, unsigned char* data, size_t len, size_t* processed);
-extern int   SSLWrite(unsigned char* ctx, const unsigned char* data, size_t len, size_t* processed);
-extern int   SSLClose(unsigned char* ctx);
-extern int   SSLGetNegotiatedProtocolVersion(unsigned char* ctx, int* proto);
-extern int   SSLGetNegotiatedCipher(unsigned char* ctx, unsigned int* suite);
-extern int   SSLCopyPeerTrust(unsigned char* ctx, unsigned char** trust);
-extern unsigned char* SecPolicyCreateSSL(unsigned char server, unsigned char* hostname);
-extern int   SecTrustSetPolicies(unsigned char* trust, const unsigned char* policies);
-extern int   SecTrustSetAnchorCertificates(unsigned char* trust, unsigned char* anchors);
-extern int   SecTrustSetAnchorCertificatesOnly(unsigned char* trust, unsigned char only);
-extern unsigned char SecTrustEvaluateWithError(unsigned char* trust, unsigned char** error);
-extern long  SecTrustGetCertificateCount(unsigned char* trust);
-extern unsigned char* SecTrustGetCertificateAtIndex(unsigned char* trust, long i);
-extern unsigned char* SecCertificateCreateWithData(unsigned char* alloc, unsigned char* data);
-extern unsigned char* SecCertificateCopyData(unsigned char* cert);
 
 struct StConn_ {
-    unsigned char* ctx;           // SSLContextRef
+    SSLContext_* ctx;
     int   fd;
     int   want;          // the last I/O callback would block: TLS_WANT_READ / _WRITE, else 0
     int   eof;
@@ -100,9 +76,52 @@ struct StConn_ {
     int   verify_host;
     int   use_system;
     struct String name;
-    unsigned char* anchors;       // CFMutableArray of SecCertificateRef, or null
+    CFArray_* anchors;   // CFMutableArray of SecCertificateRef, or null
     int   sent_close;
 };
+
+// SSLReadFunc / SSLWriteFunc, whose connection is the StConn_.
+typedef fn int(const StConn_*, unsigned char*, size_t*) StReadFn_;
+typedef fn int(const StConn_*, const unsigned char*, size_t*) StWriteFn_;
+
+extern struct StArrayCallBacks_ kCFTypeArrayCallBacks;
+extern CFData_* CFDataCreate(CFAllocator_* alloc, const unsigned char* bytes, long len);
+extern const unsigned char* CFDataGetBytePtr(CFData_* data);
+extern long CFDataGetLength(CFData_* data);
+extern CFArray_* CFArrayCreateMutable(CFAllocator_* alloc, long cap, const struct StArrayCallBacks_* cb);
+extern void  CFArrayAppendValue(CFArray_* array, const CFType_* value);
+extern long  CFArrayGetCount(CFArray_* array);
+extern const CFType_* CFArrayGetValueAtIndex(CFArray_* array, long i);
+extern CFString_* CFStringCreateWithCString(CFAllocator_* alloc, const char* s, unsigned int encoding);
+extern int   CFStringGetCString(const CFString_* s, char* buf, long size, unsigned int encoding);
+extern long  CFErrorGetCode(CFError_* err);
+extern void  CFRelease(const CFType_* ref);
+
+extern SSLContext_* SSLCreateContext(CFAllocator_* alloc, int side, int type);
+extern int   SSLSetIOFuncs(SSLContext_* ctx, StReadFn_ readFn, StWriteFn_ writeFn);
+extern int   SSLSetConnection(SSLContext_* ctx, const StConn_* conn);
+extern int   SSLSetPeerDomainName(SSLContext_* ctx, const char* name, size_t len);
+extern int   SSLSetProtocolVersionMin(SSLContext_* ctx, int proto);
+extern int   SSLSetProtocolVersionMax(SSLContext_* ctx, int proto);
+extern int   SSLSetSessionOption(SSLContext_* ctx, int option, unsigned char value);
+extern int   SSLSetALPNProtocols(SSLContext_* ctx, CFArray_* protocols);
+extern int   SSLCopyALPNProtocols(SSLContext_* ctx, CFArray_** protocols);
+extern int   SSLHandshake(SSLContext_* ctx);
+extern int   SSLRead(SSLContext_* ctx, unsigned char* data, size_t len, size_t* processed);
+extern int   SSLWrite(SSLContext_* ctx, const unsigned char* data, size_t len, size_t* processed);
+extern int   SSLClose(SSLContext_* ctx);
+extern int   SSLGetNegotiatedProtocolVersion(SSLContext_* ctx, int* proto);
+extern int   SSLGetNegotiatedCipher(SSLContext_* ctx, unsigned int* suite);
+extern int   SSLCopyPeerTrust(SSLContext_* ctx, SecTrust_** trust);
+extern SecPolicy_* SecPolicyCreateSSL(unsigned char server, CFString_* hostname);
+extern int   SecTrustSetPolicies(SecTrust_* trust, const CFType_* policies);   // a policy or an array of them
+extern int   SecTrustSetAnchorCertificates(SecTrust_* trust, CFArray_* anchors);
+extern int   SecTrustSetAnchorCertificatesOnly(SecTrust_* trust, unsigned char only);
+extern unsigned char SecTrustEvaluateWithError(SecTrust_* trust, CFError_** error);
+extern long  SecTrustGetCertificateCount(SecTrust_* trust);
+extern SecCertificate_* SecTrustGetCertificateAtIndex(SecTrust_* trust, long i);
+extern SecCertificate_* SecCertificateCreateWithData(CFAllocator_* alloc, CFData_* data);
+extern CFData_* SecCertificateCopyData(SecCertificate_* cert);
 
 int tls_st_available_() { return 1; }
 
@@ -111,7 +130,7 @@ static struct StConn_* st_of_(&TlsStream s) {
 }
 
 // SSLReadFunc: fills *len bytes or reports how many before blocking.
-static int st_read_cb_(const unsigned char* conn, unsigned char* data, size_t* len) {
+static int st_read_cb_(const StConn_* conn, unsigned char* data, size_t* len) {
     unsafe {
         struct StConn_* c = (struct StConn_*)conn;
         size_t want = *len;
@@ -128,7 +147,7 @@ static int st_read_cb_(const unsigned char* conn, unsigned char* data, size_t* l
     return ST_NOERR_;
 }
 
-static int st_write_cb_(const unsigned char* conn, const unsigned char* data, size_t* len) {
+static int st_write_cb_(const StConn_* conn, const unsigned char* data, size_t* len) {
     unsafe {
         struct StConn_* c = (struct StConn_*)conn;
         size_t want = *len;
@@ -155,8 +174,8 @@ static int st_fail_(&TlsStream s, int code, const &char what, long long status) 
     return -1;
 }
 
-static unsigned char* st_cfstring_(const &char text) {
-    unsafe { return CFStringCreateWithCString((unsigned char*)0, (const char*)text, ST_UTF8_); }
+static CFString_* st_cfstring_(const &char text) {
+    unsafe { return CFStringCreateWithCString((CFAllocator_*)0, (const char*)text, ST_UTF8_); }
 }
 
 int tls_st_client_(&TlsStream s, const &char name, const &TlsConfig cfg) {
@@ -189,31 +208,31 @@ int tls_st_client_(&TlsStream s, const &char name, const &TlsConfig cfg) {
         if (!pem.is_empty()) {
             struct Vec<struct Vec<unsigned char>> ders = Vec::new();
             tls_pem_decode_(pem.as_ptr(), "CERTIFICATE", &ders);
-            c->anchors = CFArrayCreateMutable((unsigned char*)0, 0L, &kCFTypeArrayCallBacks);
+            c->anchors = CFArrayCreateMutable((CFAllocator_*)0, 0L, &kCFTypeArrayCallBacks);
             unsigned long i = 0UL;
             while (i < ders.len) {
                 &Vec<unsigned char> d = ders.at(i);
-                unsigned char* data = CFDataCreate((unsigned char*)0, (const unsigned char*)d.data, (long)d.len);
-                unsigned char* cert = SecCertificateCreateWithData((unsigned char*)0, data);
-                if (cert != (unsigned char*)0) { CFArrayAppendValue(c->anchors, (const unsigned char*)cert); CFRelease((const unsigned char*)cert); }
-                CFRelease((const unsigned char*)data);
+                CFData_* data = CFDataCreate((CFAllocator_*)0, (const unsigned char*)d.data, (long)d.len);
+                SecCertificate_* cert = SecCertificateCreateWithData((CFAllocator_*)0, data);
+                if (cert != (SecCertificate_*)0) { CFArrayAppendValue(c->anchors, (const CFType_*)cert); CFRelease((const CFType_*)cert); }
+                CFRelease((const CFType_*)data);
                 i = i + 1UL;
             }
             tls_der_list_free_(&ders);
         }
         pem.free();
-        unsigned char* ctx = SSLCreateContext((unsigned char*)0, ST_CLIENT_SIDE_, ST_STREAM_TYPE_);
-        if (ctx == (unsigned char*)0) { tls_fail_(&s.err, TLS_ERR_INTERNAL, "SSLCreateContext failed"); return TLS_ERR_INTERNAL; }
+        SSLContext_* ctx = SSLCreateContext((CFAllocator_*)0, ST_CLIENT_SIDE_, ST_STREAM_TYPE_);
+        if (ctx == (SSLContext_*)0) { tls_fail_(&s.err, TLS_ERR_INTERNAL, "SSLCreateContext failed"); return TLS_ERR_INTERNAL; }
         c->ctx = ctx;
-        SSLSetIOFuncs(ctx, (unsigned char*)st_read_cb_, (unsigned char*)st_write_cb_);
-        SSLSetConnection(ctx, (const unsigned char*)c);
+        SSLSetIOFuncs(ctx, st_read_cb_, st_write_cb_);
+        SSLSetConnection(ctx, (const StConn_*)c);
         SSLSetProtocolVersionMin(ctx, ST_PROTO_TLS12_);
         SSLSetProtocolVersionMax(ctx, ST_PROTO_TLS12_);
         if (!tls_name_is_ip_(name)) { SSLSetPeerDomainName(ctx, (const char*)name, (size_t)str_len(name)); }
         // Verification is ours (SecTrust below), with the right policy and anchors.
         SSLSetSessionOption(ctx, ST_BREAK_ON_SERVER_AUTH_, (unsigned char)1);
         if (!cfg.alpn.is_empty()) {
-            unsigned char* list = CFArrayCreateMutable((unsigned char*)0, 0L, &kCFTypeArrayCallBacks);
+            CFArray_* list = CFArrayCreateMutable((CFAllocator_*)0, 0L, &kCFTypeArrayCallBacks);
             struct String a = cfg.alpn.clone();
             struct String parts[16];
             unsigned long np = a.split(",", parts[0..16]);
@@ -221,9 +240,9 @@ int tls_st_client_(&TlsStream s, const &char name, const &TlsConfig cfg) {
             while (k < np) {
                 struct String t = parts[k].trim();
                 if (!t.is_empty()) {
-                    unsigned char* str = st_cfstring_(t.as_ptr());
-                    CFArrayAppendValue(list, (const unsigned char*)str);
-                    CFRelease((const unsigned char*)str);
+                    CFString_* str = st_cfstring_(t.as_ptr());
+                    CFArrayAppendValue(list, (const CFType_*)str);
+                    CFRelease((const CFType_*)str);
                 }
                 t.free();
                 parts[k].free();
@@ -231,7 +250,7 @@ int tls_st_client_(&TlsStream s, const &char name, const &TlsConfig cfg) {
             }
             a.free();
             SSLSetALPNProtocols(ctx, list);
-            CFRelease((const unsigned char*)list);
+            CFRelease((const CFType_*)list);
         }
     }
     return TLS_OK;
@@ -239,40 +258,40 @@ int tls_st_client_(&TlsStream s, const &char name, const &TlsConfig cfg) {
 
 // SecTrust evaluation of the server's chain.
 static int st_check_trust_(&TlsStream s, struct StConn_* c) {
-    unsigned char* trust = (unsigned char*)0;
+    SecTrust_* trust = (SecTrust_*)0;
     int code = TLS_OK;
     unsafe {
         int st = SSLCopyPeerTrust(c->ctx, &trust);
-        if (st != ST_NOERR_ || trust == (unsigned char*)0) { return st_fail_(s, TLS_ERR_NO_CERT, "no server certificate", (long long)st); }
+        if (st != ST_NOERR_ || trust == (SecTrust_*)0) { return st_fail_(s, TLS_ERR_NO_CERT, "no server certificate", (long long)st); }
         // the leaf for TlsStream::peer_certificate
         if (SecTrustGetCertificateCount(trust) > 0L) {
-            unsigned char* leaf = SecTrustGetCertificateAtIndex(trust, 0L);
-            unsigned char* der = SecCertificateCopyData(leaf);
-            if (der != (unsigned char*)0) {
+            SecCertificate_* leaf = SecTrustGetCertificateAtIndex(trust, 0L);
+            CFData_* der = SecCertificateCopyData(leaf);
+            if (der != (CFData_*)0) {
                 s.peer_der_.free();
                 s.peer_der_ = Vec::from_slice(((const unsigned char*)CFDataGetBytePtr(der))[0..(unsigned long)CFDataGetLength(der)]);
-                CFRelease((const unsigned char*)der);
+                CFRelease((const CFType_*)der);
             }
         }
         if (c->verify) {
-            unsigned char* host = (unsigned char*)0;
+            CFString_* host = (CFString_*)0;
             if (c->verify_host) { host = st_cfstring_(c->name.as_ptr()); }
-            unsigned char* policy = SecPolicyCreateSSL((unsigned char)1, host);
-            SecTrustSetPolicies(trust, (const unsigned char*)policy);
-            CFRelease((const unsigned char*)policy);
-            if (host != (unsigned char*)0) { CFRelease((const unsigned char*)host); }
-            if (c->anchors != (unsigned char*)0) {
+            SecPolicy_* policy = SecPolicyCreateSSL((unsigned char)1, host);
+            SecTrustSetPolicies(trust, (const CFType_*)policy);
+            CFRelease((const CFType_*)policy);
+            if (host != (CFString_*)0) { CFRelease((const CFType_*)host); }
+            if (c->anchors != (CFArray_*)0) {
                 SecTrustSetAnchorCertificates(trust, c->anchors);
                 SecTrustSetAnchorCertificatesOnly(trust, (unsigned char)(c->use_system ? 0 : 1));
             } else if (!c->use_system) {
-                unsigned char* none = CFArrayCreateMutable((unsigned char*)0, 0L, &kCFTypeArrayCallBacks);
+                CFArray_* none = CFArrayCreateMutable((CFAllocator_*)0, 0L, &kCFTypeArrayCallBacks);
                 SecTrustSetAnchorCertificates(trust, none);
                 SecTrustSetAnchorCertificatesOnly(trust, (unsigned char)1);
-                CFRelease((const unsigned char*)none);
+                CFRelease((const CFType_*)none);
             }
-            unsigned char* err = (unsigned char*)0;
+            CFError_* err = (CFError_*)0;
             if (!SecTrustEvaluateWithError(trust, &err)) {
-                long e = err != (unsigned char*)0 ? CFErrorGetCode(err) : 0L;
+                long e = err != (CFError_*)0 ? CFErrorGetCode(err) : 0L;
                 const &char why = "certificate verification failed";
                 code = TLS_ERR_CERT_INVALID;
                 if (e == -67602L) { code = TLS_ERR_CERT_HOSTNAME; why = "the certificate doesn't match the host name"; }
@@ -280,10 +299,10 @@ static int st_check_trust_(&TlsStream s, struct StConn_* c) {
                 else if (e == -67843L || e == -67808L || e == -67609L) { code = TLS_ERR_CERT_UNTRUSTED; why = "the certificate chain doesn't lead to a trusted root"; }
                 else if (e == -67820L) { code = TLS_ERR_CERT_REVOKED; why = "the certificate has been revoked"; }
                 st_fail_(s, code, why, (long long)e);
-                if (err != (unsigned char*)0) { CFRelease((const unsigned char*)err); }
+                if (err != (CFError_*)0) { CFRelease((const CFType_*)err); }
             }
         }
-        CFRelease((const unsigned char*)trust);
+        CFRelease((const CFType_*)trust);
     }
     return code == TLS_OK ? 0 : -1;
 }
@@ -297,12 +316,12 @@ static void st_fill_info_(&TlsStream s, struct StConn_* c) {
         unsigned int suite = 0U;
         SSLGetNegotiatedCipher(c->ctx, &suite);
         tls_copy_cstr_(&s.cipher_[0], 64UL, tls_suite_name_((int)suite));
-        unsigned char* alpn = (unsigned char*)0;
-        if (SSLCopyALPNProtocols(c->ctx, &alpn) == ST_NOERR_ && alpn != (unsigned char*)0) {
+        CFArray_* alpn = (CFArray_*)0;
+        if (SSLCopyALPNProtocols(c->ctx, &alpn) == ST_NOERR_ && alpn != (CFArray_*)0) {
             if (CFArrayGetCount(alpn) > 0L) {
-                CFStringGetCString((unsigned char*)CFArrayGetValueAtIndex(alpn, 0L), (char*)&s.alpn_[0], 64L, ST_UTF8_);
+                CFStringGetCString((const CFString_*)CFArrayGetValueAtIndex(alpn, 0L), (char*)&s.alpn_[0], 64L, ST_UTF8_);
             }
-            CFRelease((const unsigned char*)alpn);
+            CFRelease((const CFType_*)alpn);
         }
     }
 }
@@ -373,8 +392,8 @@ void tls_st_free_(&TlsStream s) {
     struct StConn_* c = st_of_(s);
     if (c == (struct StConn_*)0) { return; }
     unsafe {
-        if (c->ctx != (unsigned char*)0) { CFRelease((const unsigned char*)c->ctx); }
-        if (c->anchors != (unsigned char*)0) { CFRelease((const unsigned char*)c->anchors); }
+        if (c->ctx != (SSLContext_*)0) { CFRelease((const CFType_*)c->ctx); }
+        if (c->anchors != (CFArray_*)0) { CFRelease((const CFType_*)c->anchors); }
         c->name.free();
         dealloc(c);
     }

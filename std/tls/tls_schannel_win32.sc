@@ -58,19 +58,41 @@
 
 namespace std {
 
+// wincrypt / SSPI objects std only passes around, opaque: a certificate
+// store, chain engine and chain context, CERT_INFO, the credential mappers,
+// CRYPTO_SETTINGS, the policy status' extra data, and the auth data
+// AcquireCredentialsHandle takes (an SCH_CREDENTIALS or SCHANNEL_CRED).
+struct Win32CertStore_ { char opaque_; };
+struct Win32ChainEngine_ { char opaque_; };
+struct Win32CertChain_ { char opaque_; };
+struct SchCertInfo_ { char opaque_; };
+struct SchMapper_ { char opaque_; };
+struct SchCryptoSettings_ { char opaque_; };
+struct SchPolicyExtra_ { char opaque_; };
+struct SchAuthData_ { char opaque_; };
+
 struct SchHandle_ { unsigned long long lower; unsigned long long upper; };
 struct SchBuffer_ { unsigned int len; unsigned int type; unsigned char* data; };
 struct SchBufferDesc_ { unsigned int version; unsigned int count; struct SchBuffer_* bufs; };
 
+// CERT_CONTEXT / chain verification structures (wincrypt.h).
+struct SchCertCtx_ {
+    unsigned int   encoding;
+    unsigned char* data;
+    unsigned int   len;
+    SchCertInfo_*    info;
+    Win32CertStore_* store;
+};
+
 struct SchannelCred_ {
     unsigned int dwVersion;
     unsigned int cCreds;
-    unsigned char*        paCred;
-    unsigned char*        hRootStore;
+    SchCertCtx_**         paCred;
+    Win32CertStore_*      hRootStore;
     unsigned int cMappers;
-    unsigned char*        aphMappers;
+    SchMapper_**          aphMappers;
     unsigned int cSupportedAlgs;
-    unsigned char*        palgSupportedAlgs;
+    unsigned int*         palgSupportedAlgs;   // ALG_ID[]
     unsigned int grbitEnabledProtocols;
     unsigned int dwMinimumCipherStrength;
     unsigned int dwMaximumCipherStrength;
@@ -81,10 +103,10 @@ struct SchannelCred_ {
 
 struct SchTlsParameters_ {
     unsigned int cAlpnIds;
-    unsigned char*        rgstrAlpnIds;
+    unsigned char*        rgstrAlpnIds;        // UNICODE_STRING[] (unused: 0 ids)
     unsigned int grbitDisabledProtocols;
     unsigned int cDisabledCrypto;
-    unsigned char*        pDisabledCrypto;
+    SchCryptoSettings_*   pDisabledCrypto;
     unsigned int dwFlags;
 };
 
@@ -92,10 +114,10 @@ struct SchCredentials_ {
     unsigned int dwVersion;
     unsigned int dwCredFormat;
     unsigned int cCreds;
-    unsigned char*        paCred;
-    unsigned char*        hRootStore;
+    SchCertCtx_**         paCred;
+    Win32CertStore_*      hRootStore;
     unsigned int cMappers;
-    unsigned char*        aphMappers;
+    SchMapper_**          aphMappers;
     unsigned int dwSessionLifespan;
     unsigned int dwFlags;
     unsigned int cTlsParameters;
@@ -135,40 +157,32 @@ struct SchAppProtocol_ {
     unsigned char id[255];
 };
 
-// CERT_CONTEXT / chain verification structures (wincrypt.h).
-struct SchCertCtx_ {
-    unsigned int   encoding;
-    unsigned char* data;
-    unsigned int   len;
-    unsigned char*          info;
-    unsigned char*          store;
-};
 struct SchEnhKeyUsage_ { unsigned int count; char** ids; };
 struct SchUsageMatch_ { unsigned int type; struct SchEnhKeyUsage_ usage; };
 struct SchChainPara_ { unsigned int cbSize; struct SchUsageMatch_ usage; };
 struct SchSslPolicyPara_ { unsigned int cbSize; unsigned int authType; unsigned int checks; unsigned short* serverName; };
-struct SchPolicyPara_ { unsigned int cbSize; unsigned int flags; unsigned char* extra; };
-struct SchPolicyStatus_ { unsigned int cbSize; unsigned int error; int chainIndex; int elementIndex; unsigned char* extra; };
+struct SchPolicyPara_ { unsigned int cbSize; unsigned int flags; SchSslPolicyPara_* extra; };
+struct SchPolicyStatus_ { unsigned int cbSize; unsigned int error; int chainIndex; int elementIndex; SchPolicyExtra_* extra; };
 
-extern int  AcquireCredentialsHandleA(const char* principal, const char* package, unsigned int use, unsigned char* logon,
-                                      unsigned char* authData, unsigned char* getKey, unsigned char* getKeyArg, struct SchHandle_* cred, long long* expiry);
+extern int  AcquireCredentialsHandleA(const char* principal, const char* package, unsigned int use, unsigned long long* logon,
+                                      SchAuthData_* authData, ?fn void() getKey, ?&Erased getKeyArg, struct SchHandle_* cred, long long* expiry);
 extern int  InitializeSecurityContextA(struct SchHandle_* cred, struct SchHandle_* ctx, const char* target, unsigned int req,
                                        unsigned int reserved, unsigned int rep, struct SchBufferDesc_* in, unsigned int reserved2,
                                        struct SchHandle_* newCtx, struct SchBufferDesc_* out, unsigned int* attrs, long long* expiry);
 extern int  DeleteSecurityContext(struct SchHandle_* ctx);
 extern int  FreeCredentialsHandle(struct SchHandle_* cred);
-extern int  FreeContextBuffer(unsigned char* p);
-extern int  QueryContextAttributesA(struct SchHandle_* ctx, unsigned int attr, unsigned char* buf);
+extern int  FreeContextBuffer(unsigned char* p);   // a buffer SSPI allocated
+extern int  QueryContextAttributesA(struct SchHandle_* ctx, unsigned int attr, unsigned char* buf);   // the attribute's struct, as bytes
 extern int  EncryptMessage(struct SchHandle_* ctx, unsigned int qop, struct SchBufferDesc_* msg, unsigned int seq);
 extern int  DecryptMessage(struct SchHandle_* ctx, struct SchBufferDesc_* msg, unsigned int seq, unsigned int* qop);
 extern int  ApplyControlToken(struct SchHandle_* ctx, struct SchBufferDesc_* in);
-extern int  CertGetCertificateChain(unsigned char* engine, unsigned char* cert, unsigned char* time, unsigned char* store, struct SchChainPara_* para,
-                                    unsigned int flags, unsigned char* reserved, unsigned char** chain);
-extern int  CertVerifyCertificateChainPolicy(const char* policy, unsigned char* chain, struct SchPolicyPara_* para,
+extern int  CertGetCertificateChain(Win32ChainEngine_* engine, SchCertCtx_* cert, long long* time, Win32CertStore_* store, struct SchChainPara_* para,
+                                    unsigned int flags, SchPolicyExtra_* reserved, Win32CertChain_** chain);
+extern int  CertVerifyCertificateChainPolicy(const char* policy, Win32CertChain_* chain, struct SchPolicyPara_* para,
                                              struct SchPolicyStatus_* status);
-extern void CertFreeCertificateChain(unsigned char* chain);
-extern int  CertFreeCertificateContext(unsigned char* cert);
-extern unsigned char* CertEnumCertificatesInStore(unsigned char* store, unsigned char* prev);
+extern void CertFreeCertificateChain(Win32CertChain_* chain);
+extern int  CertFreeCertificateContext(SchCertCtx_* cert);
+extern SchCertCtx_* CertEnumCertificatesInStore(Win32CertStore_* store, SchCertCtx_* prev);
 
 struct SchConn_ {
     struct SchHandle_ cred;
@@ -299,8 +313,8 @@ static int sch_acquire_(&TlsStream s, struct SchConn_* c, int min_version, int m
         sc.dwFlags = flags;
         sc.cTlsParameters = 1U;
         sc.pTlsParameters = (struct SchTlsParameters_*)&tp;
-        st = AcquireCredentialsHandleA((const char*)0, SCH_UNISP_, SCH_CRED_OUTBOUND_, (unsigned char*)0, (unsigned char*)&sc,
-                                       (unsigned char*)0, (unsigned char*)0, &c->cred, &expiry);
+        st = AcquireCredentialsHandleA((const char*)0, SCH_UNISP_, SCH_CRED_OUTBOUND_, (unsigned long long*)0, (SchAuthData_*)&sc,
+                                       null, null, &c->cred, &expiry);
         if (st != SEC_E_OK_) {
             // Older Windows (and Wine): SCHANNEL_CRED, at most TLS 1.2.
             if (min_version > TLS_VERSION_1_2) {
@@ -311,8 +325,8 @@ static int sch_acquire_(&TlsStream s, struct SchConn_* c, int min_version, int m
             old.dwVersion = SCHANNEL_CRED_VERSION_;
             old.grbitEnabledProtocols = SP_PROT_TLS1_2_CLIENT_;
             old.dwFlags = flags;
-            st = AcquireCredentialsHandleA((const char*)0, SCH_UNISP_, SCH_CRED_OUTBOUND_, (unsigned char*)0, (unsigned char*)&old,
-                                           (unsigned char*)0, (unsigned char*)0, &c->cred, &expiry);
+            st = AcquireCredentialsHandleA((const char*)0, SCH_UNISP_, SCH_CRED_OUTBOUND_, (unsigned long long*)0, (SchAuthData_*)&old,
+                                           null, null, &c->cred, &expiry);
         }
     }
     if (st != SEC_E_OK_) { return sch_fail_(s, TLS_ERR_UNAVAILABLE, "AcquireCredentialsHandle failed", st); }
@@ -358,13 +372,13 @@ int tls_schannel_client_(&TlsStream s, const &char name, const &TlsConfig cfg) {
 
 // Peer certificate checks once the handshake is done.
 static int sch_verify_(&TlsStream s, struct SchConn_* c) {
-    unsigned char* cert = (unsigned char*)0;
+    SchCertCtx_* cert = (SchCertCtx_*)0;
     int st = 0;
     unsafe { st = QueryContextAttributesA(&c->ctx, SECPKG_ATTR_REMOTE_CERT_, (unsigned char*)&cert); }
-    if (st != SEC_E_OK_ || cert == (unsigned char*)0) { return sch_fail_(s, TLS_ERR_NO_CERT, "no server certificate", st); }
+    if (st != SEC_E_OK_ || cert == (SchCertCtx_*)0) { return sch_fail_(s, TLS_ERR_NO_CERT, "no server certificate", st); }
     int code = TLS_OK;
     unsafe {
-        struct SchCertCtx_* cc = (struct SchCertCtx_*)cert;
+        struct SchCertCtx_* cc = cert;
         s.peer_der_.free();
         s.peer_der_ = Vec::from_slice(((const unsigned char*)cc->data)[0..(unsigned long)cc->len]);
         if (c->verify) {
@@ -372,9 +386,9 @@ static int sch_verify_(&TlsStream s, struct SchConn_* c) {
                 // std's own path validation with the configured roots
                 struct Vec<struct Vec<unsigned char>> chain = Vec::new();
                 chain.push(Vec::from_slice(((const unsigned char*)cc->data)[0..(unsigned long)cc->len]));
-                unsigned char* it = CertEnumCertificatesInStore(cc->store, (unsigned char*)0);
-                while (it != (unsigned char*)0) {
-                    struct SchCertCtx_* ic = (struct SchCertCtx_*)it;
+                SchCertCtx_* it = CertEnumCertificatesInStore(cc->store, (SchCertCtx_*)0);
+                while (it != (SchCertCtx_*)0) {
+                    struct SchCertCtx_* ic = it;
                     if (ic->len != cc->len || safe_memcmp_raw_((const unsigned char*)ic->data, (const unsigned char*)cc->data, (unsigned long)cc->len) != 0) {
                         chain.push(Vec::from_slice(((const unsigned char*)ic->data)[0..(unsigned long)ic->len]));
                     }
@@ -395,8 +409,8 @@ static int sch_verify_(&TlsStream s, struct SchConn_* c) {
                 para.usage.type = 0U;   // USAGE_MATCH_TYPE_AND
                 para.usage.usage.count = 1U;
                 para.usage.usage.ids = (char**)&usage[0];
-                unsigned char* chainCtx = (unsigned char*)0;
-                if (!CertGetCertificateChain((unsigned char*)0, cert, (unsigned char*)0, cc->store, &para, 0U, (unsigned char*)0, &chainCtx)) {
+                Win32CertChain_* chainCtx = (Win32CertChain_*)0;
+                if (!CertGetCertificateChain((Win32ChainEngine_*)0, cert, (long long*)0, cc->store, &para, 0U, (SchPolicyExtra_*)0, &chainCtx)) {
                     code = TLS_ERR_CERT_INVALID;
                     tls_fail_(&s.err, code, "CertGetCertificateChain failed");
                 } else {
@@ -413,7 +427,7 @@ static int sch_verify_(&TlsStream s, struct SchConn_* c) {
                     struct SchPolicyPara_ pp;
                     pp.cbSize = (unsigned int)sizeof(struct SchPolicyPara_);
                     pp.flags = 0U;
-                    pp.extra = (unsigned char*)&ssl;
+                    pp.extra = (SchSslPolicyPara_*)&ssl;
                     struct SchPolicyStatus_ ps;
                     safe_memset_raw_((unsigned char*)&ps, 0, sizeof(struct SchPolicyStatus_));
                     ps.cbSize = (unsigned int)sizeof(struct SchPolicyStatus_);

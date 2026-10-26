@@ -339,7 +339,7 @@ void dsp_sliding_dot_f64_n_(const &double a_ref, const &double x_ref, &double ou
         unsigned long q = 0UL;
 #if DSP_VDSP
         // vDSP_convD with a positive filter stride is this correlation.
-        if ((unsigned char*)vDSP_convD != (unsigned char*)0 && nOut * n >= DSP_VDSP_MIN) {
+        if ((unsigned long)vDSP_convD != 0UL && nOut * n >= DSP_VDSP_MIN) {
             vDSP_convD(x, 1L, a, 1L, out, 1L, nOut, n);
             return;
         }
@@ -362,7 +362,7 @@ void dsp_sliding_dot_f32_n_(const &float a_ref, const &float x_ref, &float out_r
         float* out = (float*)out_ref;
         unsigned long q = 0UL;
 #if DSP_VDSP
-        if ((unsigned char*)vDSP_conv != (unsigned char*)0 && nOut * n >= DSP_VDSP_MIN) {
+        if ((unsigned long)vDSP_conv != 0UL && nOut * n >= DSP_VDSP_MIN) {
             vDSP_conv(x, 1L, a, 1L, out, 1L, nOut, n);
             return;
         }
