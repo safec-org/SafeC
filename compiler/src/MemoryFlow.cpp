@@ -435,6 +435,7 @@ private:
     void checkLoad(const Expr &e, const VSet &v, int form, const std::string &name);
     EV evalCall(CallExpr &e);
     EV evalCallInner(CallExpr &e);
+    SourceLocation freeLoc_;
     std::vector<OwnKey> callOwners_;
     EV opaqueResult(const Expr &site, const TypePtr &ty);
     void writeInit(const std::vector<CellRef> &dst, Expr &init, const TypePtr &ty);
@@ -464,7 +465,17 @@ private:
         bool pseudo = false;   // *self of a destructor ('consume' method)
     };
     std::unordered_map<int, OwnVar> ownVars_;
-    struct Frame { const Stmt *s; std::vector<int> objs; };
+    struct Frame { const Stmt *s; std::vector<int> objs; std::vector<int> locals; };
+    // Scoped threads: the referents lent to each (State::lent) and where.
+    struct SpawnInfo { SourceLocation loc; bool mut; bool sync; };   // sync: a synchronized type, still usable here
+    std::unordered_map<int, SpawnInfo> spawns_;               // token -> spawn site
+    std::unordered_map<const Expr *, int> spawnTok_;          // spawn_scoped call -> token
+    std::unordered_map<int, int> handleTok_;                  // handle variable -> token
+    struct LocalInfo { std::string name; SourceLocation decl; };
+    std::unordered_map<int, LocalInfo> locals_;               // every local declared
+    void lendCheck(int obj, SourceLocation loc, bool write);
+    void lendExit(int obj, SourceLocation loc);
+    std::string objName(int obj) const;
     std::vector<Frame> frames_;
     std::vector<const Expr *> pending_;                 // must-drop temporaries not yet consumed
     std::map<OwnKey, SourceLocation> goneAt_;           // where a slot was last dropped/moved
@@ -1042,6 +1053,7 @@ void Walker::freeObjs(const VSet &v) {
     std::set<int> bases;
     for (auto &e : v) {
         int b = canonBase(e.obj);
+        if (cur_.lent.count(b)) lendExit(b, freeLoc_);
         const ObjInfo &oi = objs_[b];
         if (oi.kind == OK::Local || oi.kind == OK::Global || oi.kind == OK::Mark ||
             oi.kind == OK::Temp || oi.kind == OK::Ret || oi.kind == OK::Trusted || oi.kind == OK::Token)
@@ -1496,6 +1508,13 @@ EV Walker::rval(Expr &e) {
             EV v = rval(*ae.rhs);
             if (owned) ownMove(*ae.rhs, v, kOMove);
             auto dst = lval(*ae.lhs);
+            {   // 'h = spawn_scoped(...)': h is that thread's handle
+                const Expr *re = ae.rhs.get();
+                while (re && re->kind == ExprKind::Cast) re = static_cast<const CastExpr *>(re)->operand.get();
+                auto st = spawnTok_.find(re);
+                if (st != spawnTok_.end() && dst.size() == 1 && objs_[dst[0].obj].kind == OK::Local)
+                    handleTok_[dst[0].obj] = st->second;
+            }
             if (owned) ownAssign(dst, e.loc); else ownUse(dst, e.loc, true);
             if (v.agg) { copyAgg(dst, v.cells); return v; }
             if (isTracked(lt) || !v.v.empty()) write(dst, v.v);
@@ -1874,6 +1893,34 @@ EV Walker::evalCallInner(CallExpr &e) {
     }
     if (!cur_.live) return r;
 
+    // spawn_scoped(f, arg): lend arg's referents to the new thread;
+    // join(h): get them back.
+    if (e.callee && e.callee->kind == ExprKind::Ident && !fd) {
+        auto &cn = static_cast<IdentExpr &>(*e.callee).name;
+        if (cn == "spawn_scoped" && args.size() >= 2 && e.args.size() >= 2) {
+            int tok = intern("S" + ptrKey(&e), objInfo(OK::Token));
+            const ReferenceType *rt = refOf(e.args[1]->type);
+            bool sync = rt && drv_.sema.threadSafety(rt->base, true, true).empty();
+            spawns_[tok] = {e.loc, rt ? rt->mut : true, sync};
+            spawnTok_[&e] = tok;
+            for (auto &x : args[1].v) {
+                int b = canonBase(x.obj);
+                const ObjInfo &oi = objs_[b];
+                if (oi.kind == OK::Local || oi.kind == OK::Ext || oi.kind == OK::Alloc || oi.kind == OK::Temp)
+                    sortedUnion(cur_.lent[b], std::vector<int>{tok});
+            }
+        } else if (cn == "__safec_join" && !e.args.empty() && e.args[0] &&
+                   e.args[0]->kind == ExprKind::Ident && static_cast<IdentExpr &>(*e.args[0]).resolved) {
+            auto ht = handleTok_.find(varObj(static_cast<IdentExpr &>(*e.args[0]).resolved));
+            if (ht != handleTok_.end())
+                for (auto it = cur_.lent.begin(); it != cur_.lent.end();) {
+                    auto &v = it->second;
+                    v.erase(std::remove(v.begin(), v.end(), ht->second), v.end());
+                    it = v.empty() ? cur_.lent.erase(it) : std::next(it);
+                }
+        }
+    }
+    freeLoc_ = e.loc;
     switch (e.memOp) {
     case CallExpr::MemOp::Dealloc: {
         if (args.size() > firstArg) {
@@ -2319,6 +2366,7 @@ static const char *goneWord(uint8_t b) {
 void Walker::ownUse(const std::vector<CellRef> &cells, SourceLocation loc, bool write) {
     if (!cur_.live) return;
     for (auto &c : cells) {
+        lendCheck(c.obj, loc, write);
         if (!tracked(c.obj)) continue;
         ownCheckObjTokens(c.obj, loc);
         for (auto it : ownOverlap(c.obj, c.path)) {
@@ -2344,6 +2392,7 @@ void Walker::ownUse(const std::vector<CellRef> &cells, SourceLocation loc, bool 
 }
 
 void Walker::ownConsumeKey(int obj, const std::string &path, uint8_t kind, SourceLocation loc) {
+    lendCheck(obj, loc, true);
     auto ov = ownVars_.find(obj);
     if (ov != ownVars_.end() && ov->second.pseudo && !path.empty()) {
         // A destructor taking *self apart field by field.
@@ -2482,6 +2531,7 @@ void Walker::ownMove(Expr &e, const EV &v, uint8_t kind) {
 void Walker::ownAssign(const std::vector<CellRef> &cells, SourceLocation loc) {
     if (!cur_.live) return;
     for (auto &c : cells) {
+        lendCheck(c.obj, loc, true);
         if (!tracked(c.obj)) continue;
         // Refilling a field dropped/moved out of a Drop value.
         bool refill = false;
@@ -2544,6 +2594,10 @@ bool Walker::keptByDefer(int obj) const {
 }
 
 void Walker::ownExitFrame(const Frame &f, SourceLocation loc, const char *how) {
+    // CodeGen joins the function's scoped threads when it returns, before
+    // the function body's own locals are gone.
+    if (f.s != fn_.body.get() && !cur_.lent.empty())
+        for (int obj : f.locals) lendExit(obj, loc);
     for (int obj : f.objs) {
         bool keep = keptByDefer(obj);
         bool haveLive = false, haveMixed = false;
@@ -2677,6 +2731,52 @@ void Walker::ownBind(const MatchPattern &p, SourceLocation loc) {
     ownDeclare(binds_.back().second, p.payloadType, true, loc, p.bindName, nullptr);
 }
 
+
+// ── Scoped threads ──────────────────────────────────────────────────────────
+// spawn_scoped(f, &x) lends x to the new thread until join(h) (or the
+// function's return, where CodeGen joins every scoped thread): meanwhile
+// this thread may not use x (only read it, for a const lend), drop it,
+// free it, or let it go out of scope.
+std::string Walker::objName(int obj) const {
+    auto l = locals_.find(obj);
+    if (l != locals_.end()) return "'" + l->second.name + "'";
+    auto o = ownVars_.find(obj);
+    if (o != ownVars_.end()) return "'" + o->second.name + "'";
+    const ObjInfo &oi = objs_[obj];
+    if (oi.kind == OK::Alloc) return "a heap/arena allocation";
+    return "memory";
+}
+
+void Walker::lendCheck(int obj, SourceLocation loc, bool write) {
+    if (cur_.lent.empty()) return;
+    auto it = cur_.lent.find(canonBase(obj));
+    if (it == cur_.lent.end()) return;
+    for (int t : it->second) {
+        auto sp = spawns_.find(t);
+        if (sp == spawns_.end()) continue;
+        if (sp->second.sync) continue;              // a Mutex, atomics: made to be shared
+        if (!write && !sp->second.mut) continue;   // reading what is shared for reading
+        reportN(loc, objName(canonBase(obj)) + " is lent to the thread started here by spawn_scoped, which may still "
+                     "be using it: join that thread (join(h)) before touching it again",
+                {{sp->second.loc, "the thread was started here"}});
+        return;
+    }
+}
+
+void Walker::lendExit(int obj, SourceLocation loc) {
+    auto it = cur_.lent.find(obj);
+    if (it == cur_.lent.end()) return;
+    for (int t : it->second) {
+        auto sp = spawns_.find(t);
+        if (sp == spawns_.end()) continue;
+        reportN(loc, objName(obj) + " goes away while the thread started by spawn_scoped may still be using it: "
+                     "join that thread (join(h)) first",
+                {{sp->second.loc, "the thread was started here"}});
+        break;
+    }
+    cur_.lent.erase(it);
+}
+
 // ── Statements ─────────────────────────────────────────────────────────────────
 void Walker::jumpTo(bool isBreak, const std::string &label, SourceLocation loc) {
     for (auto it = targets_.rbegin(); it != targets_.rend(); ++it) {
@@ -2707,6 +2807,7 @@ void Walker::doReturn(bool isError) {
     }
     --inDefer_;
     if (cur_.live) { ownFlush(); ownEndFunction(); }
+    cur_.lent.clear();   // CodeGen joins every scoped thread on the way out
     exit_ = join(exit_, cur_);
     cur_ = std::move(saved);
     cur_.live = false;
@@ -2883,6 +2984,14 @@ void Walker::stmt(Stmt &s) {
         clearSubtree(o, "");
         if (vs.init) writeInit({{o, ""}}, *vs.init, vs.resolvedType);
         if (cur_.live) ownDeclare(o, vs.resolvedType, vs.init != nullptr, vs.loc, vs.name, vs.decl);
+        locals_[o] = {vs.name, vs.loc};
+        if (!frames_.empty()) frames_.back().locals.push_back(o);
+        if (vs.init) {
+            const Expr *ie = vs.init.get();
+            while (ie && ie->kind == ExprKind::Cast) ie = static_cast<const CastExpr *>(ie)->operand.get();
+            auto st = spawnTok_.find(ie);
+            if (st != spawnTok_.end()) handleTok_[o] = st->second;
+        }
         break;
     }
     case StmtKind::MultiVarDecl:

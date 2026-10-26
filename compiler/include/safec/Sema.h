@@ -150,6 +150,7 @@ private:
     TypePtr checkNew(NewExpr &e);
     TypePtr checkTupleLit(TupleLitExpr &e);
     TypePtr checkSpawn(SpawnExpr &e);
+    void checkThreadArg(Expr &arg, const TypePtr &argTy, bool scoped, const char *what);
 
     // Aggregate initializer '{a, b, c}' against a known target type (struct
     // fields or array elements, matched positionally). Falls back to

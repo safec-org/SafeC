@@ -35,8 +35,9 @@ namespace std {
 #define ONESHOT_TAKEN  3   // the value was received
 
 // One value, sent once, received once.
-generic<T>
+generic<T: Send>
 struct Oneshot {
+    unsafe impl Sync;   // state changes under 'lk'
     T                value[1];
     int              state;     // ONESHOT_*
     struct WakerSlot rx;
@@ -68,8 +69,9 @@ struct OneshotRecv {
 // ── AsyncChannel ───────────────────────────────────────────────────────────
 
 // A bounded multi-producer, multi-consumer FIFO over a caller's buffer.
-generic<T>
+generic<T: Send>
 struct AsyncChannel {
+    unsafe impl Sync;   // state changes under 'lk'
     []T              buf;
     unsigned long    head;      // index of the oldest value
     unsigned long    count;     // values in the buffer

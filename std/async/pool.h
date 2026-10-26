@@ -30,6 +30,7 @@
 namespace std {
 
 struct ThreadPool {
+    unsafe impl Sync;   // shared with its workers; state changes under 'mu'
     unsigned long long mu;         // guards the queue, live, the flags
     unsigned long long work_cv;    // signalled when a task is queued (or on shutdown)
     unsigned long long done_cv;    // broadcast when a task finishes
@@ -47,11 +48,12 @@ struct ThreadPool {
     static struct ThreadPool new();
     // Start 'n' worker threads (1..ASYNC_POOL_MAX_THREADS). 0 on success.
     int  start(int n);
-    generic<F, T> struct JoinHandle<T> spawn(&AsyncTask<F, T> task);
+    // F and T must be Send: the task runs (and finishes) on a worker thread.
+    generic<F: Send, T: Send> struct JoinHandle<T> spawn(&AsyncTask<F, T> task);
     int  spawn_raw_(?&TaskHeader t);
     // Run 'fut' as a task on the pool and wait (this thread blocks) for its
     // value. Call from outside the pool's workers.
-    generic<F: Future, T> T block_on(F fut);
+    generic<F: Future + Send, T: Send> T block_on(F fut);
     // Block until the task behind 'hdr' is done.
     void wait_task_(&TaskHeader hdr);
     // Block until every spawned task has finished.
@@ -63,13 +65,13 @@ struct ThreadPool {
     int  live_count();
 };
 
-generic<F, T>
+generic<F: Send, T: Send>
 struct JoinHandle<T> ThreadPool::spawn(&AsyncTask<F, T> task) {
     self.spawn_raw_(&task.hdr);
     return join_handle_for_(task);
 }
 
-generic<F: Future, T>
+generic<F: Future + Send, T: Send>
 T ThreadPool::block_on(F fut) {
     struct AsyncTask<F, T> t = AsyncTask::new(fut);
     self.spawn_raw_(&t.hdr);

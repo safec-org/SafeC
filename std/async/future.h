@@ -206,6 +206,7 @@ struct WaitList {
 // the queue's role are described in std/async/timer.h). Declared here
 // because Context points at one.
 struct TimerQueue {
+    unsafe impl Sync;   // changes under 'lock'
     struct TimerWheel wheel;     // tick = 1 ms since origin_ms
     long long         origin_ms; // clock value of tick 0
     long long         now_ms_;   // the time the queue was last advanced to

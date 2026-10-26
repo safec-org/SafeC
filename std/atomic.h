@@ -50,4 +50,35 @@ int        atomic_cas_ll(&long long addr, &long long expected, long long desired
 // Full sequential-consistency fence.
 void atomic_thread_fence();
 
+// ── Typed atomics ─────────────────────────────────────────────────────────────
+// An int / long long every access to which is atomic: Sync, so threads may
+// share one through a mutable reference ('&static AtomicInt', or a local
+// lent to spawn_scoped threads) where a plain int would race.
+//   static struct AtomicInt hits;            // zero-initialized
+//   hits.fetch_add(1);
+struct AtomicInt {
+    int v_;
+    unsafe impl Send + Sync;
+    static struct AtomicInt new(int v);
+    int  load() const;
+    void store(int v);
+    int  fetch_add(int d);     // returns the old value
+    int  fetch_sub(int d);
+    int  exchange(int v);
+    int  compare_exchange(&int expected, int desired);   // 1 if stored
+};
+
+struct AtomicLong {
+    long long v_;
+    unsafe impl Send + Sync;
+    static struct AtomicLong new(long long v);
+    long long load() const;
+    void      store(long long v);
+    long long fetch_add(long long d);
+    long long fetch_sub(long long d);
+    long long exchange(long long v);
+    int       compare_exchange(&long long expected, long long desired);
+};
+
+
 } // namespace std

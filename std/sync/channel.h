@@ -32,8 +32,9 @@ extern void* memcpy(void* dst, const void* src, size_t n);   // size_t: 32-bit o
 
 namespace std {
 
-generic<T>
+generic<T: Send>
 struct Chan {
+    unsafe impl Send + Sync;   // the runtime channel is locked inside
     ?&void raw;   // runtime handle from __safec_chan_create; null if creation failed
 
     static struct Chan<T> new(int cap);   // buffered channel of `cap` slots
