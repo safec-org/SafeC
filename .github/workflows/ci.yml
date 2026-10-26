@@ -153,6 +153,54 @@ jobs:
           NM="llvm-nm-${{ env.LLVM_VERSION }}" python3 SafeC/.github/scripts/check-glibc.py --max 2.25 \
             --objects pkg/lib/*/std/*.a
 
+  # ── Linux: scc, the self-hosted compiler (selfhost/) ─────────────────────
+  # Builds scc natively and as the playground's scc.wasm with the C++ safec,
+  # runs the differential tests against safec with both builds (and safec's
+  # own compiler/tests, compile-only), checks the playground API, and checks
+  # the bootstrap fixpoint (scc compiling itself reproduces itself).
+  selfhost:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout SafeC
+        uses: actions/checkout@v4
+        with:
+          path: SafeC
+
+      - name: Install LLVM
+        run: |
+          wget https://apt.llvm.org/llvm.sh
+          chmod +x llvm.sh
+          sudo ./llvm.sh ${{ env.LLVM_VERSION }}
+          sudo apt-get install -y "llvm-${{ env.LLVM_VERSION }}-dev" "clang-${{ env.LLVM_VERSION }}" \
+            "lld-${{ env.LLVM_VERSION }}"
+
+      - name: Install Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Build safec compiler
+        run: |
+          LLVM_DIR="/usr/lib/llvm-${{ env.LLVM_VERSION }}/lib/cmake/llvm"
+          cmake -S SafeC/compiler -B SafeC/compiler/build \
+            -DCMAKE_BUILD_TYPE=Release -DLLVM_DIR="$LLVM_DIR"
+          cmake --build SafeC/compiler/build -j "$(nproc)"
+
+      - name: Build and test scc
+        run: bash SafeC/selfhost/ci.sh
+        env:
+          SAFEC: ${{ github.workspace }}/SafeC/compiler/build/safec
+          SAFEC_HOME: ${{ github.workspace }}/SafeC
+          SAFEC_CLANG: /usr/bin/clang-${{ env.LLVM_VERSION }}
+          WASM_LD: /usr/bin/wasm-ld-${{ env.LLVM_VERSION }}
+
+      - name: Upload the playground build
+        uses: actions/upload-artifact@v4
+        with:
+          name: scc-web
+          path: SafeC/selfhost/web/
+
   # ── Linux: glibc 2.25 floor ───────────────────────────────────────────────
   # safeguard built as release.yml builds the Linux release binaries (in
   # manylinux2014, glibc 2.17, libstdc++ static), and checked with

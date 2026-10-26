@@ -3730,6 +3730,40 @@ TypePtr Sema::checkCall(CallExpr &e) {
                 return makeVoid();
             }
             if (ident.name == "atomic_cas") {
+                // bool atomic_cas(T *ptr, T expected, T desired[, order]):
+                // 'expected' is a value, compared against *ptr and never
+                // written back. For C11's write-back semantics (expected
+                // passed by address) use atomic_compare_exchange_strong.
+                if (e.args.size() != 3 && e.args.size() != 4)
+                    diag_.error(e.loc, "atomic_cas expects 3 arguments (pointer, expected, desired) "
+                                       "and an optional memory order");
+                TypePtr ptrTy = e.args.empty() ? nullptr : e.args[0]->type;
+                TypePtr elemTy;
+                if (ptrTy && ptrTy->kind == TypeKind::Pointer)
+                    elemTy = static_cast<PointerType &>(*ptrTy).base;
+                else if (ptrTy && ptrTy->kind == TypeKind::Reference)
+                    elemTy = static_cast<ReferenceType &>(*ptrTy).base;
+                else if (ptrTy && !ptrTy->isError())
+                    diag_.error(e.args[0]->loc, "atomic_cas: first argument must be a pointer, not '" +
+                                ptrTy->str() + "'");
+                for (size_t i = 1; elemTy && i < 3 && i < e.args.size(); ++i) {
+                    const TypePtr &argTy = e.args[i]->type;
+                    if (!argTy || argTy->isError() || elemTy->isError()) continue;
+                    if (canImplicitlyConvert(argTy, elemTy) ||
+                        intLiteralFitsType(*e.args[i], elemTy) ||
+                        floatLitFitsType(*e.args[i], elemTy))
+                        continue;
+                    std::string hint;
+                    if (i == 1 && (argTy->kind == TypeKind::Pointer ||
+                                   argTy->kind == TypeKind::Reference))
+                        hint = " (atomic_cas takes 'expected' by value; use "
+                               "atomic_compare_exchange_strong(ptr, &expected, desired) "
+                               "to have the current value written back on failure)";
+                    diag_.error(e.args[i]->loc,
+                        std::string("atomic_cas: cannot convert ") +
+                        (i == 1 ? "'expected'" : "'desired'") + " of type '" +
+                        argTy->str() + "' to '" + elemTy->str() + "'" + hint);
+                }
                 e.type = makeBool();
                 return makeBool();
             }
@@ -4452,12 +4486,12 @@ TypePtr Sema::checkMember(MemberExpr &e) {
 
     // Auto-dereference references for dot access (SafeC references are non-null
     // and always valid — dot access on a reference implicitly dereferences it)
-    bool throughRef = false;
+    bool viaRef = false;
     if (!e.isArrow && baseTy->kind == TypeKind::Reference) {
+        viaRef = true;
         auto &rt = static_cast<ReferenceType &>(*baseTy);
         checkNullabilityDeref(baseTy, e.loc);
         e.isLValue = rt.mut;
-        throughRef = true;
         baseTy = rt.base;
     }
 
@@ -4488,7 +4522,7 @@ TypePtr Sema::checkMember(MemberExpr &e) {
         if (validIdx) {
             size_t idx = static_cast<size_t>(std::stoul(e.field));
             if (idx < tt.elementTypes.size()) {
-                e.isLValue = e.base->isLValue;
+                if (!viaRef) e.isLValue = e.base->isLValue; // see the struct case below
                 return tt.elementTypes[idx];
             }
         }
@@ -4520,10 +4554,13 @@ TypePtr Sema::checkMember(MemberExpr &e) {
         diag_.error(e.loc, "struct '" + st->name + "' has no field '" + e.field + "'");
         return makeError();
     }
-    // Through a reference the field is a place in the referent, whatever the
-    // base expression is ('v.at(0).name' names the element's field, not a
-    // copy's); otherwise it is a place when the base is.
-    if (!e.isArrow && !throughRef) e.isLValue = e.base->isLValue;
+    // A field reached through a reference names the referent's storage, so
+    // its lvalue-ness is the reference's mutability (set above), not the
+    // base expression's: 'v.at(i).items' is as much an lvalue as 'r.items'
+    // even though the call 'v.at(i)' itself isn't one. Taking it from the
+    // base made CodeGen copy the field into a temporary for a method call
+    // ('v.at(i).items.push(x)'), so the call mutated the copy.
+    if (!e.isArrow && !viaRef) e.isLValue = e.base->isLValue;
     return fd->type;
 }
 

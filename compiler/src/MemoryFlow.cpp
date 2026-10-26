@@ -2083,10 +2083,24 @@ EV Walker::evalCallInner(CallExpr &e) {
     return applySummary(e, callee, *s, args);
 }
 
+// A call's fresh objects are named by the call site plus the callee's own
+// name for them, a chain of call sites ending in the allocation site. Within
+// a recursive component, and past a length cap, the chain is cut down to its
+// allocation site ('rec:<site>', 'deep:<site>') so names stay finite. Keeping
+// the site apart, rather than folding every object such a call makes into
+// one, keeps a free of one allocation (a map's rehash dropping its old
+// arrays) from tainting the unrelated ones the same call made (the buffer of
+// a Vec beside the map).
 std::string Walker::calleeSite(const Expr &call, FunctionDecl *callee, const std::string &key) {
-    std::string k = drv_.sameScc(&fn_, callee) ? "rec" : key;
+    auto leaf = [&]() {
+        std::string l = key.substr(key.rfind('/') + 1);
+        for (const char *pre : {"rec:", "deep:"})
+            if (l.compare(0, std::strlen(pre), pre) == 0) l = l.substr(std::strlen(pre));
+        return l;
+    };
+    std::string k = drv_.sameScc(&fn_, callee) ? "rec:" + leaf() : key;
     std::string s = "c" + ptrKey(&call) + "/" + k;
-    if (s.size() > 160) s = "c" + ptrKey(&call) + "/deep";
+    if (s.size() > 160) s = "c" + ptrKey(&call) + "/deep:" + leaf();
     return s;
 }
 

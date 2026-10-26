@@ -3437,9 +3437,23 @@ llvm::Value *CodeGen::genCall(CallExpr &e, FnEnv &env) {
                                              llvm::MaybeAlign(), parseOrdering(2));
         }
         if (ident.name == "atomic_cas" && e.args.size() >= 3) {
+            // Sema checked both values convert to the pointee type T;
+            // cmpxchg needs them as exactly T, so a narrower 'expected'
+            // or literal operates on the whole location, not part of it.
             auto *ptr      = genExpr(*e.args[0], env);
             auto *expected = genExpr(*e.args[1], env);
             auto *desired  = genExpr(*e.args[2], env);
+            TypePtr ptrTy  = e.args[0]->type;
+            TypePtr elemTy;
+            if (ptrTy && ptrTy->kind == TypeKind::Pointer)
+                elemTy = static_cast<PointerType &>(*ptrTy).base;
+            else if (ptrTy && ptrTy->kind == TypeKind::Reference)
+                elemTy = static_cast<ReferenceType &>(*ptrTy).base;
+            if (elemTy) {
+                auto *valTy = lowerType(elemTy);
+                expected = coerceScalar(expected, valTy, e.args[1]->type);
+                desired  = coerceScalar(desired, valTy, e.args[2]->type);
+            }
             auto ord = parseOrdering(3);
             auto *cmpxchg = builder_.CreateAtomicCmpXchg(
                 ptr, expected, desired, llvm::MaybeAlign(), ord, ord);
@@ -3797,11 +3811,29 @@ llvm::Value *CodeGen::genCall(CallExpr &e, FnEnv &env) {
         // reads 8 bytes regardless of what the caller's *source* type was,
         // so passing a raw (unpromoted) float32 here fed the wrong bit
         // pattern in and silently printed garbage/zero.
+        // Integers narrower than 'int' are promoted to 'int' the same way
+        // (§6.3.1.1p2): a bool (i1, e.g. '!x' or 'a == b') or a char/short
+        // passed raw left its upper bits undefined, so printf("%d", !x)
+        // printed 254. Bool zero-extends; char/short follow their type's
+        // signedness, as in the fixed-parameter coercion above.
         if (fty->isVarArg()) {
             for (unsigned i = fty->getNumParams(); i < args.size(); ++i) {
-                if (args[i]->getType()->isFloatTy()) {
+                llvm::Type *argTy = args[i]->getType();
+                if (argTy->isFloatTy()) {
                     args[i] = builder_.CreateFPExt(
                         args[i], llvm::Type::getDoubleTy(ctx_), "varargpromote");
+                } else if (argTy->isIntegerTy() && argTy->getIntegerBitWidth() < 32) {
+                    bool isSigned = false;
+                    if (argTy->getIntegerBitWidth() > 1) {
+                        TypePtr srcTy = (i >= argOffset && (i - argOffset) < e.args.size())
+                            ? e.args[i - argOffset]->type : nullptr;
+                        isSigned = true;
+                        if (srcTy && srcTy->kind >= TypeKind::Int8 && srcTy->kind <= TypeKind::UInt64)
+                            isSigned = static_cast<PrimType &>(*srcTy).isSigned();
+                    }
+                    llvm::Type *i32 = llvm::Type::getInt32Ty(ctx_);
+                    args[i] = isSigned ? builder_.CreateSExt(args[i], i32, "varargpromote")
+                                       : builder_.CreateZExt(args[i], i32, "varargpromote");
                 }
             }
         }
