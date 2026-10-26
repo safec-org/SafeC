@@ -44,13 +44,13 @@ void SpirvBuf::free() {
 int SpirvBuf::read([]unsigned char dst) const {
     unsigned long bytes = dst.len;
     if (self.handle == 0UL || bytes > self.bytes || bytes % 4UL != 0UL || bytes == 0UL) return 0;
-    unsafe { return device_download_(DEVICE_VULKAN, (&float)(void*)dst.ptr, self.handle, bytes / 4UL); }
+    unsafe { return device_download_(DEVICE_VULKAN, (&float)(float*)dst.ptr, self.handle, bytes / 4UL); }
 }
 
 int SpirvBuf::write([]const unsigned char src) {
     unsigned long bytes = src.len;
     if (self.handle == 0UL || bytes > self.bytes || bytes % 4UL != 0UL || bytes == 0UL) return 0;
-    unsafe { return device_upload_(DEVICE_VULKAN, self.handle, (const &float)(const void*)src.ptr, bytes / 4UL); }
+    unsafe { return device_upload_(DEVICE_VULKAN, self.handle, (const &float)(const float*)src.ptr, bytes / 4UL); }
 }
 
 struct SpirvBuf SpirvBuf::alloc(unsigned long n, int dtype) {
@@ -341,7 +341,7 @@ int spirv_sum_f32_n_(const &float a, &float out, unsigned long n) {
     struct SpirvBuf ba = SpirvBuf::upload_n_(a, n == 0UL ? 1UL : n);
     struct SpirvBuf bo = SpirvBuf::alloc(1UL, 0);
     int ok = (n == 0UL || ba.valid()) && bo.valid() && spirv_sum(ba, bo, n);
-    if (ok) { unsafe { ok = bo.read(((unsigned char*)(void*)(out))[0..4UL]); } }
+    if (ok) { unsafe { ok = bo.read(((unsigned char*)(out))[0..4UL]); } }
     ba.free(); bo.free();
     return ok;
 }
@@ -366,7 +366,7 @@ int spirv_matmul_f32_n_(const &float a, const &float b, &float out,
     struct SpirvBuf bb = SpirvBuf::upload_n_(b, K * N == 0UL ? 1UL : K * N);
     struct SpirvBuf bo = SpirvBuf::alloc(M * N, 0);
     int ok = ba.valid() && bb.valid() && bo.valid() && spirv_matmul(ba, bb, bo, M, K, N);
-    if (ok) { unsafe { ok = bo.read(((unsigned char*)(void*)(out))[0..4UL * M * N]); } }
+    if (ok) { unsafe { ok = bo.read(((unsigned char*)(out))[0..4UL * M * N]); } }
     ba.free(); bb.free(); bo.free();
     return ok;
 }
