@@ -5,6 +5,9 @@
 
 # SIMD vector types are not supported
 ctests/simd/vector_align.sc
+# safec's import of the host's C headers through clang (<complex.h> here):
+# scc has no C header import, only the shims in selfhost/include
+ctests/cheaders/complex_float128.sc
 # element references into a container's buffer ('v.at(i)', 'm.get(k)')
 # are not tracked, so one held across a push or a rehashing insert is not
 # reported (SUBSET.md, "Memory-flow analysis")

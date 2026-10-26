@@ -78,6 +78,39 @@ static int is_header(const &String rel) { return rel.ends_with(".h"); }
 
 // ── links ────────────────────────────────────────────────────────────────────
 
+// Makes 'url' (an item page, ".../kind.Name.html") unique ignoring case,
+// and claims it: the first page keeps its path, a later one whose path
+// matches it but for case (macro.PRIx32 / macro.PRIX32), or exactly (one
+// declaration under two #if branches), gets "-2", "-3", ... On a
+// case-insensitive file system (macOS, Windows) the two would otherwise be
+// one file, the second overwriting the first. Items are claimed in doc.json
+// order, so another crate's reference linking into this one (its items in
+// the same order) picks the same paths.
+static void claim_page(&Crate c, &String url) {
+    struct String base = url.strip_suffix(".html");
+    struct String cand = url.clone();
+    long long n = 2LL;
+    for (;;) {
+        struct String lc = cand.to_lower();
+        if (!c.pages.contains(lc.as_ptr())) {
+            c.pages.insert(lc.as_ptr(), 1LL);
+            lc.free();
+            break;
+        }
+        lc.free();
+        cand.clear();
+        cand.push_str(&base);
+        cand.push("-");
+        cand.push_int(n);
+        cand.push(".html");
+        n = n + 1LL;
+    }
+    url.clear();
+    url.push_str(&cand);
+    cand.free();
+    base.free();
+}
+
 // The first link registered for a name wins.
 static void add_link(&Crate c, const &String key, const &String url) {
     if (key.len == 0UL) { return; }
@@ -271,6 +304,7 @@ int crate_load(&Crate c, const &char config_path) {
     int show_private = util_vbool(&c.cfg, "private");
 
     c.links = StrMap::new();
+    c.pages = StrMap::new();
 
     struct String empty = String::new();
     ensure_module(c, &empty);
@@ -326,6 +360,7 @@ int crate_load(&Crate c, const &char config_path) {
                     url.push_str(&dir);
                     struct String page = item_page_name(it);
                     url.push_str(&page);
+                    claim_page(c, &url);
                     link_item(c, it, &url);
                     dir.free(); page.free();
                 }
@@ -352,18 +387,10 @@ int crate_load(&Crate c, const &char config_path) {
             item.path.push_str(&item.name);
             item.url = module_dir(&c.modules.at((unsigned long)mi).path);
             struct String page = item_page_name(it);
-            // Two items of one kind and name in a module (a declaration
-            // under two #if branches): the second gets its own page.
-            for (unsigned long k = 0UL; k < c.modules.at((unsigned long)mi).items.len; k = k + 1UL) {
-                &Item other = c.items.at((unsigned long)*c.modules.at((unsigned long)mi).items.at(k));
-                struct String ou = other.url.clone();
-                struct String cand = item.url.clone();
-                cand.push_str(&page);
-                if (ou.eq(&cand)) { page.replace(".html", "-2.html"); }
-                ou.free(); cand.free();
-            }
             item.url.push_str(&page);
             page.free();
+            // Its own page, even beside one of the same name but for case.
+            claim_page(c, &item.url);
             crate_name.free();
             load_members(&item, it, show_private);
             link_item(c, it, &item.url);
