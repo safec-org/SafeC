@@ -123,6 +123,69 @@ static unsigned long link_slot(const &char key) {
     return 0UL;
 }
 
+// Every item page's path, lowercased: an item page gets a path no other
+// page has even ignoring case (see claim_page). Same open addressing as
+// gLinks (vals unused).
+static struct LinkTable gPages;
+
+static void pages_init(unsigned long pages) {
+    unsigned long cap = 1024UL;
+    while (cap < pages * 2UL) { cap = cap * 2UL; }
+    gPages.slots = Vec::with_cap(cap);
+    for (unsigned long i = 0UL; i < cap; i = i + 1UL) { gPages.slots.push(-1LL); }
+    gPages.keys = Vec::new();
+    gPages.vals = Vec::new();
+}
+
+static unsigned long page_slot(const &char key) {
+    unsigned long mask = gPages.slots.len - 1UL;
+    unsigned long i = link_hash(key) & mask;
+    for (;;) {
+        long long e = *gPages.slots.at(i);
+        if (e < 0LL || gPages.keys.at((unsigned long)e).eq_cstr(key)) { return i; }
+        i = (i + 1UL) & mask;
+    }
+    return 0UL;
+}
+
+// Makes 'url' (an item page, ".../kind.Name.html") unique ignoring case,
+// and claims it: the first page keeps its path, a later one whose path
+// matches it but for case (macro.PRIx32 / macro.PRIX32), or exactly (one
+// declaration under two #if branches), gets "-2", "-3", ... On a
+// case-insensitive file system (macOS, Windows) the two would otherwise be
+// one file, the second overwriting the first. Items are claimed in doc.json
+// order, so another crate's reference linking into this one (its items in
+// the same order) picks the same paths.
+static void claim_page(&String url) {
+    struct String base = url.strip_suffix(".html");
+    struct String cand = url.clone();
+    long long n = 2LL;
+    for (;;) {
+        struct String lc = cand.to_lower();
+        unsigned long s = page_slot(lc.as_ptr());
+        if (*gPages.slots.at(s) < 0LL) {
+            // Full (more pages than counted): stop claiming rather than loop.
+            if ((gPages.keys.len + 1UL) * 10UL <= gPages.slots.len * 9UL) {
+                gPages.keys.push(lc.clone());
+                gPages.slots.set(s, (long long)gPages.keys.len - 1LL);
+            }
+            lc.free();
+            break;
+        }
+        lc.free();
+        cand.clear();
+        cand.push_str(&base);
+        cand.push("-");
+        cand.push_int(n);
+        cand.push(".html");
+        n = n + 1LL;
+    }
+    url.clear();
+    url.push_str(&cand);
+    cand.free();
+    base.free();
+}
+
 static void add_link(&Crate c, const &String key, const &String url) {
     if (key.len == 0UL) { return; }
     // Full (more names than counted): drop the rest rather than loop.
@@ -327,6 +390,7 @@ int crate_load(&Crate c, const &char config_path) {
         names = names + 2UL + 2UL * util_vget(all_items.array_at(i), "members", &doc).array_len();
     }
     links_init(names + 4096UL);
+    pages_init(all_items.array_len() + 16UL);
 
     struct String empty = String::new();
     ensure_module(c, &empty);
@@ -382,6 +446,7 @@ int crate_load(&Crate c, const &char config_path) {
                     url.push_str(&dir);
                     struct String page = item_page_name(it);
                     url.push_str(&page);
+                    claim_page(&url);
                     link_item(c, it, &url);
                     dir.free(); page.free();
                 }
@@ -408,18 +473,10 @@ int crate_load(&Crate c, const &char config_path) {
             item.path.push_str(&item.name);
             item.url = module_dir(&c.modules.at((unsigned long)mi).path);
             struct String page = item_page_name(it);
-            // Two items of one kind and name in a module (a declaration
-            // under two #if branches): the second gets its own page.
-            for (unsigned long k = 0UL; k < c.modules.at((unsigned long)mi).items.len; k = k + 1UL) {
-                &Item other = c.items.at((unsigned long)*c.modules.at((unsigned long)mi).items.at(k));
-                struct String ou = other.url.clone();
-                struct String cand = item.url.clone();
-                cand.push_str(&page);
-                if (ou.eq(&cand)) { page.replace(".html", "-2.html"); }
-                ou.free(); cand.free();
-            }
             item.url.push_str(&page);
             page.free();
+            // Its own page, even beside one of the same name but for case.
+            claim_page(&item.url);
             crate_name.free();
             load_members(&item, it, show_private);
             link_item(c, it, &item.url);
