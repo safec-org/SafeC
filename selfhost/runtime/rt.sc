@@ -891,11 +891,12 @@ int printf(const char* fmt, ...) {
 
 // FILE: just a file descriptor
 struct __FILE { int fd; };
-struct __FILE __rt_files[3] = {{0}, {1}, {2}};
+struct __FILE __rt_files[3];
 
+// stdin/stdout/stderr are &__rt_files[0..2]: the fd is the index
 int __rt_fd(struct __FILE* f) {
     int fd = 1;
-    unsafe { if (f != null) { fd = f->fd; } }
+    unsafe { if (f != null) { fd = ((int)f - (int)&__rt_files[0]) / 4; } }
     return fd;
 }
 

@@ -61,8 +61,6 @@ void check_var(int s) {
         if (dt != 0) { it = coerce_generic_value(init, it, dt); }
         if (dt != 0 && is_err(dt) == 0 && is_err(it) == 0) {
             int ok = convertible_to(init, it, dt);
-            // char buf[N] = "text"
-            if (ok == 0 && g_node[init].kind == E_STR && g_ty[dt].kind == TY_ARRAY && is8(g_ty[dt].base) == 1) { ok = 1; }
             if (ok == 0) {
                 msg_reset();
                 msg_lit("type mismatch in variable declaration: cannot convert '");
@@ -229,7 +227,9 @@ void check_static_assert(int s) {
             error_node(s);
         }
     } else {
-        err_at(c, "expression is not a valid compile-time constant expression");
+        g_ce_bad = 0;
+        sema_const_int(c);
+        const_error(c);
     }
 }
 
@@ -268,7 +268,9 @@ void check_stmt(int s) {
             else { g_node[s].op = 2; if (g_node[s].c != 0) { check_stmt(g_node[s].c); } }
             return;
         }
-        err_at(c, "'if const' condition is not a compile-time constant");
+        g_ce_bad = 0;
+        sema_const_int(c);
+        const_error(c);
         return;
     }
     if (k == S_WHILE || k == S_DO) {
@@ -381,7 +383,6 @@ void check_global(int g) {
         if (g_node[init].kind == E_INITLIST) { it = check_initlist(init, gt); }
         else { it = check_expr(init); }
         int ok = convertible_to(init, it, gt);
-        if (ok == 0 && g_node[init].kind == E_STR && g_ty[gt].kind == TY_ARRAY && is8(g_ty[gt].base) == 1) { ok = 1; }
         if (ok == 0) {
             msg_reset();
             msg_lit("type mismatch in global variable initializer: cannot convert '");

@@ -8,32 +8,98 @@
 #pragma once
 
 // ── Capacities ───────────────────────────────────────────────────────────────
-#define SRC_MAX      4194304   // bytes of source text (all files)
-#define NFILE_MAX    256
-#define SP_MAX       4194304   // string pool bytes
-#define NSTR_MAX     131072    // interned strings
+// SCC_SMALL: the browser playground build (smaller tables, ~30 MB of memory)
+#ifdef SCC_SMALL
+#define SRC_MAX      1048576
+#define SP_MAX       1048576
+#define NSTR_MAX     65536
+#define TOK_MAX      120000
+#define RAW_MAX      60000
+#define MTOK_MAX     30000
+#define NODE_MAX     120000
+#define LIST_MAX     200000
+#define OUT_MAX      2097152
+#define CODE_MAX     1048576
+#define DATA_MAX     2097152
+#endif
+#ifndef SRC_MAX
+#define SRC_MAX 4194304   // bytes of source text (all files)
+#endif
+#ifndef NFILE_MAX
+#define NFILE_MAX 256
+#endif
+#ifndef SP_MAX
+#define SP_MAX 4194304   // string pool bytes
+#endif
+#ifndef NSTR_MAX
+#define NSTR_MAX 131072    // interned strings
+#endif
+#ifndef STRHASH_SIZE
 #define STRHASH_SIZE 65536
-#define TOK_MAX      400000    // preprocessed tokens
-#define RAW_MAX      200000    // raw (per-file, stacked) tokens
-#define MTOK_MAX     100000    // macro body tokens
-#define NMACRO_MAX   8192
-#define NODE_MAX     400000
-#define LIST_MAX     600000
-#define TY_MAX       16384
-#define TYL_MAX      65536     // type component lists
-#define TYHASH_SIZE  16384
-#define NSTRUCT_MAX  2048
-#define NFIELD_MAX   16384
-#define NFUNC_MAX    8192
-#define NGLOB_MAX    8192
-#define NLOCAL_MAX   65536
-#define NSYM_MAX     8192      // scope stack entries
-#define OUT_MAX      8388608   // output module bytes
-#define CODE_MAX     4194304   // function body staging
-#define DATA_MAX     4194304   // data segment staging
-#define DIAG_MAX     65536
-#define MSG_MAX      4096
-#define TMP_MAX      65536
+#endif
+#ifndef TOK_MAX
+#define TOK_MAX 400000    // preprocessed tokens
+#endif
+#ifndef RAW_MAX
+#define RAW_MAX 200000    // raw (per-file, stacked) tokens
+#endif
+#ifndef MTOK_MAX
+#define MTOK_MAX 100000    // macro body tokens
+#endif
+#ifndef NMACRO_MAX
+#define NMACRO_MAX 8192
+#endif
+#ifndef NODE_MAX
+#define NODE_MAX 400000
+#endif
+#ifndef LIST_MAX
+#define LIST_MAX 600000
+#endif
+#ifndef TY_MAX
+#define TY_MAX 16384
+#endif
+#ifndef TYL_MAX
+#define TYL_MAX 65536     // type component lists
+#endif
+#ifndef TYHASH_SIZE
+#define TYHASH_SIZE 16384
+#endif
+#ifndef NSTRUCT_MAX
+#define NSTRUCT_MAX 2048
+#endif
+#ifndef NFIELD_MAX
+#define NFIELD_MAX 16384
+#endif
+#ifndef NFUNC_MAX
+#define NFUNC_MAX 8192
+#endif
+#ifndef NGLOB_MAX
+#define NGLOB_MAX 8192
+#endif
+#ifndef NLOCAL_MAX
+#define NLOCAL_MAX 65536
+#endif
+#ifndef NSYM_MAX
+#define NSYM_MAX 8192      // scope stack entries
+#endif
+#ifndef OUT_MAX
+#define OUT_MAX 8388608   // output module bytes
+#endif
+#ifndef CODE_MAX
+#define CODE_MAX 4194304   // function body staging
+#endif
+#ifndef DATA_MAX
+#define DATA_MAX 4194304   // data segment staging
+#endif
+#ifndef DIAG_MAX
+#define DIAG_MAX 65536
+#endif
+#ifndef MSG_MAX
+#define MSG_MAX 4096
+#endif
+#ifndef TMP_MAX
+#define TMP_MAX 65536
+#endif
 
 // ── Token kinds ──────────────────────────────────────────────────────────────
 #define T_EOF      0

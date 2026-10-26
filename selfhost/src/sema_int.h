@@ -76,5 +76,7 @@ extern int g_mt_enum;
 extern int g_mt_wild;
 extern int g_mt_ncov;
 void sema_collect();
+void const_error(int e);
+extern int g_ce_bad;
 void memflow_program();
 int check_spawn(int e, int fnx, int arg);

@@ -353,7 +353,7 @@ int lex_file(int file) {
         if (space == 1) { flags = flags | TF_SPACE; }
         bol = 0;
         space = 0;
-        if (is_digit(c) || (c == '.' && is_digit(lx_peek(1)))) {
+        if (is_digit(c)) {
             lex_number(line, col, flags);
             continue;
         }

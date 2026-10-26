@@ -44,6 +44,9 @@ def first_error_msg(text):
     e = errors(text)
     return e[0].split(": error: ", 1)[1] if e else ""
 
+stdlib = os.path.join(ROOT, "build", "native-std", "libsafec_std.a")
+if os.environ.get("SAFEC_HOME") and not os.path.exists(stdlib):
+    subprocess.run(["bash", os.path.join(HERE, "native_std.sh")])
 results = []
 counts = {"pass": 0, "fail": 0}
 cats = {}
@@ -58,7 +61,13 @@ for f in files:
     # native
     pdir = base + ".d"
     os.makedirs(pdir, exist_ok=True)
-    rc, out, err = run([args.safec, f, "--compat-preprocessor", "--emit-bin", "-o", os.path.join(pdir, "prog")])
+    std = os.environ.get("SAFEC_HOME", "")
+    cmd = [args.safec, f, "--compat-preprocessor", "--emit-bin", "-o", os.path.join(pdir, "prog")]
+    if std: cmd += ["-I", std]
+    rc, out, err = run(cmd + ["-lm"])
+    if rc != 0 and "undefined reference to `std_" in err and os.path.exists(stdlib):
+        # link the std library (as safeguard would)
+        rc, out, err = run(cmd + ["-L", os.path.dirname(stdlib), "-lsafec_std", "-lm", "-lpthread"])
     n_ok = rc == 0 and os.path.exists(os.path.join(pdir, "prog"))
     n_diag = err
     n_rc = n_out = None

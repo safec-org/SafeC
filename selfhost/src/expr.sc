@@ -605,8 +605,7 @@ int check_initlist(int e, int target) {
             int ft = g_field[fi].ty;
             int vt = 0;
             adopt_tuple(val, ft);
-            if (g_node[val].kind == E_INITLIST) { vt = check_initlist(val, ft); }
-            else { vt = check_expr(val); }
+            vt = check_expr(val);
             vt = coerce_generic_value(val, vt, ft);
             if (is_err(vt) == 0 && convertible_to(val, vt, ft) == 0) {
                 msg_reset();
@@ -650,20 +649,15 @@ int check_initlist(int e, int target) {
             }
             next = slot + 1;
             if (slot > maxs) { maxs = slot; }
-            int vt = 0;
-            if (g_node[val].kind == E_INITLIST) { vt = check_initlist(val, et); }
-            else { vt = check_expr(val); }
+            int vt = check_expr(val);
             if (is_err(vt) == 0 && convertible_to(val, vt, et) == 0) {
-                // a string literal initializes a char array
-                if (!(g_node[val].kind == E_STR && is8(et) == 1)) {
-                    msg_reset();
-                    msg_lit("type mismatch in array initializer: cannot convert '");
-                    msg_type(vt);
-                    msg_lit("' to '");
-                    msg_type(et);
-                    msg_lit("'");
-                    error_node(val);
-                }
+                msg_reset();
+                msg_lit("type mismatch in array initializer: cannot convert '");
+                msg_type(vt);
+                msg_lit("' to '");
+                msg_type(et);
+                msg_lit("'");
+                error_node(val);
             }
             i = i + 1;
         }

@@ -396,9 +396,9 @@ int resolve_type(int t) {
                 n = (int)g_cval;
                 if (n < 0) { msg_reset(); msg_lit("array size must be non-negative"); error_node(e); n = 0; }
             } else {
-                msg_reset();
-                msg_lit("array size is not a compile-time constant");
-                error_node(e);
+                g_ce_bad = 0;
+                sema_const_int(e);
+                const_error(e);
                 n = 1;
             }
         }
@@ -1049,8 +1049,24 @@ void sema_collect() {
 
 // ── constant evaluation (integers) ───────────────────────────────────────────
 long g_cval = 0L;
+int g_ce_bad = 0;     // the identifier that made an expression non-constant
 int check_expr(int e);
 int ce_call(int e);
+
+// reports why e (expected constant) is not one
+void const_error(int e) {
+    if (g_ce_bad != 0) {
+        msg_reset();
+        msg_lit("'");
+        msg_str(g_node[g_ce_bad].sid);
+        msg_lit("' is not a compile-time constant");
+        error_node(g_ce_bad);
+        return;
+    }
+    msg_reset();
+    msg_lit("expression is not a valid compile-time constant expression");
+    error_node(e);
+}
 
 int sema_const_int(int e) {
     if (e == 0) { return 0; }
@@ -1071,15 +1087,8 @@ int sema_const_int(int e) {
     }
     if (k == E_IDENT) {
         int sid = g_node[e].sid;
-        int ls = lookup_local(sid);
-        if (ls >= 0) {
-            if (g_sym[ls].kind == SYM_LOCAL) {
-                int l = g_sym[ls].idx;
-                int vn = g_local[l].node;
-                if ((g_local[l].flags & LF_CONST) != 0 && vn != 0 && g_node[vn].a != 0) { return sema_const_int(g_node[vn].a); }
-            }
-            return 0;
-        }
+        // locals (even const ones) are never compile-time constants
+        if (lookup_local(sid) >= 0) { g_ce_bad = e; return 0; }
         int gk = g_gkind[sid];
         if (gk == 0) { gk = g_nsfb_kind[sid]; if (gk != 0) { sid = sid; } }
         if (gk == SYM_ENUMC) {
@@ -1094,6 +1103,7 @@ int sema_const_int(int e) {
             int gn = g_glob[g].node;
             if ((g_glob[g].flags & NF_CONST) != 0 && g_node[gn].a != 0) { return sema_const_int(g_node[gn].a); }
         }
+        g_ce_bad = e;
         return 0;
     }
     if (k == E_CAST) {
