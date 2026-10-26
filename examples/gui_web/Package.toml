@@ -1,0 +1,17 @@
+[package]
+name        = "gui_web"
+version     = "1.0.0"
+author      = "SafeC <safec@example.org>"
+description = "std/gui in the browser: widgets and an animated canvas, each in a <canvas>"
+license     = "MIT"
+
+[build]
+edition = "2026"
+
+# 'safeguard bundle --target wasm32': build/GuiWeb.web/ — gui_web.wasm, the
+# std/gui JS glue and a generated index.html (web/index.html is the
+# hand-written alternative). Serve it: python3 -m http.server -d build/GuiWeb.web
+[bundle]
+name        = "GuiWeb"
+identifier  = "org.safec.gui-web"
+web_present = "webgl"

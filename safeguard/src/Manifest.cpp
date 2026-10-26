@@ -196,6 +196,11 @@ Manifest ManifestParser::buildManifest(const std::vector<Token>& tokens,
         else if (tok.key == "bundle.min_system_version") m.bundle.minSystemVersion = tok.value;
         else if (tok.key == "bundle.codesign_identity")  m.bundle.codesignIdentity = tok.value;
         else if (tok.key == "bundle.depends")    m.bundle.depends    = splitList(tok.value);
+        else if (tok.key == "bundle.web_entry")   m.bundle.webEntry   = tok.value;
+        else if (tok.key == "bundle.web_present") m.bundle.webPresent = tok.value;
+        else if (tok.key == "bundle.web_windows") m.bundle.webWindows = tok.value;
+        else if (tok.key == "bundle.web_page")    m.bundle.webPage    = tok.value;
+        else if (tok.key == "bundle.web_files")   m.bundle.webFiles   = splitList(tok.value);
         else if (tok.key.rfind("bundle.", 0) == 0)
             throw std::runtime_error(srcName + ": unknown key '" + tok.key.substr(7) + "' in [bundle]");
 
@@ -271,6 +276,12 @@ Manifest ManifestParser::buildManifest(const std::vector<Token>& tokens,
         if (m.bundle.version.empty() || !std::isdigit((unsigned char)m.bundle.version[0]))
             throw std::runtime_error(srcName + ": the bundle version must start with a digit "
                                      "(e.g. \"1.2.0\"), got \"" + m.bundle.version + "\"");
+        if (!m.bundle.webPresent.empty() && m.bundle.webPresent != "webgl" && m.bundle.webPresent != "2d")
+            throw std::runtime_error(srcName + ": bundle.web_present must be \"webgl\" or \"2d\", got \"" +
+                                     m.bundle.webPresent + "\"");
+        if (!m.bundle.webWindows.empty() && m.bundle.webWindows != "canvas" && m.bundle.webWindows != "frames")
+            throw std::runtime_error(srcName + ": bundle.web_windows must be \"canvas\" or \"frames\", got \"" +
+                                     m.bundle.webWindows + "\"");
         if (m.bundle.subsystem.empty()) m.bundle.subsystem = "windows";
         else if (m.bundle.subsystem != "windows" && m.bundle.subsystem != "console")
             throw std::runtime_error(srcName + ": bundle.subsystem must be \"windows\" or "

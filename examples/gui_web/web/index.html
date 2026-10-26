@@ -1,0 +1,36 @@
+<!doctype html>
+<!-- examples/gui_web's page. Next to it: gui_web.wasm (build/gui_web) and
+     gui_web.js (a copy of <SafeC>/std/gui/gui_web.js); serve the folder
+     over HTTP (python3 -m http.server -d web) — browsers don't load
+     WebAssembly from file:// URLs. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SafeC std/gui on the web</title>
+<style>
+  body { margin: 0; padding: 24px; font: 15px system-ui, sans-serif; background: #e9ecef; color: #212529; }
+  main { display: flex; flex-wrap: wrap; gap: 24px; align-items: flex-start; }
+  canvas { border-radius: 8px; box-shadow: 0 2px 12px rgba(0, 0, 0, .18); outline: none; }
+  canvas:focus-visible { box-shadow: 0 0 0 3px #4dabf7; }
+</style>
+</head>
+<body>
+<p>Two std/gui windows, each a &lt;canvas&gt;: the widgets are drawn by SafeC's
+CPU renderer in WebAssembly and shown with putImageData.</p>
+<main>
+  <canvas data-safec-gui></canvas>
+  <canvas data-safec-gui></canvas>
+</main>
+<script type="module">
+  import { loadSafeCGui, fetchFiles } from "./gui_web.js";
+  // Optional: real fonts instead of the built-in fallback face, at the
+  // paths std/gui looks for them (see std/gui/gui_text.h).
+  const files = await fetchFiles({
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf": "fonts/DejaVuSans.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf": "fonts/DejaVuSans-Bold.ttf",
+  });
+  await loadSafeCGui(fetch("gui_web.wasm"), { files, entry: "start" });
+</script>
+</body>
+</html>

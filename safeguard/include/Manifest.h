@@ -92,6 +92,13 @@ struct BundleConfig {
     std::string minSystemVersion;  // macOS LSMinimumSystemVersion (default "11.0")
     std::string codesignIdentity;  // macOS: "-" (ad-hoc, default), an identity, or "none"
     std::vector<std::string> depends; // Linux: the .deb's Depends
+    // WebAssembly ('safeguard bundle --target wasm32': build/<name>.web/)
+    std::string webEntry;          // the export the page calls once (default "start")
+    std::string webPresent;        // gui_web.js 'present': "" (default), "webgl", "2d"
+    std::string webWindows;        // gui_web.js 'windows': "canvas" (default) or "frames"
+    std::string webPage;           // your own index.html instead of the generated one
+    std::vector<std::string> webFiles; // files the module can fopen() in the page
+                                   // (fonts...): "path" or "path=page-path"
 };
 
 struct Manifest {
