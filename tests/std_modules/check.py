@@ -97,6 +97,10 @@ def find_llvm_tool(tool, env):
 
 
 nm = find_llvm_tool("llvm-nm", "LLVM_NM")
+try:
+    objdump = find_llvm_tool("llvm-objdump", "LLVM_OBJDUMP")
+except SystemExit:
+    objdump = None   # then COFF COMDAT definitions count as strong
 target = ["--target", args.target] if args.target else []
 
 # Feature-gated std sources, and every feature std knows.
@@ -159,6 +163,47 @@ def nm_members(path):
             if p[1] in ("W", "V"):
                 w.add(name)
     return members
+
+
+def linker_merged(path):
+    """{member: names} of definitions the linker keeps one copy of, though
+    'nm -P' prints them as plain 'T'/'D': Mach-O weak definitions ('weak
+    external' in 'nm -m') and COFF definitions in a pick-any COMDAT section
+    (both what a linkonce_odr generic instance becomes; ELF's show as 'W')."""
+    merged = {}
+    cur = os.path.basename(path)
+    out = subprocess.run([nm, "-m", "--extern-only", path], capture_output=True, text=True).stdout
+    for line in out.splitlines():
+        m = re.match(r"^(?:.*\((.*)\)|(\S+)):$", line)   # 'lib.a(member.o):' or 'file.o:'
+        if m:
+            cur = m.group(1) or os.path.basename(m.group(2))
+            continue
+        if "weak external" in line:
+            name = line.split()[-1]
+            if sys.platform == "darwin" and not args.target and name.startswith("_"):
+                name = name[1:]
+            elif args.target and "apple" in args.target and name.startswith("_"):
+                name = name[1:]
+            merged.setdefault(cur, set()).add(name)
+    if objdump:
+        out = subprocess.run([objdump, "-t", path], capture_output=True, text=True).stdout
+        cur, comdat_secs, last_sec = os.path.basename(path), set(), None
+        for line in out.splitlines():
+            m = re.match(r"^(?:.*\((.*)\)|(\S+?)):\s+file format coff", line)
+            if m:
+                cur, comdat_secs, last_sec = m.group(1) or os.path.basename(m.group(2)), set(), None
+                continue
+            m = re.match(r"^\[\s*\d+\]\(sec\s+(-?\d+)\).*\(scl\s+(\d+)\).*\s(\S+)$", line)
+            if m:
+                sec, scl, name = int(m.group(1)), int(m.group(2)), m.group(3)
+                last_sec = sec if scl == 3 else None          # a section-definition symbol
+                if scl == 2 and sec in comdat_secs:           # external, in a COMDAT section
+                    merged.setdefault(cur, set()).add(name)
+                continue
+            m = re.match(r"^AUX .*\bcomdat\s+(\d+)", line)
+            if m and last_sec is not None and m.group(1) == "2":   # IMAGE_COMDAT_SELECT_ANY
+                comdat_secs.add(last_sec)
+    return merged
 
 
 def nm_syms(path):
@@ -256,7 +301,9 @@ if args.prebuilt:
         # appear only once across sections.
         sec_defs[sec] = {}
         sec_strong[sec] = {}
+        merged = linker_merged(archive) if os.path.exists(archive) else {}
         for m, (d, _, w) in members.items():
+            w = w | merged.get(m, set())
             for sym in d:
                 sec_defs[sec].setdefault(sym, m)
             for sym in d - w:
