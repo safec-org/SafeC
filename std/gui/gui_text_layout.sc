@@ -123,7 +123,7 @@ void GuiTextLayout::build_n_(const &GuiTypeface face, float size, const &char te
                 case some(gf): {
                     adv = gf.advance(g, size);
                     unsafe {
-                        if ((const void*)prevFace == (const void*)gf && prevGlyph != 0) { pen = pen + gf.kerning(prevGlyph, g, size); }
+                        if ((const unsigned char*)prevFace == (const unsigned char*)gf && prevGlyph != 0) { pen = pen + gf.kerning(prevGlyph, g, size); }
                     }
                 }
                 case null: { }

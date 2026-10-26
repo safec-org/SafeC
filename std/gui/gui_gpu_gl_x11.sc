@@ -19,31 +19,47 @@
 #include <std/gui/gui_backend.h>
 #include <std/gui/gui_gpu.h>
 #include <std/mem.h>
-extern void* memset(void* ptr, int val, size_t n);
-extern void* dlopen(const char* file, int mode);
-extern void* dlsym(void* handle, const char* name);
 extern char* getenv(const char* name);
 
 namespace std {
 
 // ── EGL / GLES (dlopen) ─────────────────────────────────────────────────
 
-typedef fn void*(const char*) EglGetProcAddress_;
-typedef fn void*(void*) EglGetDisplay_;
-typedef fn void*(unsigned int, void*, const void*) EglGetPlatformDisplay_;
-typedef fn unsigned int(void*, int*, int*) EglInitialize_;
+// A dlopen() handle, and a symbol looked up in one: untyped until cast to
+// the function's real signature (in 'unsafe', which vouches for it).
+struct GlLib_ { char opaque_; };
+typedef ?fn void() GlSym_;
+extern GlLib_* dlopen(const char* file, int mode);
+extern GlSym_ dlsym(GlLib_* handle, const char* name);
+
+// Opaque EGL handles; a native display (an X11 Display* or a
+// wl_display*) and window (an X11 Window id or a wl_egl_window*) as EGL
+// takes them; Wayland's wl_surface and wl_egl_window.
+struct EGLDisplay_       { char opaque_; };
+struct EGLConfig_        { char opaque_; };
+struct EGLContext_       { char opaque_; };
+struct EGLSurface_       { char opaque_; };
+struct EGLNativeDisplay_ { char opaque_; };
+struct EGLNativeWindow_  { char opaque_; };
+struct GlWlSurface_      { char opaque_; };
+
+typedef fn GlSym_(const char*) EglGetProcAddress_;
+typedef fn EGLDisplay_*(EGLNativeDisplay_*) EglGetDisplay_;
+typedef fn EGLDisplay_*(unsigned int, EGLNativeDisplay_*, const long*) EglGetPlatformDisplay_;
+typedef fn unsigned int(EGLDisplay_*, int*, int*) EglInitialize_;
 typedef fn unsigned int(unsigned int) EglBindAPI_;
-typedef fn unsigned int(void*, const int*, void**, int, int*) EglChooseConfig_;
-typedef fn unsigned int(void*, void*, int, int*) EglGetConfigAttrib_;
-typedef fn void*(void*, void*, void*, const int*) EglCreateContext_;
-typedef fn void*(void*, void*, void*, const int*) EglCreateWindowSurface_;
-typedef fn unsigned int(void*, void*, void*, void*) EglMakeCurrent_;
-typedef fn unsigned int(void*, void*) EglSwapBuffers_;
-typedef fn unsigned int(void*, void*, const int*, int) EglSwapWithDamage_;
-typedef fn unsigned int(void*, int) EglSwapInterval_;
-typedef fn unsigned int(void*, void*) EglDestroy_;
-typedef fn unsigned int(void*, void*, int, int*) EglQuerySurface_;
-typedef fn const char*(void*, int) EglQueryString_;
+typedef fn unsigned int(EGLDisplay_*, const int*, EGLConfig_**, int, int*) EglChooseConfig_;
+typedef fn unsigned int(EGLDisplay_*, EGLConfig_*, int, int*) EglGetConfigAttrib_;
+typedef fn EGLContext_*(EGLDisplay_*, EGLConfig_*, EGLContext_*, const int*) EglCreateContext_;
+typedef fn EGLSurface_*(EGLDisplay_*, EGLConfig_*, EGLNativeWindow_*, const int*) EglCreateWindowSurface_;
+typedef fn unsigned int(EGLDisplay_*, EGLSurface_*, EGLSurface_*, EGLContext_*) EglMakeCurrent_;
+typedef fn unsigned int(EGLDisplay_*, EGLSurface_*) EglSwapBuffers_;
+typedef fn unsigned int(EGLDisplay_*, EGLSurface_*, const int*, int) EglSwapWithDamage_;
+typedef fn unsigned int(EGLDisplay_*, int) EglSwapInterval_;
+typedef fn unsigned int(EGLDisplay_*, EGLSurface_*) EglDestroySurface_;
+typedef fn unsigned int(EGLDisplay_*, EGLContext_*) EglDestroyContext_;
+typedef fn unsigned int(EGLDisplay_*, EGLSurface_*, int, int*) EglQuerySurface_;
+typedef fn const char*(EGLDisplay_*, int) EglQueryString_;
 typedef fn int() EglGetError_;
 
 typedef fn unsigned int(unsigned int) GlCreateShader_;
@@ -58,25 +74,27 @@ typedef fn void(int, int) GlUniform1i_;
 typedef fn void(int, unsigned int*) GlGenTextures_;
 typedef fn void(int, const unsigned int*) GlDeleteTextures_;
 typedef fn void(unsigned int, unsigned int, int) GlTexParameteri_;
-typedef fn void(unsigned int, int, int, int, int, int, unsigned int, unsigned int, const void*) GlTexImage2D_;
-typedef fn void(unsigned int, int, int, int, int, int, unsigned int, unsigned int, const void*) GlTexSubImage2D_;
+typedef fn void(unsigned int, int, int, int, int, int, unsigned int, unsigned int, const unsigned char*) GlTexImage2D_;
+typedef fn void(unsigned int, int, int, int, int, int, unsigned int, unsigned int, const unsigned char*) GlTexSubImage2D_;
 typedef fn void(unsigned int, int) GlPixelStorei_;
 typedef fn void(int, int, int, int) GlViewport_;
 typedef fn void(float, float, float, float) GlClearColor_;
-typedef fn void(unsigned int, int, unsigned int, unsigned char, int, const void*) GlVertexAttribPointer_;
+typedef fn void(unsigned int, int, unsigned int, unsigned char, int, const float*) GlVertexAttribPointer_;
 typedef fn void(unsigned int, int, int) GlDrawArrays_;
 typedef fn unsigned int() GlGetError_;
 typedef fn const unsigned char*(unsigned int) GlGetString_;
 
-typedef fn void*(void*, int, int) WlEglCreate_;
-typedef fn void(void*, int, int, int, int) WlEglResize_;
-typedef fn void(void*) WlEglDestroy_;
+typedef fn EGLNativeWindow_*(GlWlSurface_*, int, int) WlEglCreate_;
+typedef fn void(EGLNativeWindow_*, int, int, int, int) WlEglResize_;
+typedef fn void(EGLNativeWindow_*) WlEglDestroy_;
 
 struct GuiGlLib {
     int loaded;    // 0 not tried, 1 ok, -1 unavailable
+    int hasGetProcAddress;
     EglGetProcAddress_ getProcAddress;
     EglGetDisplay_ getDisplay;
-    EglGetPlatformDisplay_ getPlatformDisplay;      // EGL 1.5, or the EXT; may be null
+    int hasPlatformDisplay;
+    EglGetPlatformDisplay_ getPlatformDisplay;      // EGL 1.5, or the EXT; if hasPlatformDisplay
     EglInitialize_ initialize;
     EglBindAPI_ bindAPI;
     EglChooseConfig_ chooseConfig;
@@ -86,8 +104,8 @@ struct GuiGlLib {
     EglMakeCurrent_ makeCurrent;
     EglSwapBuffers_ swapBuffers;
     EglSwapInterval_ swapInterval;
-    EglDestroy_ destroySurface;
-    EglDestroy_ destroyContext;
+    EglDestroySurface_ destroySurface;
+    EglDestroyContext_ destroyContext;
     EglQuerySurface_ querySurface;
     EglQueryString_ queryString;
     EglGetError_ getError;
@@ -157,13 +175,25 @@ static struct GuiGlLib gGl;
 #define GUI_GL_UNPACK_SKIP_PIXELS 0x0CF4
 #define GUI_GL_VERSION 0x1F02
 
-static void* __gl_sym(void* lib, const char* name, &int ok) {
+static void __gl_missing() { }
+
+// 's', or (clearing *ok) a stub never to be called: what failed to load
+// is never used.
+static fn void() __gl_found(GlSym_ s, &int ok) {
+    match (s) {
+        case some(p): { return p; }
+        case null: {}
+    }
+    *ok = 0;
+    return __gl_missing;
+}
+
+static fn void() __gl_sym(GlLib_* lib, const char* name, &int ok) {
     unsafe {
-        void* p = (void*)0;
-        if (lib != (void*)0) { p = dlsym(lib, name); }
-        if (p == (void*)0 && gGl.getProcAddress != (EglGetProcAddress_)0) { p = gGl.getProcAddress(name); }
-        if (p == (void*)0) { *ok = 0; }
-        return p;
+        GlSym_ p = null;
+        if (lib != (GlLib_*)0) { p = dlsym(lib, name); }
+        if (p == null && gGl.hasGetProcAddress) { p = gGl.getProcAddress(name); }
+        return __gl_found(p, ok);
     }
 }
 
@@ -171,13 +201,15 @@ static int __gl_load() {
     if (gGl.loaded != 0) { return gGl.loaded > 0 ? 1 : 0; }
     gGl.loaded = -1;
     unsafe {
-        void* egl = dlopen("libEGL.so.1", 2);
-        if (egl == (void*)0) { egl = dlopen("libEGL.so", 2); }
-        if (egl == (void*)0) { return 0; }
-        void* gles = dlopen("libGLESv2.so.2", 2);
-        if (gles == (void*)0) { gles = dlopen("libGLESv2.so", 2); }
+        GlLib_* egl = dlopen("libEGL.so.1", 2);
+        if (egl == (GlLib_*)0) { egl = dlopen("libEGL.so", 2); }
+        if (egl == (GlLib_*)0) { return 0; }
+        GlLib_* gles = dlopen("libGLESv2.so.2", 2);
+        if (gles == (GlLib_*)0) { gles = dlopen("libGLESv2.so", 2); }
         int ok = 1;
         gGl.getProcAddress = (EglGetProcAddress_)__gl_sym(egl, "eglGetProcAddress", &ok);
+        if (!ok) { return 0; }
+        gGl.hasGetProcAddress = 1;
         gGl.getDisplay = (EglGetDisplay_)__gl_sym(egl, "eglGetDisplay", &ok);
         gGl.initialize = (EglInitialize_)__gl_sym(egl, "eglInitialize", &ok);
         gGl.bindAPI = (EglBindAPI_)__gl_sym(egl, "eglBindAPI", &ok);
@@ -188,16 +220,19 @@ static int __gl_load() {
         gGl.makeCurrent = (EglMakeCurrent_)__gl_sym(egl, "eglMakeCurrent", &ok);
         gGl.swapBuffers = (EglSwapBuffers_)__gl_sym(egl, "eglSwapBuffers", &ok);
         gGl.swapInterval = (EglSwapInterval_)__gl_sym(egl, "eglSwapInterval", &ok);
-        gGl.destroySurface = (EglDestroy_)__gl_sym(egl, "eglDestroySurface", &ok);
-        gGl.destroyContext = (EglDestroy_)__gl_sym(egl, "eglDestroyContext", &ok);
+        gGl.destroySurface = (EglDestroySurface_)__gl_sym(egl, "eglDestroySurface", &ok);
+        gGl.destroyContext = (EglDestroyContext_)__gl_sym(egl, "eglDestroyContext", &ok);
         gGl.querySurface = (EglQuerySurface_)__gl_sym(egl, "eglQuerySurface", &ok);
         gGl.queryString = (EglQueryString_)__gl_sym(egl, "eglQueryString", &ok);
         gGl.getError = (EglGetError_)__gl_sym(egl, "eglGetError", &ok);
         if (!ok) { return 0; }
-        gGl.getPlatformDisplay = (EglGetPlatformDisplay_)dlsym(egl, "eglGetPlatformDisplay");
-        if (gGl.getPlatformDisplay == (EglGetPlatformDisplay_)0) {
-            gGl.getPlatformDisplay = (EglGetPlatformDisplay_)gGl.getProcAddress("eglGetPlatformDisplayEXT");
+        int pd = 1;
+        gGl.getPlatformDisplay = (EglGetPlatformDisplay_)__gl_found(dlsym(egl, "eglGetPlatformDisplay"), &pd);
+        if (!pd) {
+            pd = 1;
+            gGl.getPlatformDisplay = (EglGetPlatformDisplay_)__gl_found(gGl.getProcAddress("eglGetPlatformDisplayEXT"), &pd);
         }
+        gGl.hasPlatformDisplay = pd;
         gGl.createShader = (GlCreateShader_)__gl_sym(gles, "glCreateShader", &ok);
         gGl.shaderSource = (GlShaderSource_)__gl_sym(gles, "glShaderSource", &ok);
         gGl.compileShader = (GlUInt1_)__gl_sym(gles, "glCompileShader", &ok);
@@ -230,8 +265,8 @@ static int __gl_load() {
         gGl.glGetError = (GlGetError_)__gl_sym(gles, "glGetError", &ok);
         gGl.getString = (GlGetString_)__gl_sym(gles, "glGetString", &ok);
         if (!ok) { return 0; }
-        void* wle = dlopen("libwayland-egl.so.1", 2);
-        if (wle != (void*)0) {
+        GlLib_* wle = dlopen("libwayland-egl.so.1", 2);
+        if (wle != (GlLib_*)0) {
             int wo = 1;
             gGl.wlEglCreate = (WlEglCreate_)__gl_sym(wle, "wl_egl_window_create", &wo);
             gGl.wlEglResize = (WlEglResize_)__gl_sym(wle, "wl_egl_window_resize", &wo);
@@ -250,8 +285,8 @@ static int __gl_load() {
 struct GuiGlDisplay {
     unsigned long long native;
     int kind;
-    void* dpy;
-    int swapDamage;              // 0 none, 1 KHR, 2 EXT
+    EGLDisplay_* dpy;
+    int swapDamage;              // 0 none, 1 KHR, 2 EXT (swapWithDamage is set)
     EglSwapWithDamage_ swapWithDamage;
 };
 
@@ -280,26 +315,29 @@ static struct GuiGlDisplay* __gl_display(struct GuiNativeHandle h) {
             i = i + 1;
         }
         if (gGlDisplayCount >= GUI_GL_MAX_DISPLAYS) { return (struct GuiGlDisplay*)0; }
-        void* native = (void*)(unsigned long)h.display;
-        void* dpy = (void*)0;
-        if (gGl.getPlatformDisplay != (EglGetPlatformDisplay_)0) {
+        EGLNativeDisplay_* native = (EGLNativeDisplay_*)(unsigned long)h.display;
+        EGLDisplay_* dpy = (EGLDisplay_*)0;
+        if (gGl.hasPlatformDisplay) {
             unsigned int platform = h.kind == GUI_NATIVE_WAYLAND ? GUI_EGL_PLATFORM_WAYLAND : GUI_EGL_PLATFORM_X11;
-            dpy = gGl.getPlatformDisplay(platform, native, (const void*)0);
+            dpy = gGl.getPlatformDisplay(platform, native, (const long*)0);
         }
-        if (dpy == (void*)0) { dpy = gGl.getDisplay(native); }
-        if (dpy == (void*)0) { return (struct GuiGlDisplay*)0; }
+        if (dpy == (EGLDisplay_*)0) { dpy = gGl.getDisplay(native); }
+        if (dpy == (EGLDisplay_*)0) { return (struct GuiGlDisplay*)0; }
         int major = 0; int minor = 0;
         if (!gGl.initialize(dpy, &major, &minor)) { return (struct GuiGlDisplay*)0; }
         struct GuiGlDisplay* d = &gGlDisplays[gGlDisplayCount];
-        memset((void*)d, 0, sizeof(struct GuiGlDisplay));
+        safe_memset_obj(&gGlDisplays[gGlDisplayCount], 0);
         d->native = h.display;
         d->kind = h.kind;
         d->dpy = dpy;
         const char* ext = gGl.queryString(dpy, GUI_EGL_EXTENSIONS);
+        int found = 1;
         if (__gl_has_ext(ext, "EGL_KHR_swap_buffers_with_damage")) {
-            d->swapWithDamage = (EglSwapWithDamage_)gGl.getProcAddress("eglSwapBuffersWithDamageKHR");
+            d->swapWithDamage = (EglSwapWithDamage_)__gl_found(gGl.getProcAddress("eglSwapBuffersWithDamageKHR"), &found);
+            if (found) { d->swapDamage = 1; }
         } else if (__gl_has_ext(ext, "EGL_EXT_swap_buffers_with_damage")) {
-            d->swapWithDamage = (EglSwapWithDamage_)gGl.getProcAddress("eglSwapBuffersWithDamageEXT");
+            d->swapWithDamage = (EglSwapWithDamage_)__gl_found(gGl.getProcAddress("eglSwapBuffersWithDamageEXT"), &found);
+            if (found) { d->swapDamage = 2; }
         }
         gGlDisplayCount = gGlDisplayCount + 1;
         return d;
@@ -310,10 +348,10 @@ static struct GuiGlDisplay* __gl_display(struct GuiNativeHandle h) {
 
 struct GuiGlWindow {
     struct GuiGlDisplay* d;
-    void* config;
-    void* ctx;
-    void* surface;
-    void* wlEgl;          // wl_egl_window (Wayland)
+    EGLConfig_* config;
+    EGLContext_* ctx;
+    EGLSurface_* surface;
+    EGLNativeWindow_* wlEgl;   // wl_egl_window (Wayland)
     int kind;
     unsigned int program;
     unsigned int texture;
@@ -341,23 +379,23 @@ static unsigned int __gl_shader(unsigned int type, const char* src) {
 
 static void __gl_free(struct GuiGlWindow* w) {
     unsafe {
-        void* dpy = w->d != (struct GuiGlDisplay*)0 ? w->d->dpy : (void*)0;
-        if (dpy != (void*)0 && w->ctx != (void*)0) {
+        EGLDisplay_* dpy = w->d != (struct GuiGlDisplay*)0 ? w->d->dpy : (EGLDisplay_*)0;
+        if (dpy != (EGLDisplay_*)0 && w->ctx != (EGLContext_*)0) {
             gGl.makeCurrent(dpy, w->surface, w->surface, w->ctx);
             if (w->texture != 0U) { gGl.deleteTextures(1, &w->texture); }
             if (w->program != 0U) { gGl.deleteProgram(w->program); }
-            gGl.makeCurrent(dpy, (void*)0, (void*)0, (void*)0);
+            gGl.makeCurrent(dpy, (EGLSurface_*)0, (EGLSurface_*)0, (EGLContext_*)0);
         }
-        if (dpy != (void*)0 && w->surface != (void*)0) { gGl.destroySurface(dpy, w->surface); }
-        if (dpy != (void*)0 && w->ctx != (void*)0) { gGl.destroyContext(dpy, w->ctx); }
-        if (w->wlEgl != (void*)0) { gGl.wlEglDestroy(w->wlEgl); }
+        if (dpy != (EGLDisplay_*)0 && w->surface != (EGLSurface_*)0) { gGl.destroySurface(dpy, w->surface); }
+        if (dpy != (EGLDisplay_*)0 && w->ctx != (EGLContext_*)0) { gGl.destroyContext(dpy, w->ctx); }
+        if (w->wlEgl != (EGLNativeWindow_*)0) { gGl.wlEglDestroy(w->wlEgl); }
         dealloc(w);
     }
 }
 
 // The config: RGB(A)8, window-capable, ES2-renderable; on X11 the one
 // whose visual is the window's.
-static void* __gl_config(void* dpy, struct GuiNativeHandle h) {
+static EGLConfig_* __gl_config(EGLDisplay_* dpy, struct GuiNativeHandle h) {
     unsafe {
         int attribs[16];
         int n = 0;
@@ -368,9 +406,9 @@ static void* __gl_config(void* dpy, struct GuiNativeHandle h) {
         attribs[n] = 0x3022; attribs[n + 1] = 8; n = n + 2;        // BLUE
         if (h.kind == GUI_NATIVE_WAYLAND) { attribs[n] = 0x3021; attribs[n + 1] = 8; n = n + 2; }   // ALPHA
         attribs[n] = GUI_EGL_NONE;
-        void* configs[64];
+        EGLConfig_* configs[64];
         int count = 0;
-        if (!gGl.chooseConfig(dpy, &attribs[0], &configs[0], 64, &count) || count <= 0) { return (void*)0; }
+        if (!gGl.chooseConfig(dpy, &attribs[0], &configs[0], 64, &count) || count <= 0) { return (EGLConfig_*)0; }
         if (h.kind == GUI_NATIVE_X11 && h.visual != 0ULL) {
             // Visual's second field is its id (Xlib's struct Visual).
             unsigned long vid = *(unsigned long*)((unsigned long)h.visual + 8UL);
@@ -399,21 +437,21 @@ static int __gl_attach(&GuiWindowState st, struct GuiNativeHandle h) {
         w->d = d;
         w->kind = h.kind;
         w->config = __gl_config(d->dpy, h);
-        if (w->config == (void*)0) { __gl_free(w); return 0; }
+        if (w->config == (EGLConfig_*)0) { __gl_free(w); return 0; }
         int ctxAttribs[3];
         ctxAttribs[0] = 0x3098; ctxAttribs[1] = 2; ctxAttribs[2] = GUI_EGL_NONE;   // CONTEXT_CLIENT_VERSION 2
-        w->ctx = gGl.createContext(d->dpy, w->config, (void*)0, &ctxAttribs[0]);
-        if (w->ctx == (void*)0) { __gl_free(w); return 0; }
-        void* native = (void*)(unsigned long)h.window;      // the X11 Window (an XID)
+        w->ctx = gGl.createContext(d->dpy, w->config, (EGLContext_*)0, &ctxAttribs[0]);
+        if (w->ctx == (EGLContext_*)0) { __gl_free(w); return 0; }
+        EGLNativeWindow_* native = (EGLNativeWindow_*)(unsigned long)h.window;      // the X11 Window (an XID)
         if (h.kind == GUI_NATIVE_WAYLAND) {
             w->eglW = st.pixelW > 0 ? st.pixelW : 1;
             w->eglH = st.pixelH > 0 ? st.pixelH : 1;
-            w->wlEgl = gGl.wlEglCreate((void*)(unsigned long)h.window, w->eglW, w->eglH);
-            if (w->wlEgl == (void*)0) { __gl_free(w); return 0; }
+            w->wlEgl = gGl.wlEglCreate((GlWlSurface_*)(unsigned long)h.window, w->eglW, w->eglH);
+            if (w->wlEgl == (EGLNativeWindow_*)0) { __gl_free(w); return 0; }
             native = w->wlEgl;
         }
         w->surface = gGl.createWindowSurface(d->dpy, w->config, native, (const int*)0);
-        if (w->surface == (void*)0) { __gl_free(w); return 0; }
+        if (w->surface == (EGLSurface_*)0) { __gl_free(w); return 0; }
         if (!gGl.makeCurrent(d->dpy, w->surface, w->surface, w->ctx)) { __gl_free(w); return 0; }
         // vsync on X11; a Wayland compositor paces frames itself, and an
         // interval of 1 there would block a hidden window's swap forever.
@@ -451,7 +489,7 @@ static int __gl_attach(&GuiWindowState st, struct GuiNativeHandle h) {
         // "OpenGL ES 3.x ..."
         if (ver != (const unsigned char*)0 && ver[0] == (unsigned char)'O' && ver[10] >= (unsigned char)'3' && ver[10] <= (unsigned char)'9') { w->es3 = 1; }
         if (gGl.glGetError() != 0U) { __gl_free(w); return 0; }
-        st.presenterData = (void*)w;
+        st.presenterData = (?&Erased)w;
         return 1;
     }
 }
@@ -479,8 +517,8 @@ static void __gl_present(&GuiWindowState st, const &unsigned char px, int bw, in
         struct GuiGlWindow* w = (struct GuiGlWindow*)st.presenterData;
         if (w == (struct GuiGlWindow*)0) { return; }
         if (!st.visible) { return; }   // (Wayland: no buffer may be attached to an unmapped surface)
-        void* dpy = w->d->dpy;
-        if (w->wlEgl != (void*)0 && (w->eglW != bw || w->eglH != bh)) {
+        EGLDisplay_* dpy = w->d->dpy;
+        if (w->wlEgl != (EGLNativeWindow_*)0 && (w->eglW != bw || w->eglH != bh)) {
             gGl.wlEglResize(w->wlEgl, bw, bh, 0, 0);
             w->eglW = bw;
             w->eglH = bh;
@@ -488,7 +526,7 @@ static void __gl_present(&GuiWindowState st, const &unsigned char px, int bw, in
         if (!gGl.makeCurrent(dpy, w->surface, w->surface, w->ctx)) { __gl_fallback(st, px, bw, bh); return; }
         gGl.bindTexture(GUI_GL_TEXTURE_2D, w->texture);
         if (w->texW != bw || w->texH != bh) {
-            gGl.texImage2D(GUI_GL_TEXTURE_2D, 0, (int)GUI_GL_RGBA, bw, bh, 0, GUI_GL_RGBA, GUI_GL_UNSIGNED_BYTE, (const void*)px);
+            gGl.texImage2D(GUI_GL_TEXTURE_2D, 0, (int)GUI_GL_RGBA, bw, bh, 0, GUI_GL_RGBA, GUI_GL_UNSIGNED_BYTE, (const unsigned char*)px);
             w->texW = bw;
             w->texH = bh;
         } else if (w->es3) {
@@ -496,14 +534,14 @@ static void __gl_present(&GuiWindowState st, const &unsigned char px, int bw, in
             gGl.pixelStorei(GUI_GL_UNPACK_ROW_LENGTH, bw);
             gGl.pixelStorei(GUI_GL_UNPACK_SKIP_PIXELS, x);
             gGl.pixelStorei(GUI_GL_UNPACK_SKIP_ROWS, y);
-            gGl.texSubImage2D(GUI_GL_TEXTURE_2D, 0, x, y, rw, rh, GUI_GL_RGBA, GUI_GL_UNSIGNED_BYTE, (const void*)px);
+            gGl.texSubImage2D(GUI_GL_TEXTURE_2D, 0, x, y, rw, rh, GUI_GL_RGBA, GUI_GL_UNSIGNED_BYTE, (const unsigned char*)px);
             gGl.pixelStorei(GUI_GL_UNPACK_ROW_LENGTH, 0);
             gGl.pixelStorei(GUI_GL_UNPACK_SKIP_PIXELS, 0);
             gGl.pixelStorei(GUI_GL_UNPACK_SKIP_ROWS, 0);
         } else {
             // ES 2 has no row length: the damaged rows, full width
             const unsigned char* rows = (const unsigned char*)px + (unsigned long)y * (unsigned long)bw * 4UL;
-            gGl.texSubImage2D(GUI_GL_TEXTURE_2D, 0, 0, y, bw, rh, GUI_GL_RGBA, GUI_GL_UNSIGNED_BYTE, (const void*)rows);
+            gGl.texSubImage2D(GUI_GL_TEXTURE_2D, 0, 0, y, bw, rh, GUI_GL_RGBA, GUI_GL_UNSIGNED_BYTE, rows);
         }
         // The buffer 1:1 at the surface's top-left (the surface may be a
         // little larger or smaller for a moment around a resize).
@@ -511,7 +549,7 @@ static void __gl_present(&GuiWindowState st, const &unsigned char px, int bw, in
         // buffer (EGL only reports the new size after the next swap); on
         // X11 it follows the window.
         int sw = bw; int sh = bh;
-        if (w->wlEgl == (void*)0) {
+        if (w->wlEgl == (EGLNativeWindow_*)0) {
             gGl.querySurface(dpy, w->surface, GUI_EGL_WIDTH, &sw);
             gGl.querySurface(dpy, w->surface, GUI_EGL_HEIGHT, &sh);
         }
@@ -527,12 +565,12 @@ static void __gl_present(&GuiWindowState st, const &unsigned char px, int bw, in
         quad[4] = -1.0f; quad[5] = 1.0f;
         quad[6] = 1.0f;  quad[7] = 1.0f;
         gGl.useProgram(w->program);
-        gGl.vertexAttribPointer(0U, 2, GUI_GL_FLOAT, (unsigned char)0, 0, (const void*)&quad[0]);
+        gGl.vertexAttribPointer(0U, 2, GUI_GL_FLOAT, (unsigned char)0, 0, (const float*)&quad[0]);
         gGl.enableVertexAttribArray(0U);
         gGl.drawArrays(GUI_GL_TRIANGLE_STRIP, 0, 4);
         unsigned int ok = 0U;
         int full = (x == 0 && y == 0 && rw == bw && rh == bh && sw == bw && sh == bh) ? 1 : 0;
-        if (w->d->swapWithDamage != (EglSwapWithDamage_)0 && !full && sw == bw && sh == bh) {
+        if (w->d->swapDamage != 0 && !full && sw == bw && sh == bh) {
             int rect[4];
             rect[0] = x; rect[1] = sh - (y + rh); rect[2] = rw; rect[3] = rh;   // origin bottom-left
             ok = w->d->swapWithDamage(dpy, w->surface, &rect[0], 1);

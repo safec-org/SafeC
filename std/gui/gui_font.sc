@@ -9,7 +9,6 @@
 #include <std/io_file.h>
 #include <std/io_traits.h>
 #include <std/panic.h>
-extern void* memset(void* ptr, int val, size_t n);
 
 namespace std {
 
@@ -26,8 +25,7 @@ struct GuiFont GuiFont::new(int glyphW, int glyphH, int first, int count) {
     f.count = count;
     unsigned long total = (unsigned long)(__gui_font_bytes_per_glyph(glyphW, glyphH) * count);
     unsafe {
-        f.bitmap = (&heap unsigned char)alloc_raw_(total);
-        memset((void*)f.bitmap, 0, total);
+        f.bitmap = (&heap unsigned char)alloc_zeroed_raw_(total);
     }
     return f;
 }
@@ -93,8 +91,7 @@ struct GuiFont GuiFont::default() {
         tmp.height = 8;
         tmp.shouldClose = 0;
         unsafe {
-            tmp.pixels = (&heap unsigned char)alloc_raw_(8UL * 8UL * 4UL);
-            memset((void*)tmp.pixels, 0, 8UL * 8UL * 4UL);
+            tmp.pixels = (&heap unsigned char)alloc_zeroed_raw_(8UL * 8UL * 4UL);
         }
         char one[2];
         unsafe { one[0] = (char)cp; one[1] = '\0'; }
@@ -125,7 +122,7 @@ void GuiFont::free() { self.drop(); }
 
 void GuiFont::drop() {
     unsafe {
-        if ((void*)self.bitmap != (void*)0) { dealloc(self.bitmap); }
+        if ((const unsigned char*)self.bitmap != (const unsigned char*)0) { dealloc(self.bitmap); }
         self.bitmap = (&heap unsigned char)0;
         self.count = 0;
     }

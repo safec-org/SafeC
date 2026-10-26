@@ -39,6 +39,18 @@ release tags.
   region) in std's headers and sources, FFI externs included, outside a
   temporary exemption list for std/ml, std/gui and the CUDA/ROCm FFTs.
 
+### Changed — no `void*` left in std/gui
+
+- **std/gui** has no `void*` at all, internal FFI included (public API
+  unchanged): the X11, Wayland, Win32 and Cocoa backends and the EGL/GLES,
+  D3D11 and Metal presenters declare their system APIs with opaque handle
+  structs (`XDisplay_`, `WlDisplay_` / `WlProxy_`, `HWND_`, `ObjcId_` /
+  `ObjcSel_`, `EGLDisplay_`, ...), typed `struct wl_interface` tables,
+  Wayland dispatchers taking `?&Erased`, COM objects through a typed method
+  table, one typed `objc_msgSend` cast per call shape, typed dlopen()/dlsym()
+  lookups and byte pointers for pixel and property data; the portable core
+  uses `safe_memset_obj` / `safe_memcpy` and byte-pointer identity compares.
+
 ### Changed — no `void*` left in std/audio; fewer in std's internals
 
 - **std/audio** has no `void*` at all, internal headers and FFI included:

@@ -24,24 +24,19 @@
 #include <std/mem.h>
 #include <std/time.h>
 #include <std/collections/string.h>
-extern void* memset(void* ptr, int val, size_t n);
-extern void* memcpy(void* dst, const void* src, size_t n);
 extern char* getenv(const char* name);
 extern double atof(const char* s);
 extern int pipe(int* fds);
-extern long write(int fd, const void* buf, unsigned long n);
-extern long read(int fd, void* buf, unsigned long n);
+extern long write(int fd, const unsigned char* buf, unsigned long n);
+extern long read(int fd, unsigned char* buf, unsigned long n);
 extern int close(int fd);
-extern int poll(void* fds, unsigned long nfds, int timeout);
 extern int fcntl(int fd, int cmd, ...);
 extern int open(const char* path, int flags, ...);
 extern int mkstemp(char* templ);
 extern int unlink(const char* path);
 extern int ftruncate(int fd, long length);
-extern void* mmap(void* addr, unsigned long len, int prot, int flags, int fd, long off);
-extern int munmap(void* addr, unsigned long len);
-extern void* dlopen(const char* file, int mode);
-extern void* dlsym(void* handle, const char* name);
+extern unsigned char* mmap(unsigned char* addr, unsigned long len, int prot, int flags, int fd, long off);
+extern int munmap(unsigned char* addr, unsigned long len);
 #endif
 
 namespace std {
@@ -50,64 +45,125 @@ namespace std {
 
 // ── libwayland-client, libxkbcommon, libwayland-cursor (dlopen) ──────────
 
-typedef fn void*(const char*) WlConnect_;
-typedef fn void(void*) WlVoidP_;
-typedef fn int(void*) WlIntP_;
-typedef fn void*(void*, unsigned int, const void*, unsigned int, unsigned int, void*) WlMarshalFlags_;
-typedef fn void*(void*, unsigned int, void*, const void*, unsigned int) WlMarshalCtorV_;
-typedef fn int(void*, void*, const void*, void*) WlAddDispatcher_;
-typedef fn unsigned int(void*) WlGetVersion_;
-typedef fn void*(void*) WlGetUserData_;
+// A dlopen() handle, and a symbol looked up in one: untyped until cast to
+// the function's real signature, or the data's type (in 'unsafe', which
+// vouches for it).
+struct WlLib_ { char opaque_; };
+typedef ?fn void() WlSym_;
+extern WlLib_* dlopen(const char* file, int mode);
+extern WlSym_ dlsym(WlLib_* handle, const char* name);
 
-typedef fn void*(int) XkbContextNew_;
-typedef fn void*(void*, const char*, int, int) XkbKeymapFromString_;
-typedef fn void(void*) XkbUnref_;
-typedef fn void*(void*) XkbStateNew_;
-typedef fn int(void*, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int) XkbUpdateMask_;
-typedef fn unsigned int(void*, unsigned int) XkbKeyU_;
-typedef fn int(void*, const char*, int) XkbModActive_;
-typedef fn int(void*, unsigned int, unsigned int, unsigned int, const unsigned int**) XkbSymsByLevel_;
-typedef fn int(void*, unsigned int) XkbKeyRepeats_;
-typedef fn void*(void*, const char*, int) XkbComposeTableNew_;
-typedef fn void*(void*, int) XkbComposeStateNew_;
-typedef fn int(void*, unsigned int) XkbComposeFeed_;
-typedef fn int(void*) XkbComposeStatus_;
-typedef fn unsigned int(void*) XkbComposeKeysym_;
-typedef fn void(void*) XkbComposeReset_;
+// Opaque libwayland / xkbcommon / wayland-cursor objects: the display, a
+// protocol object (wl_proxy: every wl_surface, wl_seat, xdg_toplevel, ...),
+// the keyboard state and the cursor theme.
+struct WlDisplay_       { char opaque_; };
+struct WlProxy_         { char opaque_; };
+struct XkbContext_      { char opaque_; };
+struct XkbKeymap_       { char opaque_; };
+struct XkbState_        { char opaque_; };
+struct XkbComposeTable_ { char opaque_; };
+struct XkbComposeState_ { char opaque_; };
+struct WlCursorTheme_   { char opaque_; };
 
-typedef fn void*(const char*, int, void*) WlCursorThemeLoad_;
-typedef fn void(void*) WlCursorThemeDestroy_;
-typedef fn void*(void*, const char*) WlCursorThemeGet_;
-typedef fn void*(void*) WlCursorImageBuffer_;
+// struct wl_message / struct wl_interface (wayland-util.h).
+struct GuiWlMessage {
+    const char* name;
+    const char* signature;
+    const struct GuiWlInterface** types;
+};
+
+struct GuiWlInterface {
+    const char* name;
+    int version;
+    int methodCount;
+    const GuiWlMessage* methods;
+    int eventCount;
+    const GuiWlMessage* events;
+};
+
+// struct wl_cursor / wl_cursor_image (wayland-cursor.h)
+struct GuiWlCursorImage {
+    unsigned int width;
+    unsigned int height;
+    unsigned int hotspotX;
+    unsigned int hotspotY;
+    unsigned int delay;
+};
+
+struct GuiWlCursor {
+    unsigned int imageCount;
+    GuiWlCursorImage** images;
+    char* name;
+};
+
+// A proxy's dispatcher (wl_dispatcher_func_t): gets every event of the
+// object as (opcode, arguments); 'impl' is what add_dispatcher was given
+// (this file's per-object state, erased). 'args' is the union wl_argument
+// array, 8 bytes an entry.
+typedef fn int(?&Erased, WlProxy_*, unsigned int, const GuiWlMessage*, unsigned long long*) WlDispatcher_;
+
+typedef fn WlDisplay_*(const char*) WlConnect_;
+typedef fn void(WlDisplay_*) WlDisplayVoid_;
+typedef fn int(WlDisplay_*) WlDisplayInt_;
+typedef fn void(WlProxy_*) WlProxyVoid_;
+typedef fn WlProxy_*(WlProxy_*, unsigned int, const GuiWlInterface*, unsigned int, unsigned int, unsigned long long*) WlMarshalFlags_;
+typedef fn WlProxy_*(WlProxy_*, unsigned int, unsigned long long*, const GuiWlInterface*, unsigned int) WlMarshalCtorV_;
+typedef fn int(WlProxy_*, WlDispatcher_, ?&Erased, ?&Erased) WlAddDispatcher_;
+typedef fn unsigned int(WlProxy_*) WlGetVersion_;
+
+typedef fn XkbContext_*(int) XkbContextNew_;
+typedef fn XkbKeymap_*(XkbContext_*, const char*, int, int) XkbKeymapFromString_;
+typedef fn void(XkbKeymap_*) XkbKeymapUnref_;
+typedef fn void(XkbState_*) XkbStateUnref_;
+typedef fn XkbState_*(XkbKeymap_*) XkbStateNew_;
+typedef fn int(XkbState_*, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int) XkbUpdateMask_;
+typedef fn unsigned int(XkbState_*, unsigned int) XkbKeyU_;
+typedef fn int(XkbState_*, const char*, int) XkbModActive_;
+typedef fn int(XkbKeymap_*, unsigned int, unsigned int, unsigned int, const unsigned int**) XkbSymsByLevel_;
+typedef fn int(XkbKeymap_*, unsigned int) XkbKeyRepeats_;
+typedef fn XkbComposeTable_*(XkbContext_*, const char*, int) XkbComposeTableNew_;
+typedef fn XkbComposeState_*(XkbComposeTable_*, int) XkbComposeStateNew_;
+typedef fn int(XkbComposeState_*, unsigned int) XkbComposeFeed_;
+typedef fn int(XkbComposeState_*) XkbComposeStatus_;
+typedef fn unsigned int(XkbComposeState_*) XkbComposeKeysym_;
+typedef fn void(XkbComposeState_*) XkbComposeReset_;
+
+typedef fn WlCursorTheme_*(const char*, int, WlProxy_*) WlCursorThemeLoad_;
+typedef fn void(WlCursorTheme_*) WlCursorThemeDestroy_;
+typedef fn GuiWlCursor*(WlCursorTheme_*, const char*) WlCursorThemeGet_;
+typedef fn WlProxy_*(GuiWlCursorImage*) WlCursorImageBuffer_;
 
 struct GuiWlLib {
     int loaded;                        // 0 not tried, 1 ok, -1 unavailable
     WlConnect_ display_connect;
-    WlVoidP_ display_disconnect;
-    WlIntP_ display_flush;
-    WlIntP_ display_get_fd;
-    WlIntP_ display_dispatch_pending;
-    WlIntP_ display_roundtrip;
-    WlIntP_ display_prepare_read;
-    WlIntP_ display_read_events;
-    WlVoidP_ display_cancel_read;
-    WlIntP_ display_get_error;
-    WlMarshalFlags_ marshal_flags;     // null before libwayland 1.20
+    WlDisplayVoid_ display_disconnect;
+    WlDisplayInt_ display_flush;
+    WlDisplayInt_ display_get_fd;
+    WlDisplayInt_ display_dispatch_pending;
+    WlDisplayInt_ display_roundtrip;
+    WlDisplayInt_ display_prepare_read;
+    WlDisplayInt_ display_read_events;
+    WlDisplayVoid_ display_cancel_read;
+    WlDisplayInt_ display_get_error;
+    int hasMarshalFlags;               // 0 before libwayland 1.20
+    WlMarshalFlags_ marshal_flags;
     WlMarshalCtorV_ marshal_ctor;
-    WlVoidP_ proxy_destroy;
+    WlProxyVoid_ proxy_destroy;
     WlAddDispatcher_ add_dispatcher;
     WlGetVersion_ get_version;
-    WlGetUserData_ get_user_data;
     // core interfaces (data symbols)
-    void* iRegistry; void* iCallback; void* iCompositor; void* iSurface; void* iRegion;
-    void* iShm; void* iShmPool; void* iBuffer; void* iSeat; void* iPointer; void* iKeyboard;
-    void* iOutput; void* iDataDeviceManager; void* iDataDevice; void* iDataSource; void* iDataOffer;
+    const GuiWlInterface* iRegistry; const GuiWlInterface* iCallback; const GuiWlInterface* iCompositor;
+    const GuiWlInterface* iSurface; const GuiWlInterface* iRegion; const GuiWlInterface* iShm;
+    const GuiWlInterface* iShmPool; const GuiWlInterface* iBuffer; const GuiWlInterface* iSeat;
+    const GuiWlInterface* iPointer; const GuiWlInterface* iKeyboard; const GuiWlInterface* iOutput;
+    const GuiWlInterface* iDataDeviceManager; const GuiWlInterface* iDataDevice;
+    const GuiWlInterface* iDataSource; const GuiWlInterface* iDataOffer;
 
     int xkb;                           // libxkbcommon loaded
     XkbContextNew_ xkb_context_new;
     XkbKeymapFromString_ xkb_keymap_new_from_string;
-    XkbUnref_ xkb_keymap_unref;
-    XkbUnref_ xkb_state_unref;
+    XkbKeymapUnref_ xkb_keymap_unref;
+    XkbStateUnref_ xkb_state_unref;
     XkbStateNew_ xkb_state_new;
     XkbUpdateMask_ xkb_state_update_mask;
     XkbKeyU_ xkb_state_key_get_one_sym;
@@ -116,7 +172,8 @@ struct GuiWlLib {
     XkbModActive_ xkb_state_mod_name_is_active;
     XkbSymsByLevel_ xkb_keymap_key_get_syms_by_level;
     XkbKeyRepeats_ xkb_keymap_key_repeats;
-    XkbComposeTableNew_ xkb_compose_table_new_from_locale;   // may be null
+    int xkbCompose;                    // the xkb_compose_* entries loaded
+    XkbComposeTableNew_ xkb_compose_table_new_from_locale;
     XkbComposeStateNew_ xkb_compose_state_new;
     XkbComposeFeed_ xkb_compose_state_feed;
     XkbComposeStatus_ xkb_compose_state_get_status;
@@ -132,18 +189,39 @@ struct GuiWlLib {
 
 static struct GuiWlLib gWlLib;
 
-static void* __wl_sym(void* lib, const char* name, &int ok) {
+static void __wl_missing() { }
+
+// 's', or (clearing *ok) a stub never to be called: what failed to load
+// is never used.
+static fn void() __wl_found(WlSym_ s, &int ok) {
+    match (s) {
+        case some(p): { return p; }
+        case null: {}
+    }
+    *ok = 0;
+    return __wl_missing;
+}
+
+static fn void() __wl_sym(WlLib_* lib, const char* name, &int ok) {
+    unsafe { return __wl_found(dlsym(lib, name), ok); }
+}
+
+// A data symbol: one of the library's struct wl_interface tables.
+static const GuiWlInterface* __wl_iface_sym(WlLib_* lib, const char* name, &int ok) {
     unsafe {
-        void* p = dlsym(lib, name);
-        if (p == (void*)0) { *ok = 0; }
-        return p;
+        match (dlsym(lib, name)) {
+            case some(p): { return (const GuiWlInterface*)p; }
+            case null: {}
+        }
+        *ok = 0;
+        return null;
     }
 }
 
-static void* __wl_open2(const char* a, const char* b) {
+static WlLib_* __wl_open2(const char* a, const char* b) {
     unsafe {
-        void* h = dlopen(a, 2 /* RTLD_NOW */);
-        if (h == (void*)0 && b != (const char*)0) { h = dlopen(b, 2); }
+        WlLib_* h = dlopen(a, 2 /* RTLD_NOW */);
+        if (h == null && b != (const char*)0) { h = dlopen(b, 2); }
         return h;
     }
 }
@@ -152,50 +230,51 @@ static int __wl_load() {
     if (gWlLib.loaded != 0) { return gWlLib.loaded > 0 ? 1 : 0; }
     gWlLib.loaded = -1;
     unsafe {
-        void* lib = __wl_open2("libwayland-client.so.0", "libwayland-client.so");
-        if (lib == (void*)0) { return 0; }
+        WlLib_* lib = __wl_open2("libwayland-client.so.0", "libwayland-client.so");
+        if (lib == null) { return 0; }
         int ok = 1;
         gWlLib.display_connect = (WlConnect_)__wl_sym(lib, "wl_display_connect", &ok);
-        gWlLib.display_disconnect = (WlVoidP_)__wl_sym(lib, "wl_display_disconnect", &ok);
-        gWlLib.display_flush = (WlIntP_)__wl_sym(lib, "wl_display_flush", &ok);
-        gWlLib.display_get_fd = (WlIntP_)__wl_sym(lib, "wl_display_get_fd", &ok);
-        gWlLib.display_dispatch_pending = (WlIntP_)__wl_sym(lib, "wl_display_dispatch_pending", &ok);
-        gWlLib.display_roundtrip = (WlIntP_)__wl_sym(lib, "wl_display_roundtrip", &ok);
-        gWlLib.display_prepare_read = (WlIntP_)__wl_sym(lib, "wl_display_prepare_read", &ok);
-        gWlLib.display_read_events = (WlIntP_)__wl_sym(lib, "wl_display_read_events", &ok);
-        gWlLib.display_cancel_read = (WlVoidP_)__wl_sym(lib, "wl_display_cancel_read", &ok);
-        gWlLib.display_get_error = (WlIntP_)__wl_sym(lib, "wl_display_get_error", &ok);
+        gWlLib.display_disconnect = (WlDisplayVoid_)__wl_sym(lib, "wl_display_disconnect", &ok);
+        gWlLib.display_flush = (WlDisplayInt_)__wl_sym(lib, "wl_display_flush", &ok);
+        gWlLib.display_get_fd = (WlDisplayInt_)__wl_sym(lib, "wl_display_get_fd", &ok);
+        gWlLib.display_dispatch_pending = (WlDisplayInt_)__wl_sym(lib, "wl_display_dispatch_pending", &ok);
+        gWlLib.display_roundtrip = (WlDisplayInt_)__wl_sym(lib, "wl_display_roundtrip", &ok);
+        gWlLib.display_prepare_read = (WlDisplayInt_)__wl_sym(lib, "wl_display_prepare_read", &ok);
+        gWlLib.display_read_events = (WlDisplayInt_)__wl_sym(lib, "wl_display_read_events", &ok);
+        gWlLib.display_cancel_read = (WlDisplayVoid_)__wl_sym(lib, "wl_display_cancel_read", &ok);
+        gWlLib.display_get_error = (WlDisplayInt_)__wl_sym(lib, "wl_display_get_error", &ok);
         gWlLib.marshal_ctor = (WlMarshalCtorV_)__wl_sym(lib, "wl_proxy_marshal_array_constructor_versioned", &ok);
-        gWlLib.proxy_destroy = (WlVoidP_)__wl_sym(lib, "wl_proxy_destroy", &ok);
+        gWlLib.proxy_destroy = (WlProxyVoid_)__wl_sym(lib, "wl_proxy_destroy", &ok);
         gWlLib.add_dispatcher = (WlAddDispatcher_)__wl_sym(lib, "wl_proxy_add_dispatcher", &ok);
         gWlLib.get_version = (WlGetVersion_)__wl_sym(lib, "wl_proxy_get_version", &ok);
-        gWlLib.get_user_data = (WlGetUserData_)__wl_sym(lib, "wl_proxy_get_user_data", &ok);
-        gWlLib.iRegistry = __wl_sym(lib, "wl_registry_interface", &ok);
-        gWlLib.iCallback = __wl_sym(lib, "wl_callback_interface", &ok);
-        gWlLib.iCompositor = __wl_sym(lib, "wl_compositor_interface", &ok);
-        gWlLib.iSurface = __wl_sym(lib, "wl_surface_interface", &ok);
-        gWlLib.iRegion = __wl_sym(lib, "wl_region_interface", &ok);
-        gWlLib.iShm = __wl_sym(lib, "wl_shm_interface", &ok);
-        gWlLib.iShmPool = __wl_sym(lib, "wl_shm_pool_interface", &ok);
-        gWlLib.iBuffer = __wl_sym(lib, "wl_buffer_interface", &ok);
-        gWlLib.iSeat = __wl_sym(lib, "wl_seat_interface", &ok);
-        gWlLib.iPointer = __wl_sym(lib, "wl_pointer_interface", &ok);
-        gWlLib.iKeyboard = __wl_sym(lib, "wl_keyboard_interface", &ok);
-        gWlLib.iOutput = __wl_sym(lib, "wl_output_interface", &ok);
-        gWlLib.iDataDeviceManager = __wl_sym(lib, "wl_data_device_manager_interface", &ok);
-        gWlLib.iDataDevice = __wl_sym(lib, "wl_data_device_interface", &ok);
-        gWlLib.iDataSource = __wl_sym(lib, "wl_data_source_interface", &ok);
-        gWlLib.iDataOffer = __wl_sym(lib, "wl_data_offer_interface", &ok);
+        gWlLib.iRegistry = __wl_iface_sym(lib, "wl_registry_interface", &ok);
+        gWlLib.iCallback = __wl_iface_sym(lib, "wl_callback_interface", &ok);
+        gWlLib.iCompositor = __wl_iface_sym(lib, "wl_compositor_interface", &ok);
+        gWlLib.iSurface = __wl_iface_sym(lib, "wl_surface_interface", &ok);
+        gWlLib.iRegion = __wl_iface_sym(lib, "wl_region_interface", &ok);
+        gWlLib.iShm = __wl_iface_sym(lib, "wl_shm_interface", &ok);
+        gWlLib.iShmPool = __wl_iface_sym(lib, "wl_shm_pool_interface", &ok);
+        gWlLib.iBuffer = __wl_iface_sym(lib, "wl_buffer_interface", &ok);
+        gWlLib.iSeat = __wl_iface_sym(lib, "wl_seat_interface", &ok);
+        gWlLib.iPointer = __wl_iface_sym(lib, "wl_pointer_interface", &ok);
+        gWlLib.iKeyboard = __wl_iface_sym(lib, "wl_keyboard_interface", &ok);
+        gWlLib.iOutput = __wl_iface_sym(lib, "wl_output_interface", &ok);
+        gWlLib.iDataDeviceManager = __wl_iface_sym(lib, "wl_data_device_manager_interface", &ok);
+        gWlLib.iDataDevice = __wl_iface_sym(lib, "wl_data_device_interface", &ok);
+        gWlLib.iDataSource = __wl_iface_sym(lib, "wl_data_source_interface", &ok);
+        gWlLib.iDataOffer = __wl_iface_sym(lib, "wl_data_offer_interface", &ok);
         if (!ok) { return 0; }
-        gWlLib.marshal_flags = (WlMarshalFlags_)dlsym(lib, "wl_proxy_marshal_array_flags");
+        int mf = 1;
+        gWlLib.marshal_flags = (WlMarshalFlags_)__wl_sym(lib, "wl_proxy_marshal_array_flags", &mf);
+        gWlLib.hasMarshalFlags = mf;
 
-        void* xkb = __wl_open2("libxkbcommon.so.0", "libxkbcommon.so");
-        if (xkb != (void*)0) {
+        WlLib_* xkb = __wl_open2("libxkbcommon.so.0", "libxkbcommon.so");
+        if (xkb != null) {
             int xo = 1;
             gWlLib.xkb_context_new = (XkbContextNew_)__wl_sym(xkb, "xkb_context_new", &xo);
             gWlLib.xkb_keymap_new_from_string = (XkbKeymapFromString_)__wl_sym(xkb, "xkb_keymap_new_from_string", &xo);
-            gWlLib.xkb_keymap_unref = (XkbUnref_)__wl_sym(xkb, "xkb_keymap_unref", &xo);
-            gWlLib.xkb_state_unref = (XkbUnref_)__wl_sym(xkb, "xkb_state_unref", &xo);
+            gWlLib.xkb_keymap_unref = (XkbKeymapUnref_)__wl_sym(xkb, "xkb_keymap_unref", &xo);
+            gWlLib.xkb_state_unref = (XkbStateUnref_)__wl_sym(xkb, "xkb_state_unref", &xo);
             gWlLib.xkb_state_new = (XkbStateNew_)__wl_sym(xkb, "xkb_state_new", &xo);
             gWlLib.xkb_state_update_mask = (XkbUpdateMask_)__wl_sym(xkb, "xkb_state_update_mask", &xo);
             gWlLib.xkb_state_key_get_one_sym = (XkbKeyU_)__wl_sym(xkb, "xkb_state_key_get_one_sym", &xo);
@@ -212,10 +291,10 @@ static int __wl_load() {
             gWlLib.xkb_compose_state_get_status = (XkbComposeStatus_)__wl_sym(xkb, "xkb_compose_state_get_status", &co);
             gWlLib.xkb_compose_state_get_one_sym = (XkbComposeKeysym_)__wl_sym(xkb, "xkb_compose_state_get_one_sym", &co);
             gWlLib.xkb_compose_state_reset = (XkbComposeReset_)__wl_sym(xkb, "xkb_compose_state_reset", &co);
-            if (!co) { gWlLib.xkb_compose_table_new_from_locale = (XkbComposeTableNew_)0; }
+            gWlLib.xkbCompose = co;
         }
-        void* cur = __wl_open2("libwayland-cursor.so.0", "libwayland-cursor.so");
-        if (cur != (void*)0) {
+        WlLib_* cur = __wl_open2("libwayland-cursor.so.0", "libwayland-cursor.so");
+        if (cur != null) {
             int co2 = 1;
             gWlLib.cursor_theme_load = (WlCursorThemeLoad_)__wl_sym(cur, "wl_cursor_theme_load", &co2);
             gWlLib.cursor_theme_destroy = (WlCursorThemeDestroy_)__wl_sym(cur, "wl_cursor_theme_destroy", &co2);
@@ -230,22 +309,6 @@ static int __wl_load() {
 
 // ── protocol tables built at run time ───────────────────────────────────
 
-// struct wl_message / struct wl_interface (wayland-util.h).
-struct GuiWlMessage {
-    const char* name;
-    const char* signature;
-    const void** types;
-};
-
-struct GuiWlInterface {
-    const char* name;
-    int version;
-    int methodCount;
-    const GuiWlMessage* methods;
-    int eventCount;
-    const GuiWlMessage* events;
-};
-
 #define GUI_WL_MAX_MSG 16
 
 struct GuiWlProto {
@@ -257,7 +320,7 @@ struct GuiWlProto {
 // No argument needs its interface listed: none of these messages carries
 // a server-created object, so null types only skip libwayland's
 // object-type check (and its debug output's interface names).
-static const void* gWlNullTypes[8];
+static const GuiWlInterface* gWlNullTypes[8];
 
 static struct GuiWlProto gWlXdgWmBase;
 static struct GuiWlProto gWlXdgSurface;
@@ -273,7 +336,7 @@ static struct GuiWlProto gWlShapeDevice;
 
 static void __wl_proto(&GuiWlProto p, const char* name, int version) {
     unsafe {
-        memset((void*)p, 0, sizeof(struct GuiWlProto));
+        safe_memset_obj(p, 0);
         p.iface.name = name;
         p.iface.version = version;
         p.iface.methods = &p.methods[0];
@@ -384,51 +447,53 @@ struct GuiWlArgs {
 
 static struct GuiWlArgs __wl_args() {
     struct GuiWlArgs r;
-    unsafe { memset((void*)&r, 0, sizeof(struct GuiWlArgs)); }
+    safe_memset_obj(&r, 0);
     return r;
 }
 static void __wl_set_i(&GuiWlArgs r, int i, int v) { unsafe { *(int*)&r.a[i] = v; } }
 static void __wl_set_u(&GuiWlArgs r, int i, unsigned int v) { unsafe { *(unsigned int*)&r.a[i] = v; } }
-static void __wl_set_p(&GuiWlArgs r, int i, const void* p) { unsafe { *(const void**)&r.a[i] = p; } }
+static void __wl_set_o(&GuiWlArgs r, int i, const WlProxy_* p) { unsafe { *(const WlProxy_**)&r.a[i] = p; } }
+static void __wl_set_s(&GuiWlArgs r, int i, const char* s) { unsafe { *(const char**)&r.a[i] = s; } }
 
-static int __wl_arg_i(void* args, int i) { unsafe { return *(int*)((unsigned long)args + (unsigned long)i * 8UL); } }
-static unsigned int __wl_arg_u(void* args, int i) { unsafe { return *(unsigned int*)((unsigned long)args + (unsigned long)i * 8UL); } }
-static void* __wl_arg_p(void* args, int i) { unsafe { return *(void**)((unsigned long)args + (unsigned long)i * 8UL); } }
-static double __wl_arg_fixed(void* args, int i) { return (double)__wl_arg_i(args, i) / 256.0; }
+static int __wl_arg_i(unsigned long long* args, int i) { unsafe { return *(int*)&args[i]; } }
+static unsigned int __wl_arg_u(unsigned long long* args, int i) { unsafe { return *(unsigned int*)&args[i]; } }
+static WlProxy_* __wl_arg_o(unsigned long long* args, int i) { unsafe { return *(WlProxy_**)&args[i]; } }
+static const char* __wl_arg_s(unsigned long long* args, int i) { unsafe { return *(const char**)&args[i]; } }
+static double __wl_arg_fixed(unsigned long long* args, int i) { return (double)__wl_arg_i(args, i) / 256.0; }
 
 // Sends request 'opcode' on 'proxy'. 'iface' (non-null) makes the request
 // create a new object of that interface — its 'n' argument — and returns
 // it. 'destroy' destroys the proxy afterwards (destructor requests).
-static void* __wl_send(void* proxy, unsigned int opcode, const void* iface, unsigned int version, &GuiWlArgs args, int destroy) {
+static WlProxy_* __wl_send(WlProxy_* proxy, unsigned int opcode, const GuiWlInterface* iface, unsigned int version, &GuiWlArgs args, int destroy) {
     unsafe {
-        if (proxy == (void*)0) { return (void*)0; }
+        if (proxy == null) { return null; }
         unsigned int ver = version;
         if (ver == 0U) { ver = gWlLib.get_version(proxy); }
-        if (gWlLib.marshal_flags != (WlMarshalFlags_)0) {
-            return gWlLib.marshal_flags(proxy, opcode, iface, ver, destroy ? 1U : 0U, (void*)&args.a[0]);
+        if (gWlLib.hasMarshalFlags) {
+            return gWlLib.marshal_flags(proxy, opcode, iface, ver, destroy ? 1U : 0U, &args.a[0]);
         }
-        void* r = gWlLib.marshal_ctor(proxy, opcode, (void*)&args.a[0], iface, ver);
+        WlProxy_* r = gWlLib.marshal_ctor(proxy, opcode, &args.a[0], iface, ver);
         if (destroy) { gWlLib.proxy_destroy(proxy); }
         return r;
     }
 }
 
-static void __wl_req0(void* proxy, unsigned int opcode) {
+static void __wl_req0(WlProxy_* proxy, unsigned int opcode) {
     struct GuiWlArgs a = __wl_args();
-    __wl_send(proxy, opcode, (const void*)0, 0U, &a, 0);
+    __wl_send(proxy, opcode, null, 0U, &a, 0);
 }
 
-static void __wl_destroy_req(void* proxy, unsigned int opcode) {
+static void __wl_destroy_req(WlProxy_* proxy, unsigned int opcode) {
     unsafe {
-        if (proxy == (void*)0) { return; }
+        if (proxy == null) { return; }
         struct GuiWlArgs a = __wl_args();
-        __wl_send(proxy, opcode, (const void*)0, 0U, &a, 1);
+        __wl_send(proxy, opcode, null, 0U, &a, 1);
     }
 }
 
 // A request whose first argument is the new object ('n...'), the rest
 // filled in by the caller from index 1.
-static void* __wl_new(void* proxy, unsigned int opcode, const void* iface, &GuiWlArgs a) {
+static WlProxy_* __wl_new(WlProxy_* proxy, unsigned int opcode, const GuiWlInterface* iface, &GuiWlArgs a) {
     return __wl_send(proxy, opcode, iface, 0U, a, 0);
 }
 
@@ -441,8 +506,8 @@ static int __wl_streq(const char* a, const char* b) {
     }
 }
 
-static int __wl_iface_version(const void* iface) {
-    unsafe { return ((const struct GuiWlInterface*)iface)->version; }
+static int __wl_iface_version(const GuiWlInterface* iface) {
+    unsafe { return iface->version; }
 }
 
 // ── state ───────────────────────────────────────────────────────────────
@@ -451,7 +516,7 @@ static int __wl_iface_version(const void* iface) {
 #define GUI_WL_MAX_OUTPUTS 16
 
 struct GuiWlBuffer {
-    void* buffer;            // wl_buffer
+    WlProxy_* buffer;        // wl_buffer
     unsigned char* data;     // mmap()ed pixels, BGRA (WL_SHM_FORMAT_ARGB8888)
     unsigned long size;
     int w; int h;
@@ -462,13 +527,13 @@ struct GuiWlBuffer {
 
 struct GuiWlWindow {
     struct GuiWindowState* st;
-    void* surface;
-    void* xdgSurface;
-    void* toplevel;
-    void* decoration;
-    void* viewport;
-    void* fracScale;
-    void* frameCb;
+    WlProxy_* surface;
+    WlProxy_* xdgSurface;
+    WlProxy_* toplevel;
+    WlProxy_* decoration;
+    WlProxy_* viewport;
+    WlProxy_* fracScale;
+    WlProxy_* frameCb;
     double frameAt;          // ms when frameCb was requested
     int configured;          // initial configure seen (the surface may show buffers)
     int created;             // window_create returned
@@ -476,7 +541,7 @@ struct GuiWlWindow {
     int intScale;            // wl_surface buffer scale, when there is no viewport
     int fracScale120;        // preferred fractional scale * 120 (0 = none yet)
     int prefBufScale;        // wl_surface.preferred_buffer_scale (0 = none yet)
-    void* outputs[GUI_WL_MAX_OUTPUTS];   // outputs the surface is on
+    WlProxy_* outputs[GUI_WL_MAX_OUTPUTS];   // outputs the surface is on
     struct GuiWlBuffer* bufs[GUI_WL_MAX_BUFFERS];
     struct GuiWlBuffer* pending;  // filled, waiting for the frame callback to be committed
     int pdx0; int pdy0; int pdx1; int pdy1;  // damage of 'pending'
@@ -485,13 +550,13 @@ struct GuiWlWindow {
 };
 
 struct GuiWlOutput {
-    void* proxy;
+    WlProxy_* proxy;
     unsigned int name;
     int scale;
 };
 
 struct GuiWlOffer {
-    void* proxy;
+    WlProxy_* proxy;
     int utf8;      // text/plain;charset=utf-8
     int plain;     // text/plain
     int x11utf8;   // UTF8_STRING
@@ -501,21 +566,21 @@ struct GuiWlOffer {
 #define GUI_WL_MAX_OFFERS 8
 
 struct GuiWl {
-    void* display;
-    void* registry;
-    void* compositor; int compositorVer;
-    void* shm;
-    void* wmBase;
-    void* seat; unsigned int seatName; int seatVer;
-    void* pointer; int pointerVer;
-    void* keyboard;
-    void* ddm;          // wl_data_device_manager
-    void* dataDevice;
-    void* decoManager;
-    void* viewporter;
-    void* fracManager;
-    void* shapeManager;
-    void* shapeDevice;
+    WlDisplay_* display;
+    WlProxy_* registry;
+    WlProxy_* compositor; int compositorVer;
+    WlProxy_* shm;
+    WlProxy_* wmBase;
+    WlProxy_* seat; unsigned int seatName; int seatVer;
+    WlProxy_* pointer; int pointerVer;
+    WlProxy_* keyboard;
+    WlProxy_* ddm;          // wl_data_device_manager
+    WlProxy_* dataDevice;
+    WlProxy_* decoManager;
+    WlProxy_* viewporter;
+    WlProxy_* fracManager;
+    WlProxy_* shapeManager;
+    WlProxy_* shapeDevice;
     struct GuiWlOutput outputs[GUI_WL_MAX_OUTPUTS];
     int outputCount;
     int wakeR; int wakeW;
@@ -534,20 +599,20 @@ struct GuiWl {
     int axisDiscX; int axisDiscY;  // value120 units (discrete steps * 120)
     int axisHave; int axisHaveDisc;
     // keyboard
-    void* xkbCtx; void* keymap; void* xkbState;
-    void* compose;                 // xkb_compose_state, or null
+    XkbContext_* xkbCtx; XkbKeymap_* keymap; XkbState_* xkbState;
+    XkbComposeState_* compose;     // or null
     int repeatRate; int repeatDelay;
     unsigned int repeatKey;        // evdev code + 8, 0 = none
     double repeatNext;
     struct GuiEvent repeatEv;
     // cursors
-    void* cursorTheme; int cursorThemeSize;
-    void* cursorSurface;
+    WlCursorTheme_* cursorTheme; int cursorThemeSize;
+    WlProxy_* cursorSurface;
     int cursorShown;               // GUI_CURSOR_* currently on the pointer
     // clipboard
     struct GuiWlOffer offers[GUI_WL_MAX_OFFERS];
     int selection;                 // index into offers, -1 = none
-    void* source;                  // our wl_data_source while we own the selection
+    WlProxy_* source;              // our wl_data_source while we own the selection
     struct String clip;
     char appId[64];
 };
@@ -563,9 +628,9 @@ static struct GuiWlWindow* __wl_win(&GuiWindowState st) {
     unsafe { return (struct GuiWlWindow*)st.native; }
 }
 
-static struct GuiWindowState* __wl_find(void* surface) {
+static struct GuiWindowState* __wl_find(WlProxy_* surface) {
     unsafe {
-        if (surface == (void*)0) { return (struct GuiWindowState*)0; }
+        if (surface == null) { return (struct GuiWindowState*)0; }
         ?&GuiWindowState o = gui_backend_find((unsigned long long)(unsigned long)surface);
         if (o.is_null()) { return (struct GuiWindowState*)0; }
         return (struct GuiWindowState*)o;
@@ -574,7 +639,7 @@ static struct GuiWindowState* __wl_find(void* surface) {
 
 // ── scale ───────────────────────────────────────────────────────────────
 
-static int __wl_output_scale(void* proxy) {
+static int __wl_output_scale(WlProxy_* proxy) {
     unsafe {
         int i = 0;
         while (i < gWl.outputCount) {
@@ -601,12 +666,12 @@ static double __wl_window_scale(struct GuiWlWindow* w) {
     unsafe {
         if (!w->st->hiDpi) { return 1.0; }
         if (gWl.envScale > 0.0) { return gWl.envScale; }
-        if (w->fracScale120 > 0 && gWl.viewporter != (void*)0) { return (double)w->fracScale120 / 120.0; }
+        if (w->fracScale120 > 0 && gWl.viewporter != null) { return (double)w->fracScale120 / 120.0; }
         if (w->prefBufScale > 0) { return (double)w->prefBufScale; }
         int s = 0;
         int i = 0;
         while (i < GUI_WL_MAX_OUTPUTS) {
-            if (w->outputs[i] != (void*)0) {
+            if (w->outputs[i] != null) {
                 int os = __wl_output_scale(w->outputs[i]);
                 if (os > s) { s = os; }
             }
@@ -625,11 +690,11 @@ static int __wl_round(double v) { return (int)(v + 0.5); }
 static void __wl_apply_scaling(struct GuiWlWindow* w) {
     unsafe {
         struct GuiWindowState* st = w->st;
-        if (w->viewport != (void*)0) {
+        if (w->viewport != null) {
             struct GuiWlArgs a = __wl_args();
             __wl_set_i(&a, 0, st->logicalW);
             __wl_set_i(&a, 1, st->logicalH);
-            __wl_send(w->viewport, 2U /* set_destination */, (const void*)0, 0U, &a, 0);
+            __wl_send(w->viewport, 2U /* set_destination */, null, 0U, &a, 0);
         } else if (gWl.compositorVer >= 3) {
             int s = (int)(st->scale + 0.5);
             if (s < 1) { s = 1; }
@@ -638,7 +703,7 @@ static void __wl_apply_scaling(struct GuiWlWindow* w) {
             // it (the shm path, or a GPU presenter's eglSwapBuffers)
             struct GuiWlArgs b = __wl_args();
             __wl_set_i(&b, 0, s);
-            __wl_send(w->surface, 8U /* set_buffer_scale */, (const void*)0, 0U, &b, 0);
+            __wl_send(w->surface, 8U /* set_buffer_scale */, null, 0U, &b, 0);
         }
     }
 }
@@ -649,7 +714,7 @@ static void __wl_rescale(struct GuiWlWindow* w) {
     unsafe {
         struct GuiWindowState* st = w->st;
         double s = __wl_window_scale(w);
-        if (w->viewport == (void*)0) {
+        if (w->viewport == null) {
             // integer buffer scales only
             s = (double)(int)(s + 0.999);
             if (s < 1.0) { s = 1.0; }
@@ -699,8 +764,9 @@ typedef fn int(const char*, unsigned int) MemfdCreate_;
 static int __wl_shm_fd(unsigned long size) {
     unsafe {
         int fd = -1;
-        MemfdCreate_ mfd = (MemfdCreate_)dlsym((void*)0 /* RTLD_DEFAULT */, "memfd_create");
-        if (mfd != (MemfdCreate_)0) { fd = mfd("safec-gui", 1U /* MFD_CLOEXEC */); }
+        int hasMfd = 1;
+        MemfdCreate_ mfd = (MemfdCreate_)__wl_sym((WlLib_*)0 /* RTLD_DEFAULT */, "memfd_create", &hasMfd);
+        if (hasMfd) { fd = mfd("safec-gui", 1U /* MFD_CLOEXEC */); }
         if (fd < 0) {
             char path[256];
             const char* dir = getenv("XDG_RUNTIME_DIR");
@@ -723,13 +789,13 @@ static int __wl_shm_fd(unsigned long size) {
 static void __wl_buffer_free(struct GuiWlBuffer* b) {
     unsafe {
         if (b == (struct GuiWlBuffer*)0) { return; }
-        if (b->buffer != (void*)0) { __wl_destroy_req(b->buffer, 0U /* destroy */); }
-        if (b->data != (unsigned char*)0) { munmap((void*)b->data, b->size); }
+        if (b->buffer != null) { __wl_destroy_req(b->buffer, 0U /* destroy */); }
+        if (b->data != (unsigned char*)0) { munmap(b->data, b->size); }
         dealloc(b);
     }
 }
 
-static int __wl_buffer_dispatch(const void* data, void* target, unsigned int opcode, const void* msg, void* args) {
+static int __wl_buffer_dispatch(?&Erased data, WlProxy_* target, unsigned int opcode, const GuiWlMessage* msg, unsigned long long* args) {
     unsafe {
         struct GuiWlBuffer* b = (struct GuiWlBuffer*)data;
         if (opcode == 0U) {   // release
@@ -746,31 +812,31 @@ static struct GuiWlBuffer* __wl_buffer_new(int w, int h) {
         unsigned long size = stride * (unsigned long)h;
         int fd = __wl_shm_fd(size);
         if (fd < 0) { return (struct GuiWlBuffer*)0; }
-        void* data = mmap((void*)0, size, 3 /* PROT_READ|PROT_WRITE */, 1 /* MAP_SHARED */, fd, 0L);
-        if (data == (void*)0 || (long)data == -1L) { close(fd); return (struct GuiWlBuffer*)0; }
+        unsigned char* data = mmap(null, size, 3 /* PROT_READ|PROT_WRITE */, 1 /* MAP_SHARED */, fd, 0L);
+        if (data == null || (long)data == -1L) { close(fd); return (struct GuiWlBuffer*)0; }
         struct GuiWlArgs a = __wl_args();
         __wl_set_i(&a, 1, fd);
         __wl_set_i(&a, 2, (int)size);
-        void* pool = __wl_new(gWl.shm, 0U /* create_pool */, gWlLib.iShmPool, &a);
+        WlProxy_* pool = __wl_new(gWl.shm, 0U /* create_pool */, gWlLib.iShmPool, &a);
         close(fd);
-        if (pool == (void*)0) { munmap(data, size); return (struct GuiWlBuffer*)0; }
+        if (pool == null) { munmap(data, size); return (struct GuiWlBuffer*)0; }
         struct GuiWlArgs b = __wl_args();
         __wl_set_i(&b, 1, 0);
         __wl_set_i(&b, 2, w);
         __wl_set_i(&b, 3, h);
         __wl_set_i(&b, 4, (int)stride);
         __wl_set_u(&b, 5, 0U /* WL_SHM_FORMAT_ARGB8888 */);
-        void* buffer = __wl_new(pool, 0U /* create_buffer */, gWlLib.iBuffer, &b);
+        WlProxy_* buffer = __wl_new(pool, 0U /* create_buffer */, gWlLib.iBuffer, &b);
         __wl_destroy_req(pool, 1U /* destroy */);
-        if (buffer == (void*)0) { munmap(data, size); return (struct GuiWlBuffer*)0; }
+        if (buffer == null) { munmap(data, size); return (struct GuiWlBuffer*)0; }
         struct GuiWlBuffer* r = (struct GuiWlBuffer*)alloc_zeroed_raw_(sizeof(struct GuiWlBuffer));
         r->buffer = buffer;
-        r->data = (unsigned char*)data;
+        r->data = data;
         r->size = size;
         r->w = w;
         r->h = h;
         r->dx0 = 0; r->dy0 = 0; r->dx1 = w; r->dy1 = h;   // all stale
-        gWlLib.add_dispatcher(buffer, (void*)__wl_buffer_dispatch, (const void*)r, (void*)0);
+        gWlLib.add_dispatcher(buffer, __wl_buffer_dispatch, (?&Erased)r, null);
         return r;
     }
 }
@@ -780,7 +846,7 @@ static struct GuiWlBuffer* __wl_buffer_new(int w, int h) {
 static void __wl_toplevel_limits(struct GuiWlWindow* w) {
     unsafe {
         struct GuiWindowState* st = w->st;
-        if (w->toplevel == (void*)0) { return; }
+        if (w->toplevel == null) { return; }
         int minW = st->minW; int minH = st->minH; int maxW = st->maxW; int maxH = st->maxH;
         if (!st->resizable) {
             minW = st->logicalW; maxW = st->logicalW;
@@ -789,11 +855,11 @@ static void __wl_toplevel_limits(struct GuiWlWindow* w) {
         struct GuiWlArgs a = __wl_args();
         __wl_set_i(&a, 0, maxW > 0 ? maxW : 0);
         __wl_set_i(&a, 1, maxH > 0 ? maxH : 0);
-        __wl_send(w->toplevel, 7U /* set_max_size */, (const void*)0, 0U, &a, 0);
+        __wl_send(w->toplevel, 7U /* set_max_size */, null, 0U, &a, 0);
         struct GuiWlArgs b = __wl_args();
         __wl_set_i(&b, 0, minW > 0 ? minW : 0);
         __wl_set_i(&b, 1, minH > 0 ? minH : 0);
-        __wl_send(w->toplevel, 8U /* set_min_size */, (const void*)0, 0U, &b, 0);
+        __wl_send(w->toplevel, 8U /* set_min_size */, null, 0U, &b, 0);
     }
 }
 
@@ -804,12 +870,12 @@ static void __wl_commit(struct GuiWlWindow* w) {
 static void __wl_frame_request(struct GuiWlWindow* w);
 static void __wl_commit_pending(struct GuiWlWindow* w);
 
-static int __wl_callback_dispatch(const void* data, void* target, unsigned int opcode, const void* msg, void* args) {
+static int __wl_callback_dispatch(?&Erased data, WlProxy_* target, unsigned int opcode, const GuiWlMessage* msg, unsigned long long* args) {
     unsafe {
         struct GuiWlWindow* w = (struct GuiWlWindow*)data;
         if (opcode == 0U && w->frameCb == target) {   // done
             gWlLib.proxy_destroy(target);
-            w->frameCb = (void*)0;
+            w->frameCb = null;
             if (w->pending != (struct GuiWlBuffer*)0) { __wl_commit_pending(w); }
         }
     }
@@ -819,9 +885,9 @@ static int __wl_callback_dispatch(const void* data, void* target, unsigned int o
 static void __wl_frame_request(struct GuiWlWindow* w) {
     unsafe {
         struct GuiWlArgs a = __wl_args();
-        void* cb = __wl_new(w->surface, 3U /* frame */, gWlLib.iCallback, &a);
-        if (cb != (void*)0) {
-            gWlLib.add_dispatcher(cb, (void*)__wl_callback_dispatch, (const void*)w, (void*)0);
+        WlProxy_* cb = __wl_new(w->surface, 3U /* frame */, gWlLib.iCallback, &a);
+        if (cb != null) {
+            gWlLib.add_dispatcher(cb, __wl_callback_dispatch, (?&Erased)w, null);
             w->frameCb = cb;
             w->frameAt = __wl_now_ms();
         }
@@ -835,12 +901,12 @@ static void __wl_commit_pending(struct GuiWlWindow* w) {
         if (b == (struct GuiWlBuffer*)0 || !w->configured) { return; }
         w->pending = (struct GuiWlBuffer*)0;
         struct GuiWlArgs a = __wl_args();
-        __wl_set_p(&a, 0, b->buffer);
-        __wl_send(w->surface, 1U /* attach */, (const void*)0, 0U, &a, 0);
-        if (w->viewport == (void*)0 && gWl.compositorVer >= 3) {
+        __wl_set_o(&a, 0, b->buffer);
+        __wl_send(w->surface, 1U /* attach */, null, 0U, &a, 0);
+        if (w->viewport == null && gWl.compositorVer >= 3) {
             struct GuiWlArgs s = __wl_args();
             __wl_set_i(&s, 0, w->intScale > 0 ? w->intScale : 1);
-            __wl_send(w->surface, 8U /* set_buffer_scale */, (const void*)0, 0U, &s, 0);
+            __wl_send(w->surface, 8U /* set_buffer_scale */, null, 0U, &s, 0);
         }
         struct GuiWlArgs d = __wl_args();
         if (gWl.compositorVer >= 4) {
@@ -848,13 +914,13 @@ static void __wl_commit_pending(struct GuiWlWindow* w) {
             __wl_set_i(&d, 1, w->pdy0);
             __wl_set_i(&d, 2, w->pdx1 - w->pdx0);
             __wl_set_i(&d, 3, w->pdy1 - w->pdy0);
-            __wl_send(w->surface, 9U /* damage_buffer */, (const void*)0, 0U, &d, 0);
+            __wl_send(w->surface, 9U /* damage_buffer */, null, 0U, &d, 0);
         } else {
             __wl_set_i(&d, 0, 0);
             __wl_set_i(&d, 1, 0);
             __wl_set_i(&d, 2, 0x7FFFFFFF);
             __wl_set_i(&d, 3, 0x7FFFFFFF);
-            __wl_send(w->surface, 2U /* damage */, (const void*)0, 0U, &d, 0);
+            __wl_send(w->surface, 2U /* damage */, null, 0U, &d, 0);
         }
         b->busy = 1;
         w->hasContent = 1;
@@ -868,7 +934,7 @@ static void __wl_xdg_surface_configure(struct GuiWlWindow* w, unsigned int seria
     unsafe {
         struct GuiWlArgs a = __wl_args();
         __wl_set_u(&a, 0, serial);
-        __wl_send(w->xdgSurface, 4U /* ack_configure */, (const void*)0, 0U, &a, 0);
+        __wl_send(w->xdgSurface, 4U /* ack_configure */, null, 0U, &a, 0);
         int first = w->configured ? 0 : 1;
         w->configured = 1;
         int lw = w->st->logicalW;
@@ -889,7 +955,7 @@ static void __wl_xdg_surface_configure(struct GuiWlWindow* w, unsigned int seria
     }
 }
 
-static int __wl_xdg_surface_dispatch(const void* data, void* target, unsigned int opcode, const void* msg, void* args) {
+static int __wl_xdg_surface_dispatch(?&Erased data, WlProxy_* target, unsigned int opcode, const GuiWlMessage* msg, unsigned long long* args) {
     unsafe {
         struct GuiWlWindow* w = (struct GuiWlWindow*)data;
         if (opcode == 0U) { __wl_xdg_surface_configure(w, __wl_arg_u(args, 0)); }
@@ -897,7 +963,7 @@ static int __wl_xdg_surface_dispatch(const void* data, void* target, unsigned in
     return 0;
 }
 
-static int __wl_toplevel_dispatch(const void* data, void* target, unsigned int opcode, const void* msg, void* args) {
+static int __wl_toplevel_dispatch(?&Erased data, WlProxy_* target, unsigned int opcode, const GuiWlMessage* msg, unsigned long long* args) {
     unsafe {
         struct GuiWlWindow* w = (struct GuiWlWindow*)data;
         if (opcode == 0U) {          // configure(width, height, states)
@@ -910,7 +976,7 @@ static int __wl_toplevel_dispatch(const void* data, void* target, unsigned int o
     return 0;
 }
 
-static int __wl_frac_dispatch(const void* data, void* target, unsigned int opcode, const void* msg, void* args) {
+static int __wl_frac_dispatch(?&Erased data, WlProxy_* target, unsigned int opcode, const GuiWlMessage* msg, unsigned long long* args) {
     unsafe {
         struct GuiWlWindow* w = (struct GuiWlWindow*)data;
         if (opcode == 0U) {          // preferred_scale (120ths)
@@ -921,11 +987,11 @@ static int __wl_frac_dispatch(const void* data, void* target, unsigned int opcod
     return 0;
 }
 
-static int __wl_surface_dispatch(const void* data, void* target, unsigned int opcode, const void* msg, void* args) {
+static int __wl_surface_dispatch(?&Erased data, WlProxy_* target, unsigned int opcode, const GuiWlMessage* msg, unsigned long long* args) {
     unsafe {
         struct GuiWlWindow* w = (struct GuiWlWindow*)data;
         if (opcode == 0U || opcode == 1U) {   // enter / leave (output)
-            void* out = __wl_arg_p(args, 0);
+            WlProxy_* out = __wl_arg_o(args, 0);
             int i = 0;
             int slot = -1;
             while (i < GUI_WL_MAX_OUTPUTS) {
@@ -935,11 +1001,11 @@ static int __wl_surface_dispatch(const void* data, void* target, unsigned int op
             if (opcode == 0U && slot < 0) {
                 i = 0;
                 while (i < GUI_WL_MAX_OUTPUTS) {
-                    if (w->outputs[i] == (void*)0) { w->outputs[i] = out; break; }
+                    if (w->outputs[i] == null) { w->outputs[i] = out; break; }
                     i = i + 1;
                 }
             }
-            if (opcode == 1U && slot >= 0) { w->outputs[slot] = (void*)0; }
+            if (opcode == 1U && slot >= 0) { w->outputs[slot] = null; }
             __wl_rescale(w);
         } else if (opcode == 2U) {   // preferred_buffer_scale
             w->prefBufScale = __wl_arg_i(args, 0);
@@ -949,7 +1015,7 @@ static int __wl_surface_dispatch(const void* data, void* target, unsigned int op
     return 0;
 }
 
-static int __wl_deco_dispatch(const void* data, void* target, unsigned int opcode, const void* msg, void* args) {
+static int __wl_deco_dispatch(?&Erased data, WlProxy_* target, unsigned int opcode, const GuiWlMessage* msg, unsigned long long* args) {
     return 0;
 }
 
@@ -967,7 +1033,7 @@ static void __wl_init_app_id() {
         }
         int fd = open("/proc/self/comm", 0 /* O_RDONLY */);
         if (fd >= 0) {
-            long r = read(fd, (void*)&gWl.appId[0], 63UL);
+            long r = read(fd, (unsigned char*)&gWl.appId[0], 63UL);
             close(fd);
             if (r > 0L) {
                 n = (unsigned long)r;
@@ -987,10 +1053,10 @@ static void __wl_init_app_id() {
 static void __wl_set_title(&GuiWindowState st, const &char title) {
     struct GuiWlWindow* w = __wl_win(st);
     unsafe {
-        if (w == (struct GuiWlWindow*)0 || w->toplevel == (void*)0) { return; }
+        if (w == (struct GuiWlWindow*)0 || w->toplevel == null) { return; }
         struct GuiWlArgs a = __wl_args();
-        __wl_set_p(&a, 0, (const void*)title);
-        __wl_send(w->toplevel, 2U /* set_title */, (const void*)0, 0U, &a, 0);
+        __wl_set_s(&a, 0, (const char*)title);
+        __wl_send(w->toplevel, 2U /* set_title */, null, 0U, &a, 0);
         gWlLib.display_flush(gWl.display);
     }
 }
@@ -1013,16 +1079,16 @@ static void __wl_map(struct GuiWlWindow* w) {
         // the first configure.
         struct GuiWindowState* st = w->st;
         struct GuiWlArgs t = __wl_args();
-        __wl_set_p(&t, 0, (const void*)st->title.data);
-        __wl_send(w->toplevel, 2U /* set_title */, (const void*)0, 0U, &t, 0);
+        __wl_set_s(&t, 0, (const char*)st->title.data);
+        __wl_send(w->toplevel, 2U /* set_title */, null, 0U, &t, 0);
         struct GuiWlArgs id = __wl_args();
-        __wl_set_p(&id, 0, (const void*)&gWl.appId[0]);
-        __wl_send(w->toplevel, 3U /* set_app_id */, (const void*)0, 0U, &id, 0);
+        __wl_set_s(&id, 0, (const char*)&gWl.appId[0]);
+        __wl_send(w->toplevel, 3U /* set_app_id */, null, 0U, &id, 0);
         __wl_toplevel_limits(w);
-        if (w->decoration != (void*)0) {
+        if (w->decoration != null) {
             struct GuiWlArgs m = __wl_args();
             __wl_set_u(&m, 0, w->decorated ? 2U /* server_side */ : 1U /* client_side */);
-            __wl_send(w->decoration, 1U /* set_mode */, (const void*)0, 0U, &m, 0);
+            __wl_send(w->decoration, 1U /* set_mode */, null, 0U, &m, 0);
         }
         w->configured = 0;
         __wl_commit(w);
@@ -1033,41 +1099,41 @@ static void __wl_map(struct GuiWlWindow* w) {
 
 static int __wl_create(&GuiWindowState st, const &GuiWindowOptions opts) {
     unsafe {
-        if (gWl.compositor == (void*)0 || gWl.wmBase == (void*)0 || gWl.shm == (void*)0 || gWl.dead) { return 0; }
+        if (gWl.compositor == null || gWl.wmBase == null || gWl.shm == null || gWl.dead) { return 0; }
         struct GuiWlWindow* w = (struct GuiWlWindow*)alloc_zeroed_raw_(sizeof(struct GuiWlWindow));
         w->st = (struct GuiWindowState*)st;
         struct GuiWlArgs a = __wl_args();
         w->surface = __wl_new(gWl.compositor, 0U /* create_surface */, gWlLib.iSurface, &a);
-        if (w->surface == (void*)0) { dealloc(w); return 0; }
-        gWlLib.add_dispatcher(w->surface, (void*)__wl_surface_dispatch, (const void*)w, (void*)w);
+        if (w->surface == null) { dealloc(w); return 0; }
+        gWlLib.add_dispatcher(w->surface, __wl_surface_dispatch, (?&Erased)w, (?&Erased)w);
 
         struct GuiWlArgs b = __wl_args();
-        __wl_set_p(&b, 1, w->surface);
-        w->xdgSurface = __wl_new(gWl.wmBase, 2U /* get_xdg_surface */, (const void*)&gWlXdgSurface.iface, &b);
-        gWlLib.add_dispatcher(w->xdgSurface, (void*)__wl_xdg_surface_dispatch, (const void*)w, (void*)0);
+        __wl_set_o(&b, 1, w->surface);
+        w->xdgSurface = __wl_new(gWl.wmBase, 2U /* get_xdg_surface */, &gWlXdgSurface.iface, &b);
+        gWlLib.add_dispatcher(w->xdgSurface, __wl_xdg_surface_dispatch, (?&Erased)w, null);
         struct GuiWlArgs c = __wl_args();
-        w->toplevel = __wl_new(w->xdgSurface, 1U /* get_toplevel */, (const void*)&gWlXdgToplevel.iface, &c);
-        gWlLib.add_dispatcher(w->toplevel, (void*)__wl_toplevel_dispatch, (const void*)w, (void*)0);
+        w->toplevel = __wl_new(w->xdgSurface, 1U /* get_toplevel */, &gWlXdgToplevel.iface, &c);
+        gWlLib.add_dispatcher(w->toplevel, __wl_toplevel_dispatch, (?&Erased)w, null);
 
-        if (gWl.viewporter != (void*)0) {
+        if (gWl.viewporter != null) {
             struct GuiWlArgs v = __wl_args();
-            __wl_set_p(&v, 1, w->surface);
-            w->viewport = __wl_new(gWl.viewporter, 1U /* get_viewport */, (const void*)&gWlViewport.iface, &v);
-            if (gWl.fracManager != (void*)0 && opts.hiDpi) {
+            __wl_set_o(&v, 1, w->surface);
+            w->viewport = __wl_new(gWl.viewporter, 1U /* get_viewport */, &gWlViewport.iface, &v);
+            if (gWl.fracManager != null && opts.hiDpi) {
                 struct GuiWlArgs f = __wl_args();
-                __wl_set_p(&f, 1, w->surface);
-                w->fracScale = __wl_new(gWl.fracManager, 1U /* get_fractional_scale */, (const void*)&gWlFrac.iface, &f);
-                gWlLib.add_dispatcher(w->fracScale, (void*)__wl_frac_dispatch, (const void*)w, (void*)0);
+                __wl_set_o(&f, 1, w->surface);
+                w->fracScale = __wl_new(gWl.fracManager, 1U /* get_fractional_scale */, &gWlFrac.iface, &f);
+                gWlLib.add_dispatcher(w->fracScale, __wl_frac_dispatch, (?&Erased)w, null);
             }
         }
-        if (gWl.decoManager != (void*)0) {
+        if (gWl.decoManager != null) {
             struct GuiWlArgs d = __wl_args();
-            __wl_set_p(&d, 1, w->toplevel);
-            w->decoration = __wl_new(gWl.decoManager, 1U /* get_toplevel_decoration */, (const void*)&gWlDeco.iface, &d);
-            gWlLib.add_dispatcher(w->decoration, (void*)__wl_deco_dispatch, (const void*)w, (void*)0);
+            __wl_set_o(&d, 1, w->toplevel);
+            w->decoration = __wl_new(gWl.decoManager, 1U /* get_toplevel_decoration */, &gWlDeco.iface, &d);
+            gWlLib.add_dispatcher(w->decoration, __wl_deco_dispatch, (?&Erased)w, null);
         }
 
-        st.native = (void*)w;
+        st.native = (?&Erased)w;
         st.key = (unsigned long long)(unsigned long)w->surface;
         st.scale = 1.0;
         st.pixelW = st.logicalW;
@@ -1109,12 +1175,12 @@ static void __wl_destroy(&GuiWindowState st) {
         if (w == (struct GuiWlWindow*)0) { return; }
         if (gWl.ptrFocus == st.key) { gWl.ptrFocus = 0ULL; }
         if (gWl.kbFocus == st.key) { gWl.kbFocus = 0ULL; gWl.repeatKey = 0U; }
-        if (w->frameCb != (void*)0) { gWlLib.proxy_destroy(w->frameCb); }
-        if (w->fracScale != (void*)0) { __wl_destroy_req(w->fracScale, 0U); }
-        if (w->viewport != (void*)0) { __wl_destroy_req(w->viewport, 0U); }
-        if (w->decoration != (void*)0) { __wl_destroy_req(w->decoration, 0U); }
-        if (w->toplevel != (void*)0) { __wl_destroy_req(w->toplevel, 0U); }
-        if (w->xdgSurface != (void*)0) { __wl_destroy_req(w->xdgSurface, 0U); }
+        if (w->frameCb != null) { gWlLib.proxy_destroy(w->frameCb); }
+        if (w->fracScale != null) { __wl_destroy_req(w->fracScale, 0U); }
+        if (w->viewport != null) { __wl_destroy_req(w->viewport, 0U); }
+        if (w->decoration != null) { __wl_destroy_req(w->decoration, 0U); }
+        if (w->toplevel != null) { __wl_destroy_req(w->toplevel, 0U); }
+        if (w->xdgSurface != null) { __wl_destroy_req(w->xdgSurface, 0U); }
         __wl_destroy_req(w->surface, 0U);
         __wl_window_free_buffers(w);
         gWlLib.display_flush(gWl.display);
@@ -1185,7 +1251,7 @@ static void __wl_present(&GuiWindowState st, const &unsigned char px, int bw, in
         if (w == (struct GuiWlWindow*)0 || gWl.dead || !w->configured || !st.visible) { return; }
         // Without a viewport the buffer must be a multiple of the buffer
         // scale: skip a frame drawn for the old size around a rescale.
-        if (w->viewport == (void*)0 && w->intScale > 1 && ((bw % w->intScale) != 0 || (bh % w->intScale) != 0)) { return; }
+        if (w->viewport == null && w->intScale > 1 && ((bw % w->intScale) != 0 || (bh % w->intScale) != 0)) { return; }
         // every buffer is now stale where the frame changed
         int i = 0;
         while (i < GUI_WL_MAX_BUFFERS) {
@@ -1228,8 +1294,8 @@ static void __wl_present(&GuiWindowState st, const &unsigned char px, int bw, in
         // frame is still on its way (then the frame callback commits it; a
         // compositor that stopped sending them — window hidden — gets it
         // after 250 ms anyway).
-        if (w->frameCb == (void*)0 || __wl_now_ms() - w->frameAt > 250.0) {
-            if (w->frameCb != (void*)0) { gWlLib.proxy_destroy(w->frameCb); w->frameCb = (void*)0; }
+        if (w->frameCb == null || __wl_now_ms() - w->frameAt > 250.0) {
+            if (w->frameCb != null) { gWlLib.proxy_destroy(w->frameCb); w->frameCb = null; }
             __wl_commit_pending(w);
         }
     }
@@ -1267,14 +1333,14 @@ static void __wl_set_visible(&GuiWindowState st, int v) {
             // A null buffer unmaps the surface; showing it again starts
             // over with an initial commit and configure.
             struct GuiWlArgs a = __wl_args();
-            __wl_set_p(&a, 0, (const void*)0);
-            __wl_send(w->surface, 1U /* attach */, (const void*)0, 0U, &a, 0);
+            __wl_set_o(&a, 0, null);
+            __wl_send(w->surface, 1U /* attach */, null, 0U, &a, 0);
             __wl_commit(w);
             w->configured = 0;
             w->hasContent = 0;
             w->pending = (struct GuiWlBuffer*)0;
             // an unmapped surface gets no frame callbacks
-            if (w->frameCb != (void*)0) { gWlLib.proxy_destroy(w->frameCb); w->frameCb = (void*)0; }
+            if (w->frameCb != null) { gWlLib.proxy_destroy(w->frameCb); w->frameCb = null; }
             int i = 0;
             while (i < GUI_WL_MAX_BUFFERS) {
                 if (w->bufs[i] != (struct GuiWlBuffer*)0) {
@@ -1309,22 +1375,7 @@ static unsigned int __wl_shape(int c) {
     return 1U;                                       // default
 }
 
-// struct wl_cursor / wl_cursor_image (wayland-cursor.h)
-struct GuiWlCursor {
-    unsigned int imageCount;
-    void** images;
-    char* name;
-};
-
-struct GuiWlCursorImage {
-    unsigned int width;
-    unsigned int height;
-    unsigned int hotspotX;
-    unsigned int hotspotY;
-    unsigned int delay;
-};
-
-static void* __wl_theme_cursor(int c) {
+static GuiWlCursor* __wl_theme_cursor(int c) {
     unsafe {
         const char* a = "left_ptr"; const char* b = "default";
         if (c == GUI_CURSOR_IBEAM) { a = "xterm"; b = "text"; }
@@ -1337,9 +1388,9 @@ static void* __wl_theme_cursor(int c) {
         else if (c == GUI_CURSOR_MOVE) { a = "fleur"; b = "move"; }
         else if (c == GUI_CURSOR_WAIT) { a = "watch"; b = "wait"; }
         else if (c == GUI_CURSOR_NOT_ALLOWED) { a = "crossed_circle"; b = "not-allowed"; }
-        void* cur = gWlLib.cursor_theme_get_cursor(gWl.cursorTheme, a);
-        if (cur == (void*)0) { cur = gWlLib.cursor_theme_get_cursor(gWl.cursorTheme, b); }
-        if (cur == (void*)0) { cur = gWlLib.cursor_theme_get_cursor(gWl.cursorTheme, "left_ptr"); }
+        GuiWlCursor* cur = gWlLib.cursor_theme_get_cursor(gWl.cursorTheme, a);
+        if (cur == null) { cur = gWlLib.cursor_theme_get_cursor(gWl.cursorTheme, b); }
+        if (cur == null) { cur = gWlLib.cursor_theme_get_cursor(gWl.cursorTheme, "left_ptr"); }
         return cur;
     }
 }
@@ -1347,19 +1398,19 @@ static void* __wl_theme_cursor(int c) {
 // Shows cursor 'c' on the pointer (which is in a window of scale 'scale').
 static void __wl_apply_cursor(int c, double scale) {
     unsafe {
-        if (gWl.pointer == (void*)0 || gWl.ptrFocus == 0ULL) { return; }
+        if (gWl.pointer == null || gWl.ptrFocus == 0ULL) { return; }
         gWl.cursorShown = c;
         if (c == GUI_CURSOR_HIDDEN) {
             struct GuiWlArgs h = __wl_args();
             __wl_set_u(&h, 0, gWl.ptrSerial);
-            __wl_send(gWl.pointer, 0U /* set_cursor */, (const void*)0, 0U, &h, 0);
+            __wl_send(gWl.pointer, 0U /* set_cursor */, null, 0U, &h, 0);
             return;
         }
-        if (gWl.shapeDevice != (void*)0) {
+        if (gWl.shapeDevice != null) {
             struct GuiWlArgs s = __wl_args();
             __wl_set_u(&s, 0, gWl.ptrSerial);
             __wl_set_u(&s, 1, __wl_shape(c));
-            __wl_send(gWl.shapeDevice, 1U /* set_shape */, (const void*)0, 0U, &s, 0);
+            __wl_send(gWl.shapeDevice, 1U /* set_shape */, null, 0U, &s, 0);
             return;
         }
         if (!gWlLib.cursor) { return; }   // the compositor keeps whatever it showed
@@ -1371,41 +1422,41 @@ static void __wl_apply_cursor(int c, double scale) {
             int v = (int)atof(env);
             if (v >= 8 && v <= 256) { size = v; }
         }
-        if (gWl.cursorTheme == (void*)0 || gWl.cursorThemeSize != size * bs) {
-            if (gWl.cursorTheme != (void*)0) { gWlLib.cursor_theme_destroy(gWl.cursorTheme); }
+        if (gWl.cursorTheme == null || gWl.cursorThemeSize != size * bs) {
+            if (gWl.cursorTheme != null) { gWlLib.cursor_theme_destroy(gWl.cursorTheme); }
             gWl.cursorTheme = gWlLib.cursor_theme_load(getenv("XCURSOR_THEME"), size * bs, gWl.shm);
             gWl.cursorThemeSize = size * bs;
         }
-        if (gWl.cursorTheme == (void*)0) { return; }
-        struct GuiWlCursor* cur = (struct GuiWlCursor*)__wl_theme_cursor(c);
+        if (gWl.cursorTheme == null) { return; }
+        struct GuiWlCursor* cur = __wl_theme_cursor(c);
         if (cur == (struct GuiWlCursor*)0 || cur->imageCount == 0U) { return; }
-        struct GuiWlCursorImage* img = (struct GuiWlCursorImage*)cur->images[0];
-        void* buffer = gWlLib.cursor_image_get_buffer((void*)img);
-        if (buffer == (void*)0) { return; }
-        if (gWl.cursorSurface == (void*)0) {
+        struct GuiWlCursorImage* img = cur->images[0];
+        WlProxy_* buffer = gWlLib.cursor_image_get_buffer(img);
+        if (buffer == null) { return; }
+        if (gWl.cursorSurface == null) {
             struct GuiWlArgs a = __wl_args();
             gWl.cursorSurface = __wl_new(gWl.compositor, 0U, gWlLib.iSurface, &a);
         }
-        void* cs = gWl.cursorSurface;
+        WlProxy_* cs = gWl.cursorSurface;
         struct GuiWlArgs at = __wl_args();
-        __wl_set_p(&at, 0, buffer);
-        __wl_send(cs, 1U /* attach */, (const void*)0, 0U, &at, 0);
+        __wl_set_o(&at, 0, buffer);
+        __wl_send(cs, 1U /* attach */, null, 0U, &at, 0);
         if (gWl.compositorVer >= 3) {
             struct GuiWlArgs sc = __wl_args();
             __wl_set_i(&sc, 0, bs);
-            __wl_send(cs, 8U /* set_buffer_scale */, (const void*)0, 0U, &sc, 0);
+            __wl_send(cs, 8U /* set_buffer_scale */, null, 0U, &sc, 0);
         }
         struct GuiWlArgs dm = __wl_args();
         __wl_set_i(&dm, 2, 0x7FFFFFFF);
         __wl_set_i(&dm, 3, 0x7FFFFFFF);
-        __wl_send(cs, 2U /* damage */, (const void*)0, 0U, &dm, 0);
+        __wl_send(cs, 2U /* damage */, null, 0U, &dm, 0);
         __wl_req0(cs, 6U /* commit */);
         struct GuiWlArgs set = __wl_args();
         __wl_set_u(&set, 0, gWl.ptrSerial);
-        __wl_set_p(&set, 1, cs);
+        __wl_set_o(&set, 1, cs);
         __wl_set_i(&set, 2, (int)img->hotspotX / bs);
         __wl_set_i(&set, 3, (int)img->hotspotY / bs);
-        __wl_send(gWl.pointer, 0U /* set_cursor */, (const void*)0, 0U, &set, 0);
+        __wl_send(gWl.pointer, 0U /* set_cursor */, null, 0U, &set, 0);
     }
 }
 
@@ -1501,32 +1552,32 @@ static unsigned int __wl_keysym_char(unsigned int ks) {
 
 static void __wl_free_keymap() {
     unsafe {
-        if (gWl.xkbState != (void*)0) { gWlLib.xkb_state_unref(gWl.xkbState); gWl.xkbState = (void*)0; }
-        if (gWl.keymap != (void*)0) { gWlLib.xkb_keymap_unref(gWl.keymap); gWl.keymap = (void*)0; }
+        if (gWl.xkbState != null) { gWlLib.xkb_state_unref(gWl.xkbState); gWl.xkbState = null; }
+        if (gWl.keymap != null) { gWlLib.xkb_keymap_unref(gWl.keymap); gWl.keymap = null; }
     }
 }
 
 static void __wl_keymap(unsigned int format, int fd, unsigned int size) {
     unsafe {
         if (format != 1U /* XKB_V1 */ || !gWlLib.xkb) { close(fd); return; }
-        void* map = mmap((void*)0, (unsigned long)size, 1 /* PROT_READ */, 2 /* MAP_PRIVATE */, fd, 0L);
+        unsigned char* map = mmap(null, (unsigned long)size, 1 /* PROT_READ */, 2 /* MAP_PRIVATE */, fd, 0L);
         close(fd);
-        if (map == (void*)0 || (long)map == -1L) { return; }
-        if (gWl.xkbCtx == (void*)0) {
+        if (map == null || (long)map == -1L) { return; }
+        if (gWl.xkbCtx == null) {
             gWl.xkbCtx = gWlLib.xkb_context_new(0);
-            if (gWl.xkbCtx != (void*)0 && gWlLib.xkb_compose_table_new_from_locale != (XkbComposeTableNew_)0) {
+            if (gWl.xkbCtx != null && gWlLib.xkbCompose) {
                 const char* loc = getenv("LC_ALL");
                 if (loc == (const char*)0 || loc[0] == '\0') { loc = getenv("LC_CTYPE"); }
                 if (loc == (const char*)0 || loc[0] == '\0') { loc = getenv("LANG"); }
                 if (loc == (const char*)0 || loc[0] == '\0') { loc = "C"; }
-                void* table = gWlLib.xkb_compose_table_new_from_locale(gWl.xkbCtx, loc, 0);
-                if (table != (void*)0) { gWl.compose = gWlLib.xkb_compose_state_new(table, 0); }
+                XkbComposeTable_* table = gWlLib.xkb_compose_table_new_from_locale(gWl.xkbCtx, loc, 0);
+                if (table != null) { gWl.compose = gWlLib.xkb_compose_state_new(table, 0); }
             }
         }
-        if (gWl.xkbCtx == (void*)0) { munmap(map, (unsigned long)size); return; }
-        void* km = gWlLib.xkb_keymap_new_from_string(gWl.xkbCtx, (const char*)map, 1, 0);
+        if (gWl.xkbCtx == null) { munmap(map, (unsigned long)size); return; }
+        XkbKeymap_* km = gWlLib.xkb_keymap_new_from_string(gWl.xkbCtx, (const char*)map, 1, 0);
         munmap(map, (unsigned long)size);
-        if (km == (void*)0) { return; }
+        if (km == null) { return; }
         __wl_free_keymap();
         gWl.keymap = km;
         gWl.xkbState = gWlLib.xkb_state_new(km);
@@ -1536,7 +1587,7 @@ static void __wl_keymap(unsigned int format, int fd, unsigned int size) {
 static int __wl_mods_from_xkb() {
     unsafe {
         int m = 0;
-        void* s = gWl.xkbState;
+        XkbState_* s = gWl.xkbState;
         if (gWlLib.xkb_state_mod_name_is_active(s, "Shift", 8) > 0) { m = m | GUI_MOD_SHIFT; }
         if (gWlLib.xkb_state_mod_name_is_active(s, "Control", 8) > 0) { m = m | GUI_MOD_CTRL; }
         if (gWlLib.xkb_state_mod_name_is_active(s, "Mod1", 8) > 0) { m = m | GUI_MOD_ALT; }
@@ -1548,7 +1599,7 @@ static int __wl_mods_from_xkb() {
 static void __wl_key(unsigned int serial, unsigned int key, unsigned int state) {
     unsafe {
         gWl.lastSerial = serial;
-        struct GuiWindowState* st = __wl_find((void*)(unsigned long)gWl.kbFocus);
+        struct GuiWindowState* st = __wl_find((WlProxy_*)(unsigned long)gWl.kbFocus);
         int down = state == 1U ? 1 : 0;   // 2 (repeated, wl_keyboard v10) never reaches v8 clients
         if (!down && gWl.repeatKey == key + 8U) { gWl.repeatKey = 0U; }
         if (st == (struct GuiWindowState*)0) { return; }
@@ -1558,7 +1609,7 @@ static void __wl_key(unsigned int serial, unsigned int key, unsigned int state) 
         ev.x = gWl.ptrX * st->scale;
         ev.y = gWl.ptrY * st->scale;
         unsigned int cp = 0U;
-        if (gWl.xkbState != (void*)0) {
+        if (gWl.xkbState != null) {
             unsigned int layout = gWlLib.xkb_state_key_get_layout(gWl.xkbState, code);
             const unsigned int* syms = (const unsigned int*)0;
             int n = gWlLib.xkb_keymap_key_get_syms_by_level(gWl.keymap, code, layout, 0U, &syms);
@@ -1567,7 +1618,7 @@ static void __wl_key(unsigned int serial, unsigned int key, unsigned int state) 
             if (ev.keycode == GUI_KEY_UNKNOWN) { ev.keycode = __wl_keysym(sym); }
             if (down) {
                 int composed = 0;
-                if (gWl.compose != (void*)0) {
+                if (gWl.compose != null) {
                     gWlLib.xkb_compose_state_feed(gWl.compose, sym);
                     int cs = gWlLib.xkb_compose_state_get_status(gWl.compose);
                     if (cs == 1 /* COMPOSING */) { composed = 1; cp = 0U; }
@@ -1592,7 +1643,7 @@ static void __wl_key(unsigned int serial, unsigned int key, unsigned int state) 
         gui_backend_post(st, ev);
         if (down) {
             int repeats = 1;
-            if (gWl.keymap != (void*)0) { repeats = gWlLib.xkb_keymap_key_repeats(gWl.keymap, code); }
+            if (gWl.keymap != null) { repeats = gWlLib.xkb_keymap_key_repeats(gWl.keymap, code); }
             if (ev.keycode == GUI_KEY_SHIFT || ev.keycode == GUI_KEY_CONTROL || ev.keycode == GUI_KEY_ALT || ev.keycode == GUI_KEY_META) { repeats = 0; }
             if (repeats && gWl.repeatRate > 0) {
                 gWl.repeatKey = code;
@@ -1608,7 +1659,7 @@ static void __wl_key_repeat() {
         if (gWl.repeatKey == 0U || gWl.repeatRate <= 0) { return; }
         double now = __wl_now_ms();
         if (now < gWl.repeatNext) { return; }
-        struct GuiWindowState* st = __wl_find((void*)(unsigned long)gWl.kbFocus);
+        struct GuiWindowState* st = __wl_find((WlProxy_*)(unsigned long)gWl.kbFocus);
         if (st == (struct GuiWindowState*)0) { gWl.repeatKey = 0U; return; }
         int n = 0;
         while (now >= gWl.repeatNext && n < 8) {
@@ -1622,13 +1673,13 @@ static void __wl_key_repeat() {
     }
 }
 
-static int __wl_keyboard_dispatch(const void* data, void* target, unsigned int opcode, const void* msg, void* args) {
+static int __wl_keyboard_dispatch(?&Erased data, WlProxy_* target, unsigned int opcode, const GuiWlMessage* msg, unsigned long long* args) {
     unsafe {
         if (opcode == 0U) {          // keymap(format, fd, size)
             __wl_keymap(__wl_arg_u(args, 0), __wl_arg_i(args, 1), __wl_arg_u(args, 2));
         } else if (opcode == 1U) {   // enter(serial, surface, keys)
             gWl.lastSerial = __wl_arg_u(args, 0);
-            void* surface = __wl_arg_p(args, 1);
+            WlProxy_* surface = __wl_arg_o(args, 1);
             gWl.kbFocus = (unsigned long long)(unsigned long)surface;
             struct GuiWindowState* st = __wl_find(surface);
             if (st != (struct GuiWindowState*)0 && !st->focused) {
@@ -1636,7 +1687,7 @@ static int __wl_keyboard_dispatch(const void* data, void* target, unsigned int o
                 gui_backend_post(st, GuiEvent::new(GUI_EVENT_FOCUS_IN));
             }
         } else if (opcode == 2U) {   // leave(serial, surface)
-            void* surface = __wl_arg_p(args, 1);
+            WlProxy_* surface = __wl_arg_o(args, 1);
             struct GuiWindowState* st = __wl_find(surface);
             if (gWl.kbFocus == (unsigned long long)(unsigned long)surface) { gWl.kbFocus = 0ULL; }
             gWl.repeatKey = 0U;
@@ -1651,7 +1702,7 @@ static int __wl_keyboard_dispatch(const void* data, void* target, unsigned int o
             unsigned int lat = __wl_arg_u(args, 2);
             unsigned int lck = __wl_arg_u(args, 3);
             unsigned int grp = __wl_arg_u(args, 4);
-            if (gWl.xkbState != (void*)0) {
+            if (gWl.xkbState != null) {
                 gWlLib.xkb_state_update_mask(gWl.xkbState, dep, lat, lck, 0U, 0U, grp);
                 gWl.mods = __wl_mods_from_xkb();
             } else {
@@ -1677,7 +1728,7 @@ static int __wl_keyboard_dispatch(const void* data, void* target, unsigned int o
 static void __wl_flush_axis() {
     unsafe {
         if (!gWl.axisHave) { return; }
-        struct GuiWindowState* st = __wl_find((void*)(unsigned long)gWl.ptrFocus);
+        struct GuiWindowState* st = __wl_find((WlProxy_*)(unsigned long)gWl.ptrFocus);
         if (st != (struct GuiWindowState*)0) {
             struct GuiEvent ev = GuiEvent::new(GUI_EVENT_SCROLL);
             ev.x = gWl.ptrX * st->scale;
@@ -1699,11 +1750,11 @@ static void __wl_flush_axis() {
     }
 }
 
-static int __wl_pointer_dispatch(const void* data, void* target, unsigned int opcode, const void* msg, void* args) {
+static int __wl_pointer_dispatch(?&Erased data, WlProxy_* target, unsigned int opcode, const GuiWlMessage* msg, unsigned long long* args) {
     unsafe {
         if (opcode == 0U) {          // enter(serial, surface, x, y)
             gWl.ptrSerial = __wl_arg_u(args, 0);
-            void* surface = __wl_arg_p(args, 1);
+            WlProxy_* surface = __wl_arg_o(args, 1);
             gWl.ptrFocus = (unsigned long long)(unsigned long)surface;
             gWl.ptrX = __wl_arg_fixed(args, 2);
             gWl.ptrY = __wl_arg_fixed(args, 3);
@@ -1716,7 +1767,7 @@ static int __wl_pointer_dispatch(const void* data, void* target, unsigned int op
                 gui_backend_post(st, ev);
             }
         } else if (opcode == 1U) {   // leave(serial, surface)
-            void* surface = __wl_arg_p(args, 1);
+            WlProxy_* surface = __wl_arg_o(args, 1);
             struct GuiWindowState* st = __wl_find(surface);
             if (gWl.ptrFocus == (unsigned long long)(unsigned long)surface) { gWl.ptrFocus = 0ULL; }
             if (st != (struct GuiWindowState*)0) {
@@ -1728,7 +1779,7 @@ static int __wl_pointer_dispatch(const void* data, void* target, unsigned int op
         } else if (opcode == 2U) {   // motion(time, x, y)
             gWl.ptrX = __wl_arg_fixed(args, 1);
             gWl.ptrY = __wl_arg_fixed(args, 2);
-            struct GuiWindowState* st = __wl_find((void*)(unsigned long)gWl.ptrFocus);
+            struct GuiWindowState* st = __wl_find((WlProxy_*)(unsigned long)gWl.ptrFocus);
             if (st != (struct GuiWindowState*)0) {
                 struct GuiEvent ev = GuiEvent::new(GUI_EVENT_MOUSE_MOVE);
                 ev.x = gWl.ptrX * st->scale;
@@ -1740,7 +1791,7 @@ static int __wl_pointer_dispatch(const void* data, void* target, unsigned int op
             gWl.lastSerial = __wl_arg_u(args, 0);
             unsigned int b = __wl_arg_u(args, 2);
             unsigned int state = __wl_arg_u(args, 3);
-            struct GuiWindowState* st = __wl_find((void*)(unsigned long)gWl.ptrFocus);
+            struct GuiWindowState* st = __wl_find((WlProxy_*)(unsigned long)gWl.ptrFocus);
             if (st != (struct GuiWindowState*)0) {
                 struct GuiEvent ev = GuiEvent::new(state == 1U ? GUI_EVENT_MOUSE_DOWN : GUI_EVENT_MOUSE_UP);
                 ev.x = gWl.ptrX * st->scale;
@@ -1776,11 +1827,11 @@ static int __wl_pointer_dispatch(const void* data, void* target, unsigned int op
 
 // ── clipboard ───────────────────────────────────────────────────────────
 
-static int __wl_offer_index(void* proxy) {
+static int __wl_offer_index(WlProxy_* proxy) {
     unsafe {
         int i = 0;
         while (i < GUI_WL_MAX_OFFERS) {
-            if (gWl.offers[i].proxy == proxy && proxy != (void*)0) { return i; }
+            if (gWl.offers[i].proxy == proxy && proxy != null) { return i; }
             i = i + 1;
         }
     }
@@ -1789,19 +1840,19 @@ static int __wl_offer_index(void* proxy) {
 
 static void __wl_offer_drop(int i) {
     unsafe {
-        if (i < 0 || gWl.offers[i].proxy == (void*)0) { return; }
+        if (i < 0 || gWl.offers[i].proxy == null) { return; }
         __wl_destroy_req(gWl.offers[i].proxy, 2U /* destroy */);
-        memset((void*)&gWl.offers[i], 0, sizeof(struct GuiWlOffer));
+        safe_memset_obj(&gWl.offers[i], 0);
         if (gWl.selection == i) { gWl.selection = -1; }
     }
 }
 
-static int __wl_offer_dispatch(const void* data, void* target, unsigned int opcode, const void* msg, void* args) {
+static int __wl_offer_dispatch(?&Erased data, WlProxy_* target, unsigned int opcode, const GuiWlMessage* msg, unsigned long long* args) {
     unsafe {
         int i = __wl_offer_index(target);
         if (i < 0) { return 0; }
         if (opcode == 0U) {   // offer(mime)
-            const char* m = (const char*)__wl_arg_p(args, 0);
+            const char* m = __wl_arg_s(args, 0);
             if (__wl_streq(m, "text/plain;charset=utf-8")) { gWl.offers[i].utf8 = 1; }
             else if (__wl_streq(m, "text/plain")) { gWl.offers[i].plain = 1; }
             else if (__wl_streq(m, "UTF8_STRING")) { gWl.offers[i].x11utf8 = 1; }
@@ -1811,15 +1862,15 @@ static int __wl_offer_dispatch(const void* data, void* target, unsigned int opco
     return 0;
 }
 
-static int __wl_data_device_dispatch(const void* data, void* target, unsigned int opcode, const void* msg, void* args) {
+static int __wl_data_device_dispatch(?&Erased data, WlProxy_* target, unsigned int opcode, const GuiWlMessage* msg, unsigned long long* args) {
     unsafe {
         if (opcode == 0U) {          // data_offer(new id)
-            void* offer = __wl_arg_p(args, 0);
-            if (offer == (void*)0) { return 0; }
+            WlProxy_* offer = __wl_arg_o(args, 0);
+            if (offer == null) { return 0; }
             int slot = -1;
             int i = 0;
             while (i < GUI_WL_MAX_OFFERS) {
-                if (gWl.offers[i].proxy == (void*)0) { slot = i; break; }
+                if (gWl.offers[i].proxy == null) { slot = i; break; }
                 i = i + 1;
             }
             if (slot < 0) {
@@ -1827,11 +1878,11 @@ static int __wl_data_device_dispatch(const void* data, void* target, unsigned in
                 slot = gWl.selection == 0 ? 1 : 0;
                 __wl_offer_drop(slot);
             }
-            memset((void*)&gWl.offers[slot], 0, sizeof(struct GuiWlOffer));
+            safe_memset_obj(&gWl.offers[slot], 0);
             gWl.offers[slot].proxy = offer;
-            gWlLib.add_dispatcher(offer, (void*)__wl_offer_dispatch, (const void*)0, (void*)0);
+            gWlLib.add_dispatcher(offer, __wl_offer_dispatch, null, null);
         } else if (opcode == 5U) {   // selection(offer or null)
-            void* offer = __wl_arg_p(args, 0);
+            WlProxy_* offer = __wl_arg_o(args, 0);
             int keep = __wl_offer_index(offer);
             int i = 0;
             while (i < GUI_WL_MAX_OFFERS) {
@@ -1850,19 +1901,19 @@ static int __wl_data_device_dispatch(const void* data, void* target, unsigned in
     return 0;
 }
 
-static int __wl_source_dispatch(const void* data, void* target, unsigned int opcode, const void* msg, void* args) {
+static int __wl_source_dispatch(?&Erased data, WlProxy_* target, unsigned int opcode, const GuiWlMessage* msg, unsigned long long* args) {
     unsafe {
         if (opcode == 1U) {          // send(mime, fd)
             int fd = __wl_arg_i(args, 1);
             unsigned long off = 0UL;
             while (off < gWl.clip.len) {
-                long n = write(fd, (const void*)((unsigned long)gWl.clip.data + off), gWl.clip.len - off);
+                long n = write(fd, (const unsigned char*)gWl.clip.data + off, gWl.clip.len - off);
                 if (n <= 0L) { break; }
                 off = off + (unsigned long)n;
             }
             close(fd);
         } else if (opcode == 2U) {   // cancelled: someone else owns the clipboard now
-            if (gWl.source == target) { gWl.source = (void*)0; }
+            if (gWl.source == target) { gWl.source = null; }
             __wl_destroy_req(target, 1U /* destroy */);
         }
     }
@@ -1871,42 +1922,42 @@ static int __wl_source_dispatch(const void* data, void* target, unsigned int opc
 
 static void __wl_ensure_data_device() {
     unsafe {
-        if (gWl.dataDevice != (void*)0 || gWl.ddm == (void*)0 || gWl.seat == (void*)0) { return; }
+        if (gWl.dataDevice != null || gWl.ddm == null || gWl.seat == null) { return; }
         struct GuiWlArgs a = __wl_args();
-        __wl_set_p(&a, 1, gWl.seat);
+        __wl_set_o(&a, 1, gWl.seat);
         gWl.dataDevice = __wl_new(gWl.ddm, 1U /* get_data_device */, gWlLib.iDataDevice, &a);
-        if (gWl.dataDevice != (void*)0) {
-            gWlLib.add_dispatcher(gWl.dataDevice, (void*)__wl_data_device_dispatch, (const void*)0, (void*)0);
+        if (gWl.dataDevice != null) {
+            gWlLib.add_dispatcher(gWl.dataDevice, __wl_data_device_dispatch, null, null);
         }
     }
 }
 
 static int __wl_clip_set(const &char utf8, unsigned long n) {
     unsafe {
-        if (gWl.dataDevice == (void*)0 || gWl.dead) { return 0; }
+        if (gWl.dataDevice == null || gWl.dead) { return 0; }
         gWl.clip.free();
         gWl.clip = String::from_n_(utf8, n);
         struct GuiWlArgs a = __wl_args();
-        void* src = __wl_new(gWl.ddm, 0U /* create_data_source */, gWlLib.iDataSource, &a);
-        if (src == (void*)0) { return 0; }
-        gWlLib.add_dispatcher(src, (void*)__wl_source_dispatch, (const void*)0, (void*)0);
+        WlProxy_* src = __wl_new(gWl.ddm, 0U /* create_data_source */, gWlLib.iDataSource, &a);
+        if (src == null) { return 0; }
+        gWlLib.add_dispatcher(src, __wl_source_dispatch, null, null);
         const char* mimes[5];
         mimes[0] = "text/plain;charset=utf-8"; mimes[1] = "text/plain"; mimes[2] = "UTF8_STRING";
         mimes[3] = "STRING"; mimes[4] = "TEXT";
         int i = 0;
         while (i < 5) {
             struct GuiWlArgs m = __wl_args();
-            __wl_set_p(&m, 0, (const void*)mimes[i]);
-            __wl_send(src, 0U /* offer */, (const void*)0, 0U, &m, 0);
+            __wl_set_s(&m, 0, (const char*)mimes[i]);
+            __wl_send(src, 0U /* offer */, null, 0U, &m, 0);
             i = i + 1;
         }
-        void* old = gWl.source;
+        WlProxy_* old = gWl.source;
         gWl.source = src;
         struct GuiWlArgs s = __wl_args();
-        __wl_set_p(&s, 0, src);
+        __wl_set_o(&s, 0, src);
         __wl_set_u(&s, 1, gWl.lastSerial);
-        __wl_send(gWl.dataDevice, 1U /* set_selection */, (const void*)0, 0U, &s, 0);
-        if (old != (void*)0) { __wl_destroy_req(old, 1U); }
+        __wl_send(gWl.dataDevice, 1U /* set_selection */, null, 0U, &s, 0);
+        if (old != null) { __wl_destroy_req(old, 1U); }
         // The compositor cancels the source at once if it refuses (no
         // focus, stale serial).
         if (gWlLib.display_roundtrip(gWl.display) < 0) { gWl.dead = 1; return 0; }
@@ -1920,6 +1971,8 @@ struct GuiWlPollFd {
     short revents;
 };
 
+extern int poll(GuiWlPollFd* fds, unsigned long nfds, int timeout);
+
 static int __wl_clip_get(&String out) {
     out.clear();
     unsafe {
@@ -1927,7 +1980,7 @@ static int __wl_clip_get(&String out) {
         gWlLib.display_roundtrip(gWl.display);
         if (gWl.selection < 0) { return 0; }
         // Is the selection ours? (Our own source shows up as an offer too.)
-        if (gWl.source != (void*)0) {
+        if (gWl.source != null) {
             out.push_n_((const char*)gWl.clip.data, gWl.clip.len);
             return 1;
         }
@@ -1941,9 +1994,9 @@ static int __wl_clip_get(&String out) {
         int fds[2];
         if (pipe(&fds[0]) != 0) { return 0; }
         struct GuiWlArgs a = __wl_args();
-        __wl_set_p(&a, 0, (const void*)mime);
+        __wl_set_s(&a, 0, (const char*)mime);
         __wl_set_i(&a, 1, fds[1]);
-        __wl_send(o.proxy, 1U /* receive */, (const void*)0, 0U, &a, 0);
+        __wl_send(o.proxy, 1U /* receive */, null, 0U, &a, 0);
         gWlLib.display_flush(gWl.display);
         close(fds[1]);
         double start = __wl_now_ms();
@@ -1954,9 +2007,9 @@ static int __wl_clip_get(&String out) {
             if (left <= 0.0) { break; }
             struct GuiWlPollFd p;
             p.fd = fds[0]; p.events = (short)1; p.revents = (short)0;
-            int r = poll((void*)&p, 1UL, (int)left);
+            int r = poll(&p, 1UL, (int)left);
             if (r <= 0) { break; }
-            long n = read(fds[0], (void*)&buf[0], 4096UL);
+            long n = read(fds[0], (unsigned char*)&buf[0], 4096UL);
             if (n < 0L) { break; }
             if (n == 0L) { ok = 1; break; }
             out.push_n_((const char*)&buf[0], (unsigned long)n);
@@ -1968,7 +2021,7 @@ static int __wl_clip_get(&String out) {
 
 // ── registry, seat, outputs ─────────────────────────────────────────────
 
-static int __wl_output_dispatch(const void* data, void* target, unsigned int opcode, const void* msg, void* args) {
+static int __wl_output_dispatch(?&Erased data, WlProxy_* target, unsigned int opcode, const GuiWlMessage* msg, unsigned long long* args) {
     unsafe {
         if (opcode == 3U) {   // scale(factor)
             int i = 0;
@@ -1985,36 +2038,36 @@ static void __wl_seat_caps(unsigned int caps) {
     unsafe {
         int wantPointer = (caps & 1U) != 0U ? 1 : 0;
         int wantKeyboard = (caps & 2U) != 0U ? 1 : 0;
-        if (wantPointer && gWl.pointer == (void*)0) {
+        if (wantPointer && gWl.pointer == null) {
             struct GuiWlArgs a = __wl_args();
             gWl.pointer = __wl_new(gWl.seat, 0U /* get_pointer */, gWlLib.iPointer, &a);
             gWl.pointerVer = gWl.seatVer;
-            gWlLib.add_dispatcher(gWl.pointer, (void*)__wl_pointer_dispatch, (const void*)0, (void*)0);
-            if (gWl.shapeManager != (void*)0) {
+            gWlLib.add_dispatcher(gWl.pointer, __wl_pointer_dispatch, null, null);
+            if (gWl.shapeManager != null) {
                 struct GuiWlArgs s = __wl_args();
-                __wl_set_p(&s, 1, gWl.pointer);
-                gWl.shapeDevice = __wl_new(gWl.shapeManager, 1U /* get_pointer */, (const void*)&gWlShapeDevice.iface, &s);
+                __wl_set_o(&s, 1, gWl.pointer);
+                gWl.shapeDevice = __wl_new(gWl.shapeManager, 1U /* get_pointer */, &gWlShapeDevice.iface, &s);
             }
-        } else if (!wantPointer && gWl.pointer != (void*)0) {
-            if (gWl.shapeDevice != (void*)0) { __wl_destroy_req(gWl.shapeDevice, 0U); gWl.shapeDevice = (void*)0; }
+        } else if (!wantPointer && gWl.pointer != null) {
+            if (gWl.shapeDevice != null) { __wl_destroy_req(gWl.shapeDevice, 0U); gWl.shapeDevice = null; }
             if (gWl.seatVer >= 3) { __wl_destroy_req(gWl.pointer, 1U /* release */); }
             else { gWlLib.proxy_destroy(gWl.pointer); }
-            gWl.pointer = (void*)0;
+            gWl.pointer = null;
             gWl.ptrFocus = 0ULL;
         }
-        if (wantKeyboard && gWl.keyboard == (void*)0) {
+        if (wantKeyboard && gWl.keyboard == null) {
             struct GuiWlArgs a = __wl_args();
             gWl.keyboard = __wl_new(gWl.seat, 1U /* get_keyboard */, gWlLib.iKeyboard, &a);
             gWl.repeatRate = 25;
             gWl.repeatDelay = 600;
-            gWlLib.add_dispatcher(gWl.keyboard, (void*)__wl_keyboard_dispatch, (const void*)0, (void*)0);
-        } else if (!wantKeyboard && gWl.keyboard != (void*)0) {
+            gWlLib.add_dispatcher(gWl.keyboard, __wl_keyboard_dispatch, null, null);
+        } else if (!wantKeyboard && gWl.keyboard != null) {
             if (gWl.seatVer >= 3) { __wl_destroy_req(gWl.keyboard, 0U /* release */); }
             else { gWlLib.proxy_destroy(gWl.keyboard); }
-            gWl.keyboard = (void*)0;
+            gWl.keyboard = null;
             gWl.repeatKey = 0U;
             // keyboard focus goes with the keyboard
-            struct GuiWindowState* st = __wl_find((void*)(unsigned long)gWl.kbFocus);
+            struct GuiWindowState* st = __wl_find((WlProxy_*)(unsigned long)gWl.kbFocus);
             gWl.kbFocus = 0ULL;
             if (st != (struct GuiWindowState*)0 && st->focused) {
                 st->focused = 0;
@@ -2024,72 +2077,72 @@ static void __wl_seat_caps(unsigned int caps) {
     }
 }
 
-static int __wl_seat_dispatch(const void* data, void* target, unsigned int opcode, const void* msg, void* args) {
+static int __wl_seat_dispatch(?&Erased data, WlProxy_* target, unsigned int opcode, const GuiWlMessage* msg, unsigned long long* args) {
     if (opcode == 0U) { __wl_seat_caps(__wl_arg_u(args, 0)); }
     return 0;
 }
 
-static int __wl_wm_base_dispatch(const void* data, void* target, unsigned int opcode, const void* msg, void* args) {
+static int __wl_wm_base_dispatch(?&Erased data, WlProxy_* target, unsigned int opcode, const GuiWlMessage* msg, unsigned long long* args) {
     if (opcode == 0U) {   // ping(serial)
         struct GuiWlArgs a = __wl_args();
         __wl_set_u(&a, 0, __wl_arg_u(args, 0));
-        __wl_send(target, 3U /* pong */, (const void*)0, 0U, &a, 0);
+        __wl_send(target, 3U /* pong */, null, 0U, &a, 0);
     }
     return 0;
 }
 
 static unsigned int __wl_minu(unsigned int a, unsigned int b) { return a < b ? a : b; }
 
-static void* __wl_bind(unsigned int name, const void* iface, unsigned int version) {
+static WlProxy_* __wl_bind(unsigned int name, const GuiWlInterface* iface, unsigned int version) {
     unsafe {
         struct GuiWlArgs a = __wl_args();
         __wl_set_u(&a, 0, name);
-        __wl_set_p(&a, 1, (const void*)((const struct GuiWlInterface*)iface)->name);
+        __wl_set_s(&a, 1, iface->name);
         __wl_set_u(&a, 2, version);
         return __wl_send(gWl.registry, 0U /* bind */, iface, version, &a, 0);
     }
 }
 
-static int __wl_registry_dispatch(const void* data, void* target, unsigned int opcode, const void* msg, void* args) {
+static int __wl_registry_dispatch(?&Erased data, WlProxy_* target, unsigned int opcode, const GuiWlMessage* msg, unsigned long long* args) {
     unsafe {
         if (opcode == 0U) {          // global(name, interface, version)
             unsigned int name = __wl_arg_u(args, 0);
-            const char* iface = (const char*)__wl_arg_p(args, 1);
+            const char* iface = __wl_arg_s(args, 1);
             unsigned int ver = __wl_arg_u(args, 2);
-            if (__wl_streq(iface, "wl_compositor") && gWl.compositor == (void*)0) {
+            if (__wl_streq(iface, "wl_compositor") && gWl.compositor == null) {
                 unsigned int v = __wl_minu(__wl_minu(ver, 6U), (unsigned int)__wl_iface_version(gWlLib.iSurface));
                 gWl.compositor = __wl_bind(name, gWlLib.iCompositor, v);
                 gWl.compositorVer = (int)v;
-            } else if (__wl_streq(iface, "wl_shm") && gWl.shm == (void*)0) {
+            } else if (__wl_streq(iface, "wl_shm") && gWl.shm == null) {
                 gWl.shm = __wl_bind(name, gWlLib.iShm, 1U);
-            } else if (__wl_streq(iface, "xdg_wm_base") && gWl.wmBase == (void*)0) {
-                gWl.wmBase = __wl_bind(name, (const void*)&gWlXdgWmBase.iface, __wl_minu(ver, 6U));
-                gWlLib.add_dispatcher(gWl.wmBase, (void*)__wl_wm_base_dispatch, (const void*)0, (void*)0);
-            } else if (__wl_streq(iface, "wl_seat") && gWl.seat == (void*)0) {
+            } else if (__wl_streq(iface, "xdg_wm_base") && gWl.wmBase == null) {
+                gWl.wmBase = __wl_bind(name, &gWlXdgWmBase.iface, __wl_minu(ver, 6U));
+                gWlLib.add_dispatcher(gWl.wmBase, __wl_wm_base_dispatch, null, null);
+            } else if (__wl_streq(iface, "wl_seat") && gWl.seat == null) {
                 unsigned int v = __wl_minu(__wl_minu(ver, 8U), (unsigned int)__wl_iface_version(gWlLib.iSeat));
                 gWl.seat = __wl_bind(name, gWlLib.iSeat, v);
                 gWl.seatName = name;
                 gWl.seatVer = (int)v;
-                gWlLib.add_dispatcher(gWl.seat, (void*)__wl_seat_dispatch, (const void*)0, (void*)0);
+                gWlLib.add_dispatcher(gWl.seat, __wl_seat_dispatch, null, null);
             } else if (__wl_streq(iface, "wl_output") && gWl.outputCount < GUI_WL_MAX_OUTPUTS) {
                 unsigned int v = __wl_minu(__wl_minu(ver, 2U), (unsigned int)__wl_iface_version(gWlLib.iOutput));
-                void* o = __wl_bind(name, gWlLib.iOutput, v);
+                WlProxy_* o = __wl_bind(name, gWlLib.iOutput, v);
                 gWl.outputs[gWl.outputCount].proxy = o;
                 gWl.outputs[gWl.outputCount].name = name;
                 gWl.outputs[gWl.outputCount].scale = 1;
                 gWl.outputCount = gWl.outputCount + 1;
-                gWlLib.add_dispatcher(o, (void*)__wl_output_dispatch, (const void*)0, (void*)0);
-            } else if (__wl_streq(iface, "wl_data_device_manager") && gWl.ddm == (void*)0) {
+                gWlLib.add_dispatcher(o, __wl_output_dispatch, null, null);
+            } else if (__wl_streq(iface, "wl_data_device_manager") && gWl.ddm == null) {
                 unsigned int v = __wl_minu(__wl_minu(ver, 3U), (unsigned int)__wl_iface_version(gWlLib.iDataDeviceManager));
                 gWl.ddm = __wl_bind(name, gWlLib.iDataDeviceManager, v);
-            } else if (__wl_streq(iface, "zxdg_decoration_manager_v1") && gWl.decoManager == (void*)0) {
-                gWl.decoManager = __wl_bind(name, (const void*)&gWlDecoManager.iface, 1U);
-            } else if (__wl_streq(iface, "wp_viewporter") && gWl.viewporter == (void*)0) {
-                gWl.viewporter = __wl_bind(name, (const void*)&gWlViewporter.iface, 1U);
-            } else if (__wl_streq(iface, "wp_fractional_scale_manager_v1") && gWl.fracManager == (void*)0) {
-                gWl.fracManager = __wl_bind(name, (const void*)&gWlFracManager.iface, 1U);
-            } else if (__wl_streq(iface, "wp_cursor_shape_manager_v1") && gWl.shapeManager == (void*)0) {
-                gWl.shapeManager = __wl_bind(name, (const void*)&gWlShapeManager.iface, 1U);
+            } else if (__wl_streq(iface, "zxdg_decoration_manager_v1") && gWl.decoManager == null) {
+                gWl.decoManager = __wl_bind(name, &gWlDecoManager.iface, 1U);
+            } else if (__wl_streq(iface, "wp_viewporter") && gWl.viewporter == null) {
+                gWl.viewporter = __wl_bind(name, &gWlViewporter.iface, 1U);
+            } else if (__wl_streq(iface, "wp_fractional_scale_manager_v1") && gWl.fracManager == null) {
+                gWl.fracManager = __wl_bind(name, &gWlFracManager.iface, 1U);
+            } else if (__wl_streq(iface, "wp_cursor_shape_manager_v1") && gWl.shapeManager == null) {
+                gWl.shapeManager = __wl_bind(name, &gWlShapeManager.iface, 1U);
             }
         } else if (opcode == 1U) {   // global_remove(name)
             unsigned int name = __wl_arg_u(args, 0);
@@ -2114,26 +2167,26 @@ static int __wl_connect() {
     gWlState = -1;
     if (!__wl_load()) { return 0; }
     unsafe {
-        memset((void*)&gWl, 0, sizeof(struct GuiWl));
+        safe_memset_obj(&gWl, 0);
         gWl.selection = -1;
         gWl.wakeR = -1;
         gWl.wakeW = -1;
-        void* d = gWlLib.display_connect((const char*)0);
-        if (d == (void*)0) { return 0; }
+        WlDisplay_* d = gWlLib.display_connect((const char*)0);
+        if (d == null) { return 0; }
         gWl.display = d;
         __wl_build_protocols();
         struct GuiWlArgs a = __wl_args();
-        gWl.registry = __wl_send(d, 1U /* get_registry */, gWlLib.iRegistry, 1U, &a, 0);
-        gWlLib.add_dispatcher(gWl.registry, (void*)__wl_registry_dispatch, (const void*)0, (void*)0);
+        gWl.registry = __wl_send((WlProxy_*)d, 1U /* get_registry */, gWlLib.iRegistry, 1U, &a, 0);
+        gWlLib.add_dispatcher(gWl.registry, __wl_registry_dispatch, null, null);
         // globals, then the events binding them caused (seat caps, output scales)
         if (gWlLib.display_roundtrip(d) < 0 || gWlLib.display_roundtrip(d) < 0) {
             gWlLib.display_disconnect(d);
-            gWl.display = (void*)0;
+            gWl.display = null;
             return 0;
         }
-        if (gWl.compositor == (void*)0 || gWl.shm == (void*)0 || gWl.wmBase == (void*)0) {
+        if (gWl.compositor == null || gWl.shm == null || gWl.wmBase == null) {
             gWlLib.display_disconnect(d);
-            gWl.display = (void*)0;
+            gWl.display = null;
             return 0;
         }
         __wl_ensure_data_device();
@@ -2186,7 +2239,7 @@ static int __wl_dispatch_pending() {
 // wake() writes to the pipe). Returns 1 if woken.
 static int __wl_read(int timeoutMs) {
     unsafe {
-        void* d = gWl.display;
+        WlDisplay_* d = gWl.display;
         while (gWlLib.display_prepare_read(d) != 0) {
             if (__wl_dispatch_pending() == 0 && gWl.dead) { return 0; }
         }
@@ -2201,7 +2254,7 @@ static int __wl_read(int timeoutMs) {
         fds[1].events = (short)1;
         fds[1].revents = (short)0;
         unsigned long n = gWl.wakeR >= 0 ? 2UL : 1UL;
-        int r = poll((void*)&fds[0], n, timeoutMs);
+        int r = poll(&fds[0], n, timeoutMs);
         if (r > 0 && ((int)fds[0].revents & 1) != 0) {
             if (gWlLib.display_read_events(d) < 0) { __wl_lost(); }
         } else {
@@ -2212,7 +2265,7 @@ static int __wl_read(int timeoutMs) {
         int woke = 0;
         if (gWl.wakeR >= 0 && ((int)fds[1].revents & 1) != 0) {
             char drain[64];
-            while (read(gWl.wakeR, (void*)&drain[0], 64UL) > 0L) { woke = 1; }
+            while (read(gWl.wakeR, (unsigned char*)&drain[0], 64UL) > 0L) { woke = 1; }
         }
         return woke;
     }
@@ -2229,9 +2282,9 @@ static void __wl_flush_stale_frames() {
             struct GuiWindowState* st = (struct GuiWindowState*)o;
             struct GuiWlWindow* w = (struct GuiWlWindow*)st->native;
             if (w == (struct GuiWlWindow*)0 || w->pending == (struct GuiWlBuffer*)0) { continue; }
-            if (w->frameCb != (void*)0 && now - w->frameAt > 250.0) {
+            if (w->frameCb != null && now - w->frameAt > 250.0) {
                 gWlLib.proxy_destroy(w->frameCb);
-                w->frameCb = (void*)0;
+                w->frameCb = null;
                 __wl_commit_pending(w);
             }
         }
@@ -2273,7 +2326,7 @@ static void __wl_wake() {
     unsafe {
         if (gWl.wakeW >= 0) {
             char b = (char)1;
-            write(gWl.wakeW, (const void*)&b, 1UL);
+            write(gWl.wakeW, (const unsigned char*)&b, 1UL);
         }
     }
 }

@@ -71,7 +71,7 @@ static int __web_create(&GuiWindowState st, const &GuiWindowOptions opts) {
         st.x = out[3];
         st.y = out[4];
         struct GuiWebWindow* w = (struct GuiWebWindow*)alloc_zeroed_raw_(sizeof(struct GuiWebWindow));
-        st.native = (void*)w;
+        st.native = (?&Erased)w;
         st.key = (unsigned long long)st.id;
         if (out[0] > 0) { st.logicalW = out[0]; }
         if (out[1] > 0) { st.logicalH = out[1]; }

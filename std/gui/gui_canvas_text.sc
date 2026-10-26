@@ -157,7 +157,7 @@ float GuiCanvas::fill_text_n_n_(const &char text, unsigned long len, float x, fl
     float pen = 0.0f;
     int prev = 0;
     int selfFb;
-    unsafe { selfFb = ((const void*)face == (const void*)fb) ? 1 : 0; }
+    unsafe { selfFb = ((const unsigned char*)face == (const unsigned char*)fb) ? 1 : 0; }
     unsigned long i = 0UL;
     while (i < len) {
         unsigned int cp = gui_utf8_next_n_(text, len, &i);

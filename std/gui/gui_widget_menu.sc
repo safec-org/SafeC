@@ -147,7 +147,7 @@ static int __wm_holds_focus(&GuiUi ui, &Widget w) {
     while (guard < 256) {
         match (cur) {
             case some(f): {
-                unsafe { if ((void*)f == (void*)w) { return 1; } }
+                unsafe { if ((const unsigned char*)f == (const unsigned char*)w) { return 1; } }
                 cur = f.parent;
             }
             case null: { return 0; }
@@ -373,7 +373,7 @@ void __wk_menu_open(&GuiUi ui, &Widget menu) {
             if (p.kind == WIDGET_MENUBAR) {
                 unsigned long idx = 0UL;
                 while (idx < p.children.len) {
-                    unsafe { if ((void*)*p.children.at(idx) == (void*)menu) { break; } }
+                    unsafe { if ((const unsigned char*)*p.children.at(idx) == (const unsigned char*)menu) { break; } }
                     idx = idx + 1UL;
                 }
                 float px = __wm_bar_x(ui, p, idx);
@@ -469,7 +469,7 @@ static void __wm_bar_switch(&GuiUi ui, &Widget bar, &Widget from, int dir) {
     unsigned long n = bar.children.len;
     unsigned long idx = 0UL;
     while (idx < n) {
-        unsafe { if ((void*)*bar.children.at(idx) == (void*)from) { break; } }
+        unsafe { if ((const unsigned char*)*bar.children.at(idx) == (const unsigned char*)from) { break; } }
         idx = idx + 1UL;
     }
     if (idx >= n) { return; }
