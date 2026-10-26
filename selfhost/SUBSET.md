@@ -161,7 +161,8 @@ These are rejected with an error that says scc doesn't support them:
 These are not implemented, and the error is a parse or name error:
 
 - SIMD vector types, `_Generic`, `thread_local`/`_Thread_local`, atomics,
-  calling-convention keywords, `naked`, `section`, `interrupt`.
+  calling-convention keywords, `naked`, `section`, `interrupt`, and
+  `malloc_defer` (write `std::alloc(n)` and a `defer std::dealloc(p);`).
 - The rest of the std library (`std/thread.h`, `std/net/*`, `std/fs/*`,
   `std/gui/*`, `std/prelude.h`, which includes all of it, ...), and
   anything else that needs an operating system: files, sockets, threads.

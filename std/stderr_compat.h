@@ -23,8 +23,15 @@
 namespace std {
 
 // The C library's FILE, opaque: std only ever holds a 'CFile_*' the C
-// library handed out and passes it back (fprintf, fputs, fclose, ...).
+// library handed out and passes it back (fprintf, fputs, fclose, ...). The
+// playground compiler's runtime (selfhost/runtime/rt.sc, compiled into the
+// same translation unit) is a C library with a FILE of its own: there, a
+// CFile_ is that one.
+#if defined(__SCC__)
+typedef struct __FILE CFile_;
+#else
 struct CFile_ { char opaque_; };
+#endif
 
 #if defined(__APPLE__)
 extern CFile_* __stderrp;

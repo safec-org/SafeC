@@ -7,6 +7,38 @@ release tags.
 
 ## [Unreleased]
 
+### Changed — no `void*` anywhere in std (outside std/ml, std/gui, the CUDA/ROCm FFTs)
+
+- **The raw memory layer is bytes:** `alloc_raw_`, `dealloc_raw_`,
+  `realloc_buf_raw_`, `safe_memcpy_raw_` and the other `std/mem.h` `_raw_`
+  forms take and return `unsigned char*` (symbol names and ABI unchanged:
+  `new T` still calls `std_alloc_raw_`); the generic `alloc` / `dealloc` /
+  `safe_memcpy` wrappers cast inside `unsafe`.
+- **Breaking:** the allocator traits (`Allocate` / `Deallocate`) and every
+  std allocator (`BumpAllocator`, `PoolAllocator`, `SlabAllocator`,
+  `TlsfAllocator`, `SecureAllocator`, `CountingAllocator`) hand out
+  `?&heap unsigned char` instead of `?&heap void`, and `heap_alloc` /
+  `heap_free` / `heap_realloc` use `&heap unsigned char`. A custom
+  allocator changes its `alloc` / `dealloc` signatures the same way;
+  `alloc_t` / `alloc_array_t` / `dealloc_t` are unchanged.
+- `T x = malloc_defer(n);` now expands to `std::alloc(n)` plus a deferred
+  `std::dealloc(x)`, taking `T` from the declaration (`auto` and `void*`
+  keep `alloc_raw_` / `dealloc_raw_`, so `auto` is now `unsigned char*`).
+- libc / OS / C-library declarations use typed handles: C's `FILE` is the
+  opaque `CFile_`; pthread and Win32 synchronisation objects, `HANDLE`s,
+  `DIR`, find handles, `timespec`, `struct tm`, `sigset_t`, `pollfd`,
+  `epoll_event`, `kevent`, `fd_set`, `addrinfo` and `WSADATA` are passed as
+  their (opaque or mirrored) structs; thread start routines, `signal()`
+  handlers and comparators are `fn` types. The TLS backends declare
+  OpenSSL's dlopen'd API (`SSL`, `SSL_CTX`, `BIO`, `X509`, ..., `dlsym`
+  returning a function), CoreFoundation/Security and SChannel/crypt32 with
+  opaque handle structs and one `fn` type per signature. The channel
+  runtime (`__safec_chan_*`) takes a `SafecChan_*` and its 8-byte slot, and
+  `__safec_thread_create` the task `fn` and its `?&Erased` argument.
+- `tests/std_modules/api_lint.py` fails on any `void*` / `&void` (any
+  region) in std's headers and sources, FFI externs included, outside a
+  temporary exemption list for std/ml, std/gui and the CUDA/ROCm FFTs.
+
 ### Changed — no `void*` left in std/audio; fewer in std's internals
 
 - **std/audio** has no `void*` at all, internal headers and FFI included:
