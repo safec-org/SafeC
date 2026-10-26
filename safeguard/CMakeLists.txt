@@ -16,6 +16,8 @@ set(SOURCES
     src/Formatter.cpp
     src/ScxTranspiler.cpp
     src/StdModules.cpp
+    src/Doc.cpp
+    src/Publish.cpp
 )
 
 add_executable(safeguard ${SOURCES})

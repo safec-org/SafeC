@@ -33,6 +33,23 @@ while IFS= read -r -d '' t; do
         fi
         continue
     fi
+    # '// SAFEC-DOC-JSON': checks the --emit-doc-json output instead of IR.
+    if grep -q '^// SAFEC-DOC-JSON' "$t"; then
+        json="$OUT/$(echo "$name" | tr '/' '_').json"
+        if ! "$SAFEC_BIN" --emit-doc-json --doc-root "$(dirname "$t")" "$t" -o "$json" >"$OUT/err.txt" 2>&1; then
+            echo "  [FAIL] $name (--emit-doc-json)"
+            sed 's/^/      /' "$OUT/err.txt"
+            FAIL=$((FAIL + 1))
+        elif ! python3 "$HERE/filecheck.py" "$t" "$json" >"$OUT/check.txt" 2>&1; then
+            echo "  [FAIL] $name"
+            sed 's/^/      /' "$OUT/check.txt"
+            FAIL=$((FAIL + 1))
+        else
+            echo "  [PASS] $name"
+            PASS=$((PASS + 1))
+        fi
+        continue
+    fi
     # '// SAFEC-ARGS: <flags>' adds compiler flags (e.g. --target <triple>).
     read -r -a args <<<"$(sed -n 's|^// SAFEC-ARGS: *||p' "$t" | head -1)"
     if ! "$SAFEC_BIN" "$t" -O2 --emit-llvm ${args[@]+"${args[@]}"} -o "$ll" >"$OUT/err.txt" 2>&1; then

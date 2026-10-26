@@ -934,6 +934,7 @@ void Parser::parseNamespaceDecl() {
     while (!atEnd() && !cur().is(TK::RBrace)) {
         auto decl = parseTopLevelDecl();
         if (!decl) continue;
+        if (decl->docNamespace.empty()) decl->docNamespace = qualified;
         if (decl->kind == DeclKind::Function) {
             static_cast<FunctionDecl &>(*decl).namespaceName = qualified;
         } else if (decl->kind == DeclKind::GlobalVar) {
@@ -1445,6 +1446,7 @@ std::unique_ptr<StructDecl> Parser::parseStructDecl(bool isUnion, bool consumeTr
             std::string fpName;
             if (tryParseCStyleFuncPtrDeclarator(fpType, fpName, fpType)) {
                 FieldDecl fd;
+                fd.loc   = toks_[savedPos].loc;
                 fd.index = fieldIdx++;
                 fd.type  = std::move(fpType);
                 fd.name  = std::move(fpName);
@@ -1483,6 +1485,7 @@ std::unique_ptr<StructDecl> Parser::parseStructDecl(bool isUnion, bool consumeTr
             {
                 MethodDecl md;
                 md.loc        = cur().loc;
+                md.startLoc   = toks_[savedPos].loc;
                 md.name       = memberName;
                 md.returnType = std::move(maybeType);
                 expect(TK::LParen, "expected '(' after operator name");
@@ -1512,6 +1515,7 @@ std::unique_ptr<StructDecl> Parser::parseStructDecl(bool isUnion, bool consumeTr
             consume(); // consume '('
             MethodDecl md;
             md.loc        = cur().loc;
+            md.startLoc   = toks_[savedPos].loc;
             md.name       = memberName;
             md.returnType = std::move(maybeType);
             if (cur().is(TK::KW_void) && peek().is(TK::RParen)) consume();
@@ -1541,6 +1545,7 @@ std::unique_ptr<StructDecl> Parser::parseStructDecl(bool isUnion, bool consumeTr
                 diag_.error(cur().loc, "'generic<...>' applies to methods only, not struct fields");
             // Field declaration
             FieldDecl fd;
+            fd.loc   = toks_[savedPos].loc;
             fd.index = fieldIdx++;
             fd.type  = std::move(maybeType);
             fd.name  = memberName;
@@ -1607,6 +1612,7 @@ std::unique_ptr<TraitDecl> Parser::parseTraitDecl() {
         auto savedPos = pos_;
         MethodDecl md;
         md.loc        = cur().loc;
+        md.startLoc   = md.loc;
         md.returnType = parseType();
         if (!cur().is(TK::Ident)) {
             diag_.error(cur().loc, "expected method name in trait body");
@@ -1657,6 +1663,7 @@ std::unique_ptr<EnumDecl> Parser::parseEnumDecl() {
             diag_.error(cur().loc, "expected enumerator name");
             consume(); continue;
         }
+        auto eLoc = cur().loc;
         consume();
         std::optional<int64_t> val;
         if (match(TK::Eq)) {
@@ -1670,6 +1677,7 @@ std::unique_ptr<EnumDecl> Parser::parseEnumDecl() {
             val = nextVal++;
         }
         ed->enumerators.push_back({std::move(eName), val});
+        ed->enumeratorLocs.push_back(eLoc);
         if (!match(TK::Comma)) break;
     }
     expect(TK::RBrace, "expected '}' closing enum");

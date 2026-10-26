@@ -1,4 +1,5 @@
 #pragma once
+#include "safec/Diagnostic.h"
 #include <string>
 #include <vector>
 #include <memory>
@@ -212,6 +213,9 @@ struct FieldDecl {
     bool        isAnonymous = false;
     // 'volatile T name;' — every load/store of this field is volatile.
     bool        isVolatile  = false;
+    // The field declaration's first token (tooling: --emit-doc-json). Not
+    // part of the type: equals() and Sema ignore it.
+    SourceLocation loc;
 };
 
 // ── Struct type ───────────────────────────────────────────────────────────────

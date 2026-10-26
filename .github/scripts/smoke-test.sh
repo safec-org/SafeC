@@ -699,6 +699,13 @@ if bash "$SAFEC_HOME/.github/scripts/package.sh" "$PRE/inst" "$SAFEC_BIN" "$SAFE
     PKG_OK=1
     PRE_STD="$(dirname "$(ls "$PRE"/inst/lib/*/std/core.a)")"
     pass "package.sh lays out an install with lib/$(basename "$(dirname "$PRE_STD")")/std/: $(ls "$PRE_STD" | grep -c '\.units$') sections ($(ls "$PRE_STD" | sed -n 's/\.units$//p' | tr '\n' ' '))"
+    if ls "$PRE"/inst/bin/safec-doc* >/dev/null 2>&1 && [[ -f "$PRE/inst/share/safec/doctool/theme/style.css" &&
+          -f "$PRE/inst/share/safec/doctool/src/main.sc" && -f "$PRE/inst/share/safec/doctool/theme/safec_dom.js" ]]; then
+        pass "package.sh ships safec-doc: bin/safec-doc, share/safec/doctool (sources, theme$([[ -f "$PRE/inst/share/safec/doctool/theme/doc.wasm" ]] && echo ', doc.wasm'))"
+    else
+        fail "package.sh: safec-doc missing from the install"
+        ls -R "$PRE/inst/bin" "$PRE/inst/share" 2>&1 | head -20
+    fi
 else
     fail "package.sh"
     cat /tmp/sg_pkg.txt
@@ -841,6 +848,181 @@ if command -v node >/dev/null 2>&1 && { [[ -x "$WASM_LD_PROG" ]] || command -v "
 else
     echo "  [SKIP] node or wasm-ld not available"
 fi
+
+# ── 5f. safeguard doc ────────────────────────────────────────────────────────
+# examples/doc_demo (a library with ///, //!, trailing and plain // doc
+# comments): its API reference — the pages, the search index, the links
+# into std's reference — and every link in it resolving (safec-doc check,
+# which 'safeguard doc' runs too). Then std's own reference. safec-doc is
+# built from safeguard/doctool on first use (cached under SAFEGUARD_CACHE).
+# With node + Playwright (and its Chromium), the pages are loaded in a
+# headless browser too: the wasm client starts, search finds and navigates,
+# the theme toggles.
+section "safeguard doc"
+DOCW="$(mktemp -d)"
+export SAFEGUARD_CACHE="$DOCW/cache"
+cp -R "$SAFEC_HOME/examples/doc_demo" "$DOCW/geo"
+G="$DOCW/geo/build/doc"
+if sg_in "$DOCW/geo" /tmp/sg_doc.txt doc; then
+    DOC_OK=1
+    for f in index.html all.html geo/index.html geo/point/index.html geo/point/struct.Point.html \
+             geo/point/enum.ShapeKind.html geo/point/fn.shape_area.html geo/point/macro.GEO_MAX_COORD.html \
+             geo/point/trait.HasArea.html src/include/geo/point.h.html search-index.json assets/style.css assets/doc.js; do
+        [[ -f "$G/$f" ]] || { DOC_OK=0; echo "    missing $f"; }
+    done
+    grep -q '"p":"geo::Point"' "$G/search-index.json" || { DOC_OK=0; echo "    search index lacks geo::Point"; }
+    grep -q '"p":"geo::Point::norm2"' "$G/search-index.json" || { DOC_OK=0; echo "    search index lacks geo::Point::norm2"; }
+    grep -q 'id="method.norm2"' "$G/geo/point/struct.Point.html" || { DOC_OK=0; echo "    no #method.norm2 anchor"; }
+    grep -q 'href="#method.norm2"' "$G/geo/point/struct.Point.html" || { DOC_OK=0; echo "    intra-doc link [Point::norm2] not resolved"; }
+    grep -q 'api/collections/string/struct.String.html' "$G/geo/point/struct.Point.html" || { DOC_OK=0; echo "    no link into std's reference"; }
+    grep -q 'horizontal coordinate' "$G/geo/point/struct.Point.html" || { DOC_OK=0; echo "    trailing ///< field doc missing"; }
+    grep -q 'Points and vectors in the plane' "$G/geo/point/index.html" || { DOC_OK=0; echo "    //! module doc missing"; }
+    grep -q 'tok-kw' "$G/geo/point/fn.shape_area.html" || { DOC_OK=0; echo "    code example not highlighted"; }
+    grep -q 'href="enum.ShapeKind.html#variant.SHAPE_SQUARE"' "$G/geo/point/fn.shape_area.html" || { DOC_OK=0; echo "    [SHAPE_SQUARE] not linked"; }
+    grep -q 'Start with <a href="geo/point/struct.Point.html">' "$G/index.html" || { DOC_OK=0; echo "    README intra-doc link not resolved"; }
+    DOC_TOOL="$(find "$SAFEGUARD_CACHE" -type f \( -name safec-doc -o -name safec-doc.exe \) -path '*/build/*' | head -1)"
+    if [[ -n "$DOC_TOOL" ]] && "$DOC_TOOL" check "$G" >/tmp/sg_doc_check.txt 2>&1; then :; else DOC_OK=0; cat /tmp/sg_doc_check.txt 2>/dev/null; fi
+    if [[ "$DOC_OK" -eq 1 ]]; then
+        pass "safeguard doc: examples/doc_demo reference ($(ls "$G"/geo/point | wc -l | tr -d ' ') item pages; $(tail -1 /tmp/sg_doc_check.txt))"
+    else
+        fail "safeguard doc output"
+        cat /tmp/sg_doc.txt
+    fi
+else
+    fail "safeguard doc"
+    cat /tmp/sg_doc.txt
+fi
+# A broken intra-page anchor is caught by the link checker.
+if [[ -n "${DOC_TOOL:-}" ]]; then
+    cp -R "$G" "$DOCW/broken"
+    printf '<!doctype html><a href="geo/point/struct.Point.html#method.nope">x</a>\n' > "$DOCW/broken/bad.html"
+    if "$DOC_TOOL" check "$DOCW/broken" >/tmp/sg_doc_bad.txt 2>&1; then
+        fail "safec-doc check passed a dead anchor"
+    elif grep -q "dead anchor: bad.html" /tmp/sg_doc_bad.txt; then
+        pass "safec-doc check reports a dead anchor"
+    else
+        fail "safec-doc check output"; cat /tmp/sg_doc_bad.txt
+    fi
+fi
+mkdir -p "$DOCW/stdref"
+if sg_in "$DOCW/stdref" /tmp/sg_doc_std.txt doc --std &&
+   [[ -f "$DOCW/stdref/build/doc/collections/vec/struct.Vec.html" && -f "$DOCW/stdref/build/doc/collections/string/struct.String.html" ]] &&
+   grep -q 'id="method.push"' "$DOCW/stdref/build/doc/collections/vec/struct.Vec.html"; then
+    pass "safeguard doc --std: $(grep 'safec-doc: [0-9]* items' /tmp/sg_doc_std.txt | sed 's/ ->.*//'); $(grep 'checked' /tmp/sg_doc_std.txt)"
+else
+    fail "safeguard doc --std"
+    tail -20 /tmp/sg_doc_std.txt
+fi
+# Headless Chromium (optional: node and Playwright with its browser).
+if command -v node >/dev/null 2>&1 && [[ -n "${DOC_TOOL:-}" ]] &&
+   node -e "require(require('child_process').execSync('npm root -g').toString().trim()+'/playwright')" >/dev/null 2>&1; then
+    "$DOC_TOOL" serve "$G" --port 18765 >/tmp/sg_doc_serve.txt 2>&1 &
+    SERVE_PID=$!
+    sleep 1
+    SHOTS="${DOC_SCREENSHOTS:-$DOCW/shots}"
+    if node "$SAFEC_HOME/safeguard/doctool/tests/browser_check.mjs" http://localhost:18765/ "$SHOTS" Point geo::Point \
+            index.html geo/point/struct.Point.html geo/point/fn.shape_area.html src/include/geo/point.h.html >/tmp/sg_doc_browser.txt 2>&1; then
+        pass "headless Chromium: $(grep -c PASS /tmp/sg_doc_browser.txt) checks (pages load, wasm search, navigation, theme); screenshots in $SHOTS"
+    else
+        fail "headless Chromium check of the reference"
+        cat /tmp/sg_doc_browser.txt
+    fi
+    kill "$SERVE_PID" 2>/dev/null
+else
+    echo "  [SKIP] headless browser check (node / Playwright not available)"
+fi
+
+# ── 5g. safeguard publish ────────────────────────────────────────────────────
+# A dry run changes nothing; --write lays out .gitignore, LICENSE and CI for
+# each provider (the YAML must parse; actionlint checks the Actions ones
+# when installed); the version/tag logic runs in a temporary git repository
+# pushed to a bare one.
+section "safeguard publish"
+PUBW="$DOCW/publish"
+mkdir -p "$PUBW"
+cp -R "$SAFEC_HOME/examples/doc_demo" "$PUBW/dry"
+if sg_in "$PUBW/dry" /tmp/sg_pub_dry.txt publish &&
+   grep -q "\[dry run\] write  .github/workflows/release.yml" /tmp/sg_pub_dry.txt &&
+   [[ ! -e "$PUBW/dry/.gitignore" && ! -e "$PUBW/dry/.github" && ! -e "$PUBW/dry/.git" ]]; then
+    pass "safeguard publish (dry run) plans the changes and writes nothing"
+else
+    fail "safeguard publish dry run"
+    cat /tmp/sg_pub_dry.txt
+fi
+yaml_ok() {   # <file>: parses as YAML (when python3 has PyYAML)
+    python3 -c "import yaml" 2>/dev/null || return 0
+    python3 -c "import sys, yaml; yaml.safe_load(open(sys.argv[1]))" "$1"
+}
+for ci in github gitlab gitea forgejo; do
+    cp -R "$SAFEC_HOME/examples/doc_demo" "$PUBW/$ci"
+    case "$ci" in
+        github)  FILES=".github/workflows/ci.yml .github/workflows/release.yml" ;;
+        gitlab)  FILES=".gitlab-ci.yml" ;;
+        gitea)   FILES=".gitea/workflows/ci.yml .gitea/workflows/release.yml .ci/upload-release.sh" ;;
+        forgejo) FILES=".forgejo/workflows/ci.yml .forgejo/workflows/release.yml .ci/upload-release.sh" ;;
+    esac
+    PUB_OK=1
+    if sg_in "$PUBW/$ci" "/tmp/sg_pub_$ci.txt" publish --write "--ci=$ci"; then
+        for f in $FILES .ci/install-safec.sh .ci/package.sh .gitignore LICENSE; do
+            [[ -f "$PUBW/$ci/$f" ]] || { PUB_OK=0; echo "    missing $f"; continue; }
+            case "$f" in
+                *.yml) yaml_ok "$PUBW/$ci/$f" || { PUB_OK=0; echo "    $f is not valid YAML"; } ;;
+                *.sh)  bash -n "$PUBW/$ci/$f" || { PUB_OK=0; echo "    $f has a shell syntax error"; } ;;
+            esac
+        done
+        if command -v actionlint >/dev/null 2>&1 && [[ "$ci" != gitlab ]]; then
+            printf 'self-hosted-runner:\n  labels: [docker, macos, windows]\n' > "$PUBW/actionlint.yaml"
+            (cd "$PUBW/$ci" && actionlint -config-file "$PUBW/actionlint.yaml" $(echo $FILES | tr ' ' '\n' | grep '\.yml$')) \
+                >"/tmp/sg_actionlint_$ci.txt" 2>&1 || { PUB_OK=0; cat "/tmp/sg_actionlint_$ci.txt"; }
+        fi
+        [[ -d "$PUBW/$ci/.git" ]] || { PUB_OK=0; echo "    no git repository"; }
+    else
+        PUB_OK=0
+    fi
+    if [[ "$PUB_OK" -eq 1 ]]; then
+        pass "safeguard publish --write --ci=$ci: $FILES$(command -v actionlint >/dev/null 2>&1 && [[ $ci != gitlab ]] && echo ' (actionlint clean)')"
+    else
+        fail "safeguard publish --ci=$ci"
+        cat "/tmp/sg_pub_$ci.txt"
+    fi
+done
+GI="$PUBW/github/.gitignore"
+if grep -qx 'build/' "$GI" && grep -qx 'deps/' "$GI" && grep -qx '.DS_Store' "$GI" && grep -qx '.vscode/' "$GI" &&
+   grep -qx '\*.swp' "$GI" && grep -qx 'Thumbs.db' "$GI"; then
+    pass ".gitignore: build/ deps/ caches, editor and OS files"
+else
+    fail ".gitignore content"
+    cat "$GI"
+fi
+# Version bump, tag and push in a temporary repository.
+R="$PUBW/github"
+git -C "$R" init -q -b main 2>/dev/null
+git -C "$R" config user.email ci@example.com
+git -C "$R" config user.name CI
+git -C "$R" add -A && git -C "$R" commit -qm "geo" &&
+git init -q --bare "$PUBW/remote.git" && git -C "$R" remote add origin "$PUBW/remote.git"
+TAG_OK=1
+sg_in "$R" /tmp/sg_pub_tag.txt publish --tag --bump=minor || TAG_OK=0
+grep -q '^version *= *"0.4.0"' "$R/Package.toml" || { TAG_OK=0; echo "    version not bumped to 0.4.0"; }
+[[ "$(git -C "$R" tag --list v0.4.0)" == v0.4.0 ]] || { TAG_OK=0; echo "    no tag v0.4.0"; }
+grep -q "test_point ... ok" /tmp/sg_pub_tag.txt || { TAG_OK=0; echo "    tests did not run before tagging"; }
+# An existing tag, an older version, and uncommitted changes are refused.
+if sg_in "$R" /tmp/sg_pub_tag2.txt publish --tag; then TAG_OK=0; echo "    re-tagging v0.4.0 was not refused"; fi
+if sg_in "$R" /tmp/sg_pub_tag3.txt publish --write --bump=0.3.9; then TAG_OK=0; echo "    a version downgrade was not refused"; fi
+echo "// change" >> "$R/src/point.sc"
+if sg_in "$R" /tmp/sg_pub_tag4.txt publish --tag --bump=patch; then TAG_OK=0; echo "    tagging with uncommitted changes was not refused"; fi
+git -C "$R" checkout -q -- src/point.sc
+sg_in "$R" /tmp/sg_pub_push.txt publish --tag --bump=patch --push --no-verify || TAG_OK=0
+[[ "$(git -C "$PUBW/remote.git" tag --list v0.4.1)" == v0.4.1 ]] || { TAG_OK=0; echo "    v0.4.1 not pushed"; }
+[[ "$(git -C "$PUBW/remote.git" rev-parse main)" == "$(git -C "$R" rev-parse main)" ]] || { TAG_OK=0; echo "    main not pushed"; }
+if [[ "$TAG_OK" -eq 1 ]]; then
+    pass "publish --bump/--tag/--push: 0.3.1 -> 0.4.0 -> 0.4.1, tags v0.4.0 v0.4.1, tests before tagging, refusals, pushed to a bare remote"
+else
+    fail "publish version / tag / push"
+    cat /tmp/sg_pub_tag.txt /tmp/sg_pub_push.txt 2>/dev/null
+fi
+unset SAFEGUARD_CACHE
+rm -rf "$DOCW"
 
 # ── 6. sc-lsp wire-protocol smoke test ────────────────────────────────────────
 section "sc-lsp initialize handshake"
