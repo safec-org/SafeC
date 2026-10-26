@@ -66,7 +66,7 @@ struct Router Router::new() {
     r.cors_headers = String::new();
     r.body_limit = 0UL;
     r.gzip_min = 0UL;
-    unsafe { r.state = (void*)0; }
+    r.state = null;
     return r;
 }
 
@@ -215,7 +215,7 @@ static struct HttpResponse router_final_(struct Router* rp, &HttpRequest req, &H
         probe.params = Vec::new();
         probe.route_index = -1;
         probe.start_ns = 0LL;
-        unsafe { probe.router_ = (void*)rp; }
+        unsafe { probe.router_ = (?&Erased)rp; }
         m = router_match_(rr, req, &probe, &allow);
         http_route_params_clear(&probe.params);
         probe.params.free();
@@ -244,12 +244,12 @@ struct HttpResponse Router::dispatch(&HttpRequest req, &HttpConn conn) {
     ctx.params = Vec::new();
     ctx.route_index = -1;
     ctx.start_ns = time_mono_ns();
-    unsafe { ctx.router_ = (void*)self; }
+    unsafe { ctx.router_ = (?&Erased)self; }
     struct String allow = String::new();
     router_match_(self, req, &ctx, &allow);
     allow.free();
     struct HttpNext next;
-    unsafe { next.router_ = (void*)self; }
+    unsafe { next.router_ = (?&Erased)self; }
     next.index_ = 0;
     struct HttpResponse resp = next.run(req, &ctx);
     http_route_params_clear(&ctx.params);
@@ -257,21 +257,21 @@ struct HttpResponse Router::dispatch(&HttpRequest req, &HttpConn conn) {
     return resp;
 }
 
-static struct HttpResponse router_server_dispatch_(void* ctx, &HttpRequest req, &HttpConn conn) {
+static struct HttpResponse router_server_dispatch_(?&Erased ctx, &HttpRequest req, &HttpConn conn) {
     struct Router* r;
     unsafe { r = (struct Router*)ctx; }
     unsafe { return r->dispatch(req, conn); }
 }
 
 int Router::serve(&HttpServer srv) {
-    void* me;
-    unsafe { me = (void*)self; }
+    ?&Erased me;
+    unsafe { me = (?&Erased)self; }
     return srv.serve_raw_(router_server_dispatch_, me);
 }
 
 int Router::start(&HttpServer srv) {
-    void* me;
-    unsafe { me = (void*)self; }
+    ?&Erased me;
+    unsafe { me = (?&Erased)self; }
     return srv.start_raw_(router_server_dispatch_, me);
 }
 
@@ -306,7 +306,7 @@ struct HttpConn http_conn_none() {
     c.request_index = 0UL;
     c.keep_alive = 0;
     c.detached = 0;
-    unsafe { c.reader_ = (void*)0; }
+    c.reader_ = null;
     return c;
 }
 

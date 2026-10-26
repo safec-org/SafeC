@@ -28,6 +28,7 @@
 // original one-request-per-connection behavior; HttpServer is the
 // configurable server, and http_serve_reactor the non-blocking one.
 #pragma once
+#include <std/erased.h>
 #include <std/collections/string.h>
 #include <std/encoding/url.h>
 #include <std/http/headers.h>
@@ -340,7 +341,7 @@ struct HttpConn {
     int            keep_alive;     // the server will keep the connection open after
                                    // this response; set to 0 to close it instead
     int            detached;
-    void*          reader_;        // internal: the connection's BufReader<TcpStream>
+    ?&Erased       reader_;        // internal: the connection's BufReader<TcpStream>
 
     // Takes over the (blocking) socket. Bytes the client already sent past
     // this request (pipelined data, a WebSocket frame right behind the
@@ -351,8 +352,9 @@ struct HttpConn {
 };
 
 // Dispatch entry the server loops call (std/http/router.h's Router uses
-// it); a plain HttpHandler is adapted to it. Internal: ctx is the router.
-typedef fn struct HttpResponse(void* ctx, &HttpRequest req, &HttpConn conn) HttpDispatchFn_;
+// it); a plain HttpHandler is adapted to it. Internal: ctx is the router
+// (erased, see std/erased.h).
+typedef fn struct HttpResponse(?&Erased ctx, &HttpRequest req, &HttpConn conn) HttpDispatchFn_;
 
 // A bound, configurable blocking server: threads × one connection at a
 // time each, with keep-alive. bind() opens the socket; serve() (blocking)
@@ -364,7 +366,7 @@ typedef fn struct HttpResponse(void* ctx, &HttpRequest req, &HttpConn conn) Http
 //   srv.stop();                      // in-flight requests finish, then the workers exit
 struct HttpServer {
     unsigned short port;                // the bound port (useful with config port 0)
-    void*          shared_;             // internal server state
+    ?&Erased       shared_;             // internal server state
 
     static struct HttpServer bind(const &HttpServerConfig cfg, ?&int ok);
     // Runs the worker threads and blocks until stop(). 0 after a stop, -1
@@ -372,8 +374,8 @@ struct HttpServer {
     int  serve(HttpHandler handler);
     // serve() on a background thread; returns 0 once the workers run.
     int  start(HttpHandler handler);
-    int  serve_raw_(HttpDispatchFn_ dispatch, void* ctx);
-    int  start_raw_(HttpDispatchFn_ dispatch, void* ctx);
+    int  serve_raw_(HttpDispatchFn_ dispatch, ?&Erased ctx);
+    int  start_raw_(HttpDispatchFn_ dispatch, ?&Erased ctx);
     // Stops accepting, wakes idle keep-alive connections, waits for the
     // workers to finish their current request, and closes the listening
     // socket. Safe to call from a handler's thread too (then it doesn't

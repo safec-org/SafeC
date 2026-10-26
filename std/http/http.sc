@@ -1655,7 +1655,7 @@ static void http_serve_conn_(struct HttpServerShared_* sh, int fd) {
     sock_addr_of_(fd, 1, &conn.peer_addr, &conn.peer_port);
     struct TcpStream s = TcpStream::from_fd(fd);
     struct BufReader<TcpStream> in = BufReader::over(&s);
-    unsafe { conn.reader_ = (void*)&in; }
+    unsafe { conn.reader_ = (?&Erased)&in; }
     if (cfg.io_timeout_ms > 0) { sock_set_io_timeout(fd, cfg.io_timeout_ms); }
     while (1) {
         if (conn.request_index > 0UL && in.buffered() == 0UL) {
@@ -1756,7 +1756,7 @@ static ?&HttpWorkerArg_ http_server_worker_(?&HttpWorkerArg_ argPtr) {
 struct HttpServer HttpServer::bind(const &HttpServerConfig cfg, ?&int ok) {
     struct HttpServer srv;
     srv.port = (unsigned short)0;
-    unsafe { srv.shared_ = (void*)0; }
+    srv.shared_ = null;
     int good = 1;
     if (cfg.threads < 1) { good = 0; }
     int fd = -1;
@@ -1787,7 +1787,7 @@ struct HttpServer HttpServer::bind(const &HttpServerConfig cfg, ?&int ok) {
                     checked_mul_size((unsigned long)cfg.threads, sizeof(unsigned long long)));
                 int i = 0;
                 while (i < cfg.threads) { sh->activeFds[i] = -1; i = i + 1; }
-                srv.shared_ = (void*)sh;
+                srv.shared_ = (?&Erased)sh;
             }
         }
         if (!good) { unsafe { sock_close_(fd); } }
@@ -1796,9 +1796,9 @@ struct HttpServer HttpServer::bind(const &HttpServerConfig cfg, ?&int ok) {
     return srv;
 }
 
-static struct HttpResponse http_plain_dispatch_(void* ctx, &HttpRequest req, &HttpConn conn) {
+static struct HttpResponse http_plain_dispatch_(?&Erased ctx, &HttpRequest req, &HttpConn conn) {
     HttpHandler h;
-    unsafe { h = (HttpHandler)ctx; }
+    unsafe { h = (HttpHandler)(void*)ctx; }
     return h(req);
 }
 
@@ -1845,7 +1845,7 @@ static int http_server_run_(struct HttpServerShared_* sh) {
     return failed ? -1 : 0;
 }
 
-int HttpServer::serve_raw_(HttpDispatchFn_ dispatch, void* ctx) {
+int HttpServer::serve_raw_(HttpDispatchFn_ dispatch, ?&Erased ctx) {
     struct HttpServerShared_* sh;
     unsafe { sh = (struct HttpServerShared_*)self.shared_; }
     if (sh == (struct HttpServerShared_*)0) { return -1; }
@@ -1861,8 +1861,8 @@ int HttpServer::serve_raw_(HttpDispatchFn_ dispatch, void* ctx) {
 }
 
 int HttpServer::serve(HttpHandler handler) {
-    void* ctx;
-    unsafe { ctx = (void*)handler; }
+    ?&Erased ctx;
+    unsafe { ctx = (?&Erased)handler; }
     return self.serve_raw_(http_plain_dispatch_, ctx);
 }
 
@@ -1873,7 +1873,7 @@ static ?&HttpServerShared_ http_server_bg_(?&HttpServerShared_ arg) {
     return null;
 }
 
-int HttpServer::start_raw_(HttpDispatchFn_ dispatch, void* ctx) {
+int HttpServer::start_raw_(HttpDispatchFn_ dispatch, ?&Erased ctx) {
     struct HttpServerShared_* sh;
     unsafe { sh = (struct HttpServerShared_*)self.shared_; }
     if (sh == (struct HttpServerShared_*)0) { return -1; }
@@ -1897,8 +1897,8 @@ int HttpServer::start_raw_(HttpDispatchFn_ dispatch, void* ctx) {
 }
 
 int HttpServer::start(HttpHandler handler) {
-    void* ctx;
-    unsafe { ctx = (void*)handler; }
+    ?&Erased ctx;
+    unsafe { ctx = (?&Erased)handler; }
     return self.start_raw_(http_plain_dispatch_, ctx);
 }
 
