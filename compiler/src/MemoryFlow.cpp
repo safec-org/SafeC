@@ -1765,6 +1765,32 @@ static bool isNoReturnCallee(const FunctionDecl *fd) {
     return false;
 }
 
+// See evalCall: does a method's reference result default to borrowing
+// from its receiver (p0)?
+static bool elidesToSelf(const FunctionDecl &fd, const Summary &s) {
+    TypePtr rt = fd.returnType;
+    while (rt && rt->kind == TypeKind::Optional) rt = static_cast<OptionalType &>(*rt).inner;
+    if (!rt || rt->kind != TypeKind::Reference) return false;
+    auto &ref = static_cast<ReferenceType &>(*rt);
+    if (ref.region != Region::Extern && ref.region != Region::Unknown) return false;
+    if (ref.base && ref.base->kind == TypeKind::Function) return false;
+    for (size_t i = 1; i < fd.params.size(); ++i) {
+        TypePtr pt = fd.params[i].type;
+        while (pt && pt->kind == TypeKind::Optional) pt = static_cast<OptionalType &>(*pt).inner;
+        if (pt && (pt->kind == TypeKind::Reference || pt->kind == TypeKind::Pointer || pt->kind == TypeKind::Slice))
+            return false;
+    }
+    bool any = false;
+    auto fresh = [&](const std::vector<Term> &ts) {
+        for (auto &t : ts) { if (t.kind != 'F') return false; any = true; }
+        return true;
+    };
+    for (auto &kv : s.ret.vals) if (!fresh(kv.second)) return false;
+    if (!fresh(s.ret.any)) return false;
+    if (!s.ret.lazy.empty()) return false;
+    return any;
+}
+
 EV Walker::evalCall(CallExpr &e) {
     callOwners_.clear();
     EV r = evalCallInner(e);
@@ -1792,6 +1818,13 @@ EV Walker::evalCall(CallExpr &e) {
             for (auto &kv : s->ret.lazy)
                 for (auto &ep : kv.second)
                     if (ep.compare(0, 2, "p0") == 0) intoSelf = true;
+            // Elision, as in Rust: a method returning a plain (region-less)
+            // reference whose origin the summary can't name (it came out
+            // of raw memory: a container's buffer) and taking no other
+            // reference borrows from its receiver. '&heap'/'&static'
+            // results claim their own lifetime and are left alone.
+            if (!intoSelf && callee->isMethod && !callee->isStaticMethod && elidesToSelf(*callee, *s))
+                intoSelf = true;
         }
     }
     if (intoSelf) {

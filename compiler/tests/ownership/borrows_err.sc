@@ -34,4 +34,16 @@ int fine() {
     return x;
 }
 
+// A container over raw memory: the summary can't see where at() points,
+// so a plain '&T' result of a method with no other reference parameter
+// borrows from the receiver (lifetime elision).
+struct Raw1 { int *buf; void drop(); &int at(int i); };
+void Raw1::drop() { }
+&int Raw1::at(int i) { unsafe { return (&int)&self.buf[i]; } }
+int dangling_raw(struct Raw1 r) {
+    &int p = r.at(0);
+    r.drop();
+    return *p;                            // EXPECT-ERROR: use of a reference borrowed from 'r' after 'r' was dropped
+}
+
 int main() { return fine(); }
