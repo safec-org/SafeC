@@ -3343,9 +3343,23 @@ llvm::Value *CodeGen::genCall(CallExpr &e, FnEnv &env) {
                                              llvm::MaybeAlign(), parseOrdering(2));
         }
         if (ident.name == "atomic_cas" && e.args.size() >= 3) {
+            // Sema checked both values convert to the pointee type T;
+            // cmpxchg needs them as exactly T, so a narrower 'expected'
+            // or literal operates on the whole location, not part of it.
             auto *ptr      = genExpr(*e.args[0], env);
             auto *expected = genExpr(*e.args[1], env);
             auto *desired  = genExpr(*e.args[2], env);
+            TypePtr ptrTy  = e.args[0]->type;
+            TypePtr elemTy;
+            if (ptrTy && ptrTy->kind == TypeKind::Pointer)
+                elemTy = static_cast<PointerType &>(*ptrTy).base;
+            else if (ptrTy && ptrTy->kind == TypeKind::Reference)
+                elemTy = static_cast<ReferenceType &>(*ptrTy).base;
+            if (elemTy) {
+                auto *valTy = lowerType(elemTy);
+                expected = coerceScalar(expected, valTy, e.args[1]->type);
+                desired  = coerceScalar(desired, valTy, e.args[2]->type);
+            }
             auto ord = parseOrdering(3);
             auto *cmpxchg = builder_.CreateAtomicCmpXchg(
                 ptr, expected, desired, llvm::MaybeAlign(), ord, ord);
@@ -3589,7 +3603,16 @@ llvm::Value *CodeGen::genCall(CallExpr &e, FnEnv &env) {
             // ends up pointing at the stack slot holding the pointer rather
             // than at the object, and every field read is garbage.
             selfPtr = genExpr(*e.methodBase, env);
-        } else if (e.methodBase->isLValue) {
+        } else if (e.methodBase->isLValue ||
+                   e.methodBase->kind == ExprKind::Member ||
+                   e.methodBase->kind == ExprKind::Arrow ||
+                   e.methodBase->kind == ExprKind::Subscript) {
+            // A member/element chain is addressed even when it isn't
+            // assignable ('v.at(i).field.push(x)' with 'at' returning a
+            // const reference): genMember GEPs into the referenced storage,
+            // so the method mutates the real object. Only an aggregate
+            // rvalue somewhere in the chain ('make().field') is spilled to a
+            // temporary, by genLValue's default case.
             selfPtr = genLValue(*e.methodBase, env);
         } else {
             // Base is a value expression — allocate temp storage
