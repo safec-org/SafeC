@@ -64,7 +64,7 @@ struct Poll<int> Handler::poll(&Context cx) {
     while (ends_header(&self.buf[0], self.have) == 0 && self.have < 512UL) {
         self.rd = timeout(self.c.read(self.buf[self.have..512]), 1000LL);
         AWAIT_INTO(1, self.n, self.rd);
-        if (self.n.default(0LL) <= 0LL) { self.c.close(); ASYNC_RETURN(0); }   // timed out, EOF or error
+        if (self.n.default(0LL) <= 0LL) { std::replace(&self.c, AsyncTcpStream::from_fd(-1)).close(); ASYNC_RETURN(0); }   // timed out, EOF or error
         self.have = self.have + (unsigned long)self.n.default(0LL);
     }
     {
@@ -78,7 +78,7 @@ struct Poll<int> Handler::poll(&Context cx) {
     }
     self.wr = self.c.write_all(self.buf[0..self.have]);
     AWAIT_INTO(2, self.ok, self.wr);
-    self.c.close();
+    std::replace(&self.c, AsyncTcpStream::from_fd(-1)).close();   // drop() closes nothing again
     g_served = g_served + 1;
     ASYNC_RETURN(self.ok);
     ASYNC_END;
@@ -131,14 +131,15 @@ struct Poll<int> Server::poll(&Context cx) {
             h.st = ASYNC_INIT;
             h.id = self.accepted + 1;
             h.c = std::replace(&self.ev.left, AsyncTcpStream::from_fd(-1));   // the connection moves to its handler
-            if (self.busy[self.slot] != 0) self.handlers[self.slot].drop();     // the finished one it replaces
-            self.handlers[self.slot] = AsyncTask::new(h);
+            struct AsyncTask<struct Handler, int> t = AsyncTask::new(h);
+            if (self.busy[self.slot] != 0) std::replace(&self.handlers[self.slot], t).drop();   // the finished one it replaces
+            else self.handlers[self.slot] = t;
             self.busy[self.slot] = 1;
             drop(async_spawn(cx, &self.handlers[self.slot]));                  // detached: busy[] tracks it
         }
         self.accepted = self.accepted + 1;
     }
-    self.l.close();
+    unsafe { self.l.close(); }   // early, in place: drop() closes nothing again
     ASYNC_RETURN(self.accepted);
     ASYNC_END;
 }
@@ -190,7 +191,7 @@ struct Poll<int> Client::poll(&Context cx) {
         if (self.n <= 0LL) break;                               // HTTP/1.0: closed at the end
         self.have = self.have + (unsigned long)self.n;
     }
-    self.s.close();
+    std::replace(&self.s, AsyncTcpStream::from_fd(-1)).close();   // drop() closes nothing again
     // "HTTP/1.0 200"
     if (self.have < 12UL || self.buf[9] != (unsigned char)50 || self.buf[10] != (unsigned char)48 ||
         self.buf[11] != (unsigned char)48) ASYNC_RETURN(0);
