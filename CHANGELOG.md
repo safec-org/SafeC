@@ -7,7 +7,7 @@ release tags.
 
 ## [Unreleased]
 
-### Changed — no `void*` anywhere in std (outside std/ml, std/gui, the CUDA/ROCm FFTs)
+### Changed — no `void*` anywhere in std
 
 - **The raw memory layer is bytes:** `alloc_raw_`, `dealloc_raw_`,
   `realloc_buf_raw_`, `safe_memcpy_raw_` and the other `std/mem.h` `_raw_`
@@ -36,8 +36,8 @@ release tags.
   runtime (`__safec_chan_*`) takes a `SafecChan_*` and its 8-byte slot, and
   `__safec_thread_create` the task `fn` and its `?&Erased` argument.
 - `tests/std_modules/api_lint.py` fails on any `void*` / `&void` (any
-  region) in std's headers and sources, FFI externs included, outside a
-  temporary exemption list for std/ml, std/gui and the CUDA/ROCm FFTs.
+  region) in std's headers and sources, FFI externs included, with no
+  exemptions (std/ml, std/gui and the CUDA/ROCm FFTs included, below).
 
 ### Changed — no `void*` left in std/gui
 
@@ -50,6 +50,22 @@ release tags.
   table, one typed `objc_msgSend` cast per call shape, typed dlopen()/dlsym()
   lookups and byte pointers for pixel and property data; the portable core
   uses `safe_memset_obj` / `safe_memcpy` and byte-pointer identity compares.
+
+### Changed — no `void*` left in std/ml
+
+- **std/ml** (and std/dsp's `fft_cuda` / `fft_rocm`) has no `void*` at all:
+  a tensor's `gradFn` is a `fn void(&DenseTensor<float>)` taking the node
+  through its float32 layout (shared by every element type), the coherence
+  internals take that `FloatTensor*`, and the GPU bindings (CUDA, NVRTC,
+  cuBLAS(Lt), cuDNN, cuFFT, HIP, hiprtc, rocBLAS, MIOpen, hipFFT, Metal
+  through the Objective-C runtime, Vulkan, WebGPU) declare each handle kind
+  as its own opaque struct (`CuEvent_`, `CudnnTensorDesc_`, `HipModule_`,
+  `ObjcSel_`, `VkDevice_`, `WGPUBuffer_`, ...; the shared declarations in the
+  internal `cuda_ffi.h` / `rocm_ffi.h` / `mps_ffi.h`), device memory as
+  `CuDevPtr_` / `HipDevPtr_`, kernel arguments as `CuKernelArg_` /
+  `HipKernelArg_`, pNext / nextInChain chains as `VkNext_` /
+  `WGPUChainedStruct`, and host buffers as `unsigned char*`; cuDNN's SDPA
+  entry points are looked up as typed functions.
 
 ### Changed — no `void*` left in std/audio; fewer in std's internals
 
@@ -70,19 +86,6 @@ release tags.
   `sys_bsearch` / `sys_atexit`, the HTTP server's handler context and the
   fs drivers use typed `fn` / `?&Erased` instead of `void*`;
   `dealloc_raw_((void*)p)` is the typed `dealloc(p)` throughout std.
-- **std/ml** (and std/dsp's `fft_cuda` / `fft_rocm`) has no `void*` either:
-  a tensor's `gradFn` is a `fn void(&DenseTensor<float>)` taking the node
-  through its float32 layout (shared by every element type), the coherence
-  internals take that `FloatTensor*`, and the GPU bindings (CUDA, NVRTC,
-  cuBLAS(Lt), cuDNN, cuFFT, HIP, hiprtc, rocBLAS, MIOpen, hipFFT, Metal
-  through the Objective-C runtime, Vulkan, WebGPU) declare each handle kind
-  as its own opaque struct (`CuEvent_`, `CudnnTensorDesc_`, `HipModule_`,
-  `ObjcSel_`, `VkDevice_`, `WGPUBuffer_`, ...; the shared declarations in the
-  internal `cuda_ffi.h` / `rocm_ffi.h` / `mps_ffi.h`), device memory as
-  `CuDevPtr_` / `HipDevPtr_`, kernel arguments as `CuKernelArg_` /
-  `HipKernelArg_`, pNext / nextInChain chains as `VkNext_` /
-  `WGPUChainedStruct`, and host buffers as `unsigned char*`; cuDNN's SDPA
-  entry points are looked up as typed functions.
 
 ### Changed — std's public API has no `void*` and no pointer + length pairs
 

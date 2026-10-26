@@ -220,7 +220,7 @@ static struct GuiWin32Window* __gui_win32_win(&GuiWindowState st) {
     unsafe { return (struct GuiWin32Window*)st.native; }
 }
 
-// UTF-8 to a NUL-terminated UTF-16 heap buffer (free with dealloc_raw_).
+// UTF-8 to a NUL-terminated UTF-16 heap buffer (free with dealloc).
 static unsigned short* __gui_win32_wide(const &char s) {
     unsafe {
         unsigned long n = 0UL;

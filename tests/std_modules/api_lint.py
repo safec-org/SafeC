@@ -25,8 +25,8 @@ Separately, 'void*' -- and '&void' in any spelling ('?&void', '&heap void',
 every header and every .sc file, FFI externs and internal helpers included,
 is checked (comments and strings aside). Untyped memory is bytes
 ('unsigned char*'), a foreign object is an opaque struct, a callback is a
-fn type and a type-erased context is '?&Erased' (std/erased.h). The paths in
-VOID_EXEMPT are still being converted and are skipped for now.
+fn type and a type-erased context is '?&Erased' (std/erased.h). There are
+no exemptions.
 
 Usage: api_lint.py [--list] [SAFEC_HOME]
   --list  print every finding, also in allowed places (the audit view)
@@ -54,15 +54,6 @@ INTERNAL = {
     "std/errno_compat.h",
     "std/stderr_compat.h",
 }
-# TEMPORARY: directories whose void* removal lands on other branches. Remove
-# each entry once that branch is merged; the list must end up empty.
-VOID_EXEMPT = (
-    "std/ml/",
-    "std/gui/",
-    "std/dsp/fft_cuda",
-    "std/dsp/fft_rocm",
-)
-
 INTERNAL_MARK = re.compile(r"^//\s*(Internal: included|.*\bstd-private\b|.*\bNot a public header\b|.*\bdo not edit\b)", re.I | re.M)
 
 POINTER = re.compile(r"(\bvoid|\w|>|\))\s*\*+(?!\s*\*)")
@@ -151,8 +142,6 @@ def void_uses():
                 continue
             path = os.path.join(dirpath, f)
             rel = os.path.relpath(path, home).replace(os.sep, "/")
-            if rel.startswith(VOID_EXEMPT):
-                continue
             src = open(path, encoding="utf-8", errors="replace").read()
             raw = src.split("\n")
             for k, text in enumerate(strip_keep_pp(src).split("\n")):
@@ -313,7 +302,7 @@ def main():
     if bad or voids:
         return 1
     print(f"api_lint: no raw pointers in public std declarations ({allowed} allowed: FFI externs, *_raw_, internal headers), "
-          f"no void* in std (outside {len(VOID_EXEMPT)} exempt paths)")
+          "no void* in std")
     return 0
 
 
