@@ -21,23 +21,36 @@
 // — see there): the C ABI the compiler's chan_* built-ins call, declared
 // here because Chan<T>'s generic methods are instantiated in the caller's
 // translation unit. Not API: use Chan<T>.
-extern void* __safec_chan_create(int requestedCap);
-extern bool  __safec_chan_send(void* chPtr, void* valPtr);
-extern bool  __safec_chan_recv(void* chPtr, void* outPtr);
-extern void  __safec_chan_close(void* chPtr);
+// A channel is a SafecChan_ (its fields are channel.sc's); a payload moves
+// through one 8-byte slot.
+struct SafecChan_ {
+    unsigned long long* buf;   // ring buffer, 'cap' 8-byte slots
+    int cap;
+    int head;                  // next slot to read
+    int tail;                  // next slot to write
+    int count;                 // pending items
+    int closed;                // 0 = open, 1 = closed
+    unsigned long long mtx;
+    unsigned long long not_empty; // signaled when count > 0, or on close
+    unsigned long long not_full;  // signaled when count < cap, or on close
+    unsafe impl Send + Sync;   // every field is reached under mtx
+};
+extern SafecChan_* __safec_chan_create(int requestedCap);
+extern bool  __safec_chan_send(SafecChan_* ch, unsigned long long* slot);
+extern bool  __safec_chan_recv(SafecChan_* ch, unsigned long long* slot);
+extern void  __safec_chan_close(SafecChan_* ch);
 
 // A T moves into / out of the runtime's 8-byte slot by memcpy: strict
 // aliasing forbids reading a T through the slot's integer type.
 #include <std/stddef.h>
-#include <std/erased.h>
-extern void* memcpy(void* dst, const void* src, size_t n);   // size_t: 32-bit on wasm32 / 32-bit targets
+extern unsigned char* memcpy(unsigned char* dst, const unsigned char* src, size_t n);   // size_t: 32-bit on wasm32 / 32-bit targets
 
 namespace std {
 
 generic<T: Send>
 struct Chan {
     unsafe impl Send + Sync;   // the runtime channel is locked inside
-    ?&Erased raw_;   // runtime handle from __safec_chan_create; null if creation failed
+    ?&SafecChan_ raw_;   // runtime channel from __safec_chan_create; null if creation failed
 
     static struct Chan<T> new(int cap);   // buffered channel of `cap` slots
 
@@ -59,7 +72,7 @@ struct Chan<T> Chan::new(int cap) {
     static_assert(sizeof(T) <= 8UL, "Chan<T>: T must fit in 8 bytes (channels carry fixed 8-byte payload slots) — send a ?&T to a larger value instead");
     struct Chan<T> c;
     c.raw_ = null;
-    unsafe { c.raw_ = (?&Erased)__safec_chan_create(cap); }
+    unsafe { c.raw_ = (?&SafecChan_)__safec_chan_create(cap); }
     return c;
 }
 
@@ -69,8 +82,8 @@ int Chan::send(T val) {
     unsigned long long slot = 0ULL;
     bool ok;
     unsafe {
-        memcpy((void*)&slot, (const void*)&val, (size_t)sizeof(T));
-        ok = __safec_chan_send((void*)self.raw_, (void*)&slot);
+        memcpy((unsigned char*)&slot, (const unsigned char*)&val, (size_t)sizeof(T));
+        ok = __safec_chan_send((SafecChan_*)self.raw_, &slot);
     }
     if (ok) { unsafe { forget(val); } }   // its bytes moved into the channel
     else drop(val);                       // closed: nobody will receive it
@@ -82,10 +95,10 @@ generic<T>
     if (self.raw_.is_null()) return null;
     unsigned long long slot = 0ULL;
     bool ok;
-    unsafe { ok = __safec_chan_recv((void*)self.raw_, (void*)&slot); }
+    unsafe { ok = __safec_chan_recv((SafecChan_*)self.raw_, &slot); }
     if (!ok) return null;
     T v[1];   // filled by memcpy, which definite-init can't see through
-    unsafe { memcpy((void*)&v[0], (const void*)&slot, (size_t)sizeof(T)); }
+    unsafe { memcpy((unsigned char*)&v[0], (const unsigned char*)&slot, (size_t)sizeof(T)); }
     return v[0];
 }
 
@@ -98,7 +111,7 @@ generic<T>
 generic<T>
 void Chan::close() {
     if (self.raw_.is_null()) return;
-    unsafe { __safec_chan_close((void*)self.raw_); }
+    unsafe { __safec_chan_close((SafecChan_*)self.raw_); }
 }
 
 } // namespace std

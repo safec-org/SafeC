@@ -36,7 +36,7 @@ struct TlsfBlock {
 };
 
 struct TlsfAllocator {
-    &heap void    base;                                       // heap-backed managed memory
+    &heap unsigned char base;                                       // heap-backed managed memory
     int           owned;   // 1 if TlsfAllocator::new allocated base (destroy() frees it)
     unsigned long cap;
     unsigned int  fl_bitmap;                                  // first-level bitmap
@@ -53,11 +53,11 @@ struct TlsfAllocator {
     // 8-aligned (given an 8-aligned buffer: always for TlsfAllocator::new), so align
     // is honoured up to 8 (0 is taken as 1). null when no free block fits,
     // or `align` is above 8 or not a power of two.
-    ?&heap void   alloc(unsigned long size, unsigned long align);
+    ?&heap unsigned char alloc(unsigned long size, unsigned long align);
 
     // Free a previously allocated pointer (null: no-op). O(1). Aborts with
     // a diagnostic on a double free.
-    void          dealloc(?&heap void ptr);
+    void          dealloc(?&heap unsigned char ptr);
 
     // Free every block at once: the whole buffer is one free block again
     // (blocks handed out before become invalid). O(1) in the block count.

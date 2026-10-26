@@ -13,7 +13,7 @@ struct SlabLink_ {
 };
 
 struct SlabAllocator {
-    &heap void    base;       // heap-backed backing buffer
+    &heap unsigned char base;       // heap-backed backing buffer
     int           owned;   // 1 if SlabAllocator::new allocated base (destroy() frees it)
     ?&SlabLink_   free_head;  // head of the embedded free list (walked inside unsafe)
     unsigned long obj_size;   // slot size: the requested size rounded up to a multiple of 8
@@ -39,11 +39,11 @@ struct SlabAllocator {
     // Allocate one object (all `obj_size` bytes of it) for `size` bytes
     // aligned to `align`. null if the slab is full, size > obj_size, or
     // `align` is above max_align() or not a power of two (0 is taken as 1).
-    ?&heap void   alloc(unsigned long size, unsigned long align);
+    ?&heap unsigned char alloc(unsigned long size, unsigned long align);
 
     // Return an object to the pool (null: no-op). Aborts with a diagnostic
     // on double-free (SlabAllocator::new-created allocators only — see has_tags above).
-    void          dealloc(?&heap void ptr);
+    void          dealloc(?&heap unsigned char ptr);
 
     // Free every slot at once (slots handed out before become invalid).
     void          reset();
