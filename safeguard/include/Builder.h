@@ -209,6 +209,7 @@ private:
     std::vector<std::string> stdLinkInputs() const;
     std::vector<std::string> stdLinkFlags_;
     std::vector<std::string> stdDebDepends_;
+    std::vector<std::string> stdDebRecommends_;
     std::set<std::string> stdUnits_;          // the modules (ensureStdLib)
     bool stdFromSource_ = false;              // never the prebuilt std (writePrebuiltStd)
     bool writingPrebuiltStd_ = false;         // 'std-prebuilt' (see stdClangFlags)
@@ -472,6 +473,7 @@ private:
     bool bundleMacOS() const;
     bool bundleWindows() const;
     bool bundleLinux() const;
+    bool bundleWeb() const;
 
     // A dependency's directory: <root>/deps/<name> for a git URL, 'path'
     // (against the project root) for a local one, "" for a lib-only entry.

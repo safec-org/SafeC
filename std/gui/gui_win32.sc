@@ -24,6 +24,7 @@
 #include <std/stddef.h>
 #include <std/gui/gui.h>
 #include <std/gui/gui_backend.h>
+#include <std/gui/gui_headless.h>
 #include <std/mem.h>
 #include <std/time.h>
 #include <std/collections/string.h>
@@ -835,7 +836,7 @@ static struct GuiNativeHandle __gui_win32_native(&GuiWindowState st) {
     return h;
 }
 
-&GuiBackend gui_platform_backend() {
+static &GuiBackend __gui_native_backend() {
     if (!gW32BackendInit) {
         gW32Backend.name = "win32";
         gW32Backend.primaryMod = GUI_MOD_CTRL;
@@ -860,6 +861,12 @@ static struct GuiNativeHandle __gui_win32_native(&GuiWindowState st) {
         gW32BackendInit = 1;
     }
     return &gW32Backend;
+}
+
+// $SAFEC_GUI_BACKEND=headless selects the in-memory backend (gui_headless.h).
+&GuiBackend gui_platform_backend() {
+    if (gui_headless_requested()) { return gui_headless_backend(); }
+    return __gui_native_backend();
 }
 
 } // namespace std

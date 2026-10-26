@@ -11,36 +11,42 @@
 //
 // Backends in std/gui today:
 //   gui_x11.sc      Xlib (Linux, BSD)          GUI_NATIVE_X11
+//   gui_wayland.sc  Wayland (Linux, dlopen)    GUI_NATIVE_WAYLAND
 //   gui_win32.sc    Win32 (user32/gdi32)       GUI_NATIVE_WIN32
 //   gui_cocoa.sc    AppKit via the ObjC runtime GUI_NATIVE_COCOA
+//   gui_web_wasm.sc <canvas> (wasm32/wasm64)   GUI_NATIVE_WEB
 //   gui_fb.sc       bare-metal framebuffer     GUI_NATIVE_FB
 //   gui_headless.sc in memory (any target)     GUI_NATIVE_HEADLESS
+// and the GPU presenters (gui_gpu.h): gui_gpu_gl_x11.sc (EGL/OpenGL ES on
+// X11 and Wayland), gui_gpu_metal_cocoa.sc, gui_gpu_d3d11_win32.sc,
+// gui_gpu_web_wasm.sc (WebGL).
 //
 // ── Choosing a backend ────────────────────────────────────────────────────
 // Each platform file defines gui_platform_backend(); safeguard links the
 // one whose filename suffix matches the target (safeguard/src/
 // StdModules.cpp, stdVariantMatches: _x11 on Linux/BSD, _win32 on Windows,
-// _cocoa on macOS, _fb on bare metal). gui_backend() returns the backend in
+// _cocoa on macOS, _wasm on wasm32/wasm64, _fb on bare metal). On Linux the
+// X11 file's gui_platform_backend() picks Wayland instead at run time
+// ($SAFEC_GUI_BACKEND, else $WAYLAND_DISPLAY: see gui_wayland.h), and every
+// hosted platform's honors SAFEC_GUI_BACKEND=headless. gui_backend() returns the backend in
 // use: the one installed with gui_set_backend() if any, else
 // gui_platform_backend(). gui_set_backend() works only while no window
 // exists — a program (or a backend module's own setup call, like
 // gui_use_headless()) picks its backend before creating the first window.
 //
 // So a new backend is added one of two ways:
-//   * As the platform's default: a new suffix rule in stdVariantMatches
-//     (e.g. "_wasm" for wasm32/wasm64 targets, which today link none) and
-//     a gui_<suffix>.sc defining gui_platform_backend().
-//   * As an alternative on a platform that already has a default — e.g.
-//     Wayland next to X11 on Linux: a gui_wayland.sc that defines
-//     gui_wayland_backend() (NOT gui_platform_backend(), or both would
-//     define it) and a setup call gui_use_wayland() that calls
-//     gui_set_backend(gui_wayland_backend()). To make it automatic, the X11
-//     file's gui_platform_backend() can prefer it at run time
-//     ($WAYLAND_DISPLAY set and the Wayland unit linked: guard it behind a
-//     '// safeguard: feature wayland' unit and a SAFEC_FEATURE_WAYLAND
-//     check). Keep libwayland's link/deb lines in the Wayland file's own
-//     '// safeguard: link linux ...' / '// safeguard: deb linux ...'
-//     directives.
+//   * As the platform's default: a suffix rule in stdVariantMatches and a
+//     gui_<...>_<suffix>.sc defining gui_platform_backend() (as
+//     gui_web_wasm.sc does for "_wasm"; name the header it implements with
+//     '// safeguard: implements <std/gui/gui.h>' if its stem matches another).
+//   * As an alternative on a platform that already has a default — as
+//     gui_wayland.sc is next to X11: it defines gui_wayland_backend() (NOT
+//     gui_platform_backend(), or both would define it) and
+//     gui_use_wayland(), and the X11 file's gui_platform_backend() prefers
+//     it at run time. A library such an alternative needs is best
+//     dlopen()ed (the binary still starts without it), its package named
+//     with '// safeguard: deb-recommends linux ...' (the .deb's
+//     Recommends) rather than '// safeguard: link' / 'deb'.
 //
 // ── The contract ──────────────────────────────────────────────────────────
 // Threading: every entry is called on the thread that created the first
@@ -124,15 +130,18 @@
 // detach() runs when the presenter is replaced or the window destroyed.
 // A presenter must cope with the buffer size changing between presents
 // (recreate its texture / resize its swap chain when bufW/bufH change).
+// One that fails for good while presenting (device or context lost) frees
+// st.presenterData, sets st.presenter = null and hands that frame to
+// backend.window_present: the window carries on with the software path.
 //
 // ── Web (WebAssembly <canvas>) ────────────────────────────────────────────
-// A browser can't block: its backend's pump() never waits, and the program
-// drives GuiApp::pump(0) from requestAnimationFrame instead of calling
-// GuiApp::run() (gui_app.h's "Driving the loop yourself"). window_present
-// hands the RGBA buffer to an imported JS function (ImageData is
-// RGBA, non-premultiplied: un-premultiply or use an opaque window); the
-// DOM's input events reach the program through exported functions that
-// call gui_backend_post() on the window found with gui_backend_find().
+// A browser can't block: gui_web_wasm.sc's pump() never waits, and the page
+// drives GuiApp::pump(0) from requestAnimationFrame instead of the program
+// calling GuiApp::run() (gui_web.h's gui_web_run()). window_present hands
+// the buffer to std/gui/gui_web.js (putImageData, un-premultiplied on the
+// way; or WebGL through gui_gpu_web_wasm.sc); the DOM's input events come
+// back through exported functions that call gui_backend_post() on the
+// window found with gui_backend_find().
 
 #include <std/gui/gui.h>
 #include <std/collections/vec.h>

@@ -95,6 +95,7 @@ public:
         std::vector<std::string> runtimeSymbols;  // 'runtime-symbol' prefixes
         std::vector<LinkRule> links;
         std::vector<LinkRule> debs;
+        std::vector<LinkRule> debRecommends;   // 'deb-recommends': dlopen()ed, optional
     };
 
     std::string dir;                         // the std/ directory
@@ -122,6 +123,9 @@ public:
     // deduplicated ('blas' is left as is for the caller to expand).
     std::vector<std::string> linkFlags(const std::set<std::string>& units, const StdPlatform& p) const;
     std::vector<std::string> debDepends(const std::set<std::string>& units, const StdPlatform& p) const;
+    // The packages of libraries these units load at run time if present
+    // ('// safeguard: deb-recommends'): the .deb's Recommends.
+    std::vector<std::string> debRecommends(const std::set<std::string>& units, const StdPlatform& p) const;
     // Every std file a unit's compile reads (itself and the headers it
     // includes, transitively, under any condition): its rebuild inputs.
     std::set<std::string> compileInputs(const std::string& unit) const;
