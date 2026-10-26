@@ -51,7 +51,6 @@ static int guarded_(int which) {
     return bad == 0 ? r : -1000 - bad;
 }
 
-extern int getsockname(unsigned long long fd, void* addr, void* addrlen);
 extern int closesocket(unsigned long long fd);
 
 struct SockName_ {
@@ -60,6 +59,7 @@ struct SockName_ {
     unsigned int   addr;
     unsigned long long zero;
 };
+extern int getsockname(unsigned long long fd, SockName_* addr, int* addrlen);
 
 void t_win32_wsastartup_frame() {
     ASSERT_EQ(guarded_(0), 0);                 // Reactor::init
@@ -69,7 +69,7 @@ void t_win32_wsastartup_frame() {
     sa.family = (unsigned short)0; sa.port = (unsigned short)0; sa.addr = 0U; sa.zero = 0ULL;
     int len = 16;
     int rc = 0;
-    unsafe { rc = getsockname((unsigned long long)g_listen, (void*)&sa, (void*)&len); }
+    unsafe { rc = getsockname((unsigned long long)g_listen, &sa, &len); }
     ASSERT_EQ(rc, 0);
     g_port = sched_htons(sa.port);             // its own inverse
     int c = guarded_(2);                       // tcp_connect_nb
@@ -102,7 +102,7 @@ void t_win32_poll_remove_in_callback() {
     struct SockName_ sa;
     sa.family = (unsigned short)0; sa.port = (unsigned short)0; sa.addr = 0U; sa.zero = 0ULL;
     int len = 16;
-    unsafe { getsockname((unsigned long long)l, (void*)&sa, (void*)&len); }
+    unsafe { getsockname((unsigned long long)l, &sa, &len); }
     unsigned int lo = sched_ipv4((unsigned char)127, (unsigned char)0, (unsigned char)0, (unsigned char)1);
     // Two connected sockets: both writable, so one WSAPoll reports both.
     g_fds[0] = tcp_connect_nb(lo, sched_htons(sa.port));
