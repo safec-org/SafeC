@@ -20,23 +20,23 @@ struct MemDisk {
     ?&heap unsigned char data;
     unsigned long   size;
 
-    int read(unsigned long lba, &unsigned char buf, unsigned long count);
-    int write(unsigned long lba, const &unsigned char buf, unsigned long count);
+    int read(unsigned long lba, []unsigned char buf);
+    int write(unsigned long lba, []const unsigned char buf);
 };
 
-int MemDisk::read(unsigned long lba, &unsigned char buf, unsigned long count) {
+int MemDisk::read(unsigned long lba, []unsigned char buf) {
     unsigned long off = lba * 512UL;
-    unsigned long n = count * 512UL;
+    unsigned long n = buf.len;
     if (off + n > self.size || self.data.is_null()) return -1;
-    unsafe { safe_memcpy(buf, &self.data[off], n); }
+    unsafe { safe_memcpy(&buf[0], &self.data[off], n); }
     return 0;
 }
 
-int MemDisk::write(unsigned long lba, const &unsigned char buf, unsigned long count) {
+int MemDisk::write(unsigned long lba, []const unsigned char buf) {
     unsigned long off = lba * 512UL;
-    unsigned long n = count * 512UL;
+    unsigned long n = buf.len;
     if (off + n > self.size || self.data.is_null()) return -1;
-    unsafe { safe_memcpy(&self.data[off], buf, n); }
+    unsafe { safe_memcpy(&self.data[off], &buf[0], n); }
     return 0;
 }
 
@@ -45,22 +45,22 @@ static struct BlockDevice memdisk_device(&MemDisk d) {
 }
 
 // FsRead, straight on a driver (no VFS): the root directory's entry count.
-static void count_any(&VfsNode n, ?&void seen) {
-    unsafe { *(int*)seen = *(int*)seen + 1; }
+static void count_any(&VfsNode n, ?&int seen) {
+    match (seen) { case some(s): *s = *s + 1; case null: { } }
 }
 generic<F: FsRead>
 int root_entries(&F fs) {
     struct VfsNode root;
     if (fs.open("/", VFS_O_READ, &root) != 0) return -1;
     int seen = 0;
-    unsafe { fs.readdir(root.inode, count_any, (?&void)&seen); }
+    fs.readdir(root.inode, count_any, (?&int)&seen);
     return seen;
 }
 
 // A directory entry handed to a readdir callback reads like an opened node.
 static void read_entry(&VfsNode n, &int bytes) {
     unsigned char buf[16];
-    unsafe { *bytes = *bytes + (int)n.read(0UL, buf, 16UL); }
+    *bytes = *bytes + (int)n.read(0UL, buf[0..16]);
 }
 
 // Loads a whole file into a MemDisk; data stays null if it can't be read.
@@ -118,13 +118,13 @@ void t_tmpfs_vfs() {
         ASSERT_EQ(vfs_root.open("/tmp/dir/hello.txt", VFS_O_CREATE | VFS_O_WRITE, &node), 0);
         unsigned char msg[12];
         str_copy((char*)msg, "hello tmpfs", 12UL);
-        ASSERT_EQ(node.write(0UL, msg, 11UL), 11);
+        ASSERT_EQ(node.write(0UL, msg[0..11]), 11);
         struct VfsNode again;
         ASSERT_EQ(vfs_root.open("/tmp/dir/hello.txt", VFS_O_READ, &again), 0);
         ASSERT_EQ(again.size, 11);
         unsigned char back[16];
         safe_memset((&unsigned char)back, 0, 16UL);
-        ASSERT_EQ(again.read(6UL, back, 5UL), 5);
+        ASSERT_EQ(again.read(6UL, back[0..5]), 5);
         ASSERT_STR_EQ((const char*)back, "tmpfs");
         struct VfsNode dir;
         ASSERT_EQ(vfs_root.open("/tmp/dir", VFS_O_READ, &dir), 0);
@@ -140,7 +140,7 @@ void t_tmpfs_vfs() {
         ASSERT_NE(vfs_root.mkdir("/ro/other"), 0);
         struct VfsNode ro;
         ASSERT_EQ(vfs_root.open("/ro/dir/hello.txt", VFS_O_READ, &ro), 0);
-        ASSERT_EQ(ro.write(0UL, msg, 1UL), 0);
+        ASSERT_EQ(ro.write(0UL, msg[0..1]), 0);
         ASSERT_EQ(vfs_root.unmount("/ro"), 0);
         ASSERT_EQ(vfs_root.unlink("/tmp/dir/hello.txt"), 0);
         ASSERT_NE(vfs_root.open("/tmp/dir/hello.txt", VFS_O_READ, &again), 0);
@@ -192,7 +192,7 @@ static unsigned long read_all(&VfsNode node, &unsigned char out, unsigned long c
         unsigned char chunk[512];
         unsigned long want = cap - total;
         if (want > 512UL) want = 512UL;
-        unsigned long got = node.read(total, chunk, want);
+        unsigned long got = node.read(total, chunk[0..want]);
         if (got == 0UL) break;
         unsafe { safe_memcpy(&out[total], &chunk[0], got); }
         total = total + got;

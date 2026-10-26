@@ -29,11 +29,17 @@ struct TmpfsCtx {
 
     // ── FileSystem (vfs.h): mount with vfs.mount(mountpoint, &ctx) ─────────
     int           open(const &char path, int flags, &VfsNode node_out);
-    unsigned long read(unsigned long inode, unsigned long offset, &unsigned char buf, unsigned long len);
-    int           readdir(unsigned long inode, fn void(&VfsNode, ?&void) cb, ?&void user);
-    unsigned long write(unsigned long inode, unsigned long offset, const &unsigned char buf, unsigned long len);
+    unsigned long read(unsigned long inode, unsigned long offset, []unsigned char buf);
+    generic<T> int readdir(unsigned long inode, fn void(&VfsNode, ?&T) cb, ?&T user);
+    int           readdir_raw_(unsigned long inode, fn void(&VfsNode, ?&Erased) cb, ?&Erased user);
+    unsigned long write(unsigned long inode, unsigned long offset, []const unsigned char buf);
     int           unlink(const &char path);
     int           mkdir(const &char path);
 };
+
+generic<T>
+int TmpfsCtx::readdir(unsigned long inode, fn void(&VfsNode, ?&T) cb, ?&T user) {
+    unsafe { return self.readdir_raw_(inode, (fn void(&VfsNode, ?&Erased))cb, (?&Erased)user); }
+}
 
 } // namespace std
