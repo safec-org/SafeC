@@ -77,6 +77,7 @@ namespace {
 
 constexpr uint8_t kFreed = 1;   // std::dealloc() may have freed it
 constexpr uint8_t kReset = 2;   // an arena reset/destroy/free_to may have invalidated it
+constexpr uint8_t kMoved = 4;   // an element reference whose buffer a realloc may have moved
 constexpr int kMaxDerefs = 3;   // deeper entry paths share one collapsed object
 constexpr int kMaxIters  = 200;
 
@@ -134,6 +135,16 @@ std::string normPath(const std::string &p) {
 }
 
 bool hasStar(const std::string &p) { return p.find("[*]") != std::string::npos; }
+
+// std's body-less buffer reallocators (std/mem.h; 'std_realloc_buf_raw_'
+// once namespaced).
+bool isReallocName(const std::string &n) {
+    for (const char *r : {"realloc_buf_raw_", "realloc_array_raw_"}) {
+        size_t k = std::strlen(r);
+        if (n.size() >= k && n.compare(n.size() - k, k, r) == 0) return true;
+    }
+    return false;
+}
 
 std::string canonEP(const std::string &e0) {
     std::string e = starAll(e0);
@@ -282,13 +293,14 @@ struct FactCells {
 
 struct Summary {
     std::set<std::string> frees;                              // entry objects it may free
+    std::set<std::string> moves;                              // entry objects it may move (realloc): element references into them dangle
     std::set<std::string> resets;                             // regions it may reset/destroy
     std::set<std::pair<std::string, std::string>> freeTos;    // (region, mark's entry path)
     std::set<std::string> uses;                               // entry cells it reads as references
     std::map<std::string, FactCells> writes;                  // designator -> its cells at exit
     FactCells ret;
     bool operator==(const Summary &o) const {
-        return frees == o.frees && resets == o.resets && freeTos == o.freeTos && uses == o.uses &&
+        return frees == o.frees && moves == o.moves && resets == o.resets && freeTos == o.freeTos && uses == o.uses &&
                writes == o.writes && ret == o.ret;
     }
 };
@@ -320,7 +332,11 @@ struct State {
     bool operator!=(const State &o) const { return !(*this == o); }
 };
 
-struct CellRef { int obj; std::string path; uint8_t bits = 0; bool weak = false; };
+// 'elem': for a trusted cell reached by indexing through a reference
+// ('buf[i]' on a '&heap T'), the object that reference pointed to — the
+// element's address ('&buf[i]') is then an element view of it (see
+// isElemView) rather than an untracked pointer.
+struct CellRef { int obj; std::string path; uint8_t bits = 0; bool weak = false; int elem = -1; };
 
 struct EV {
     VSet v;
@@ -375,6 +391,12 @@ private:
     int trustedObj() { return intern("U", objInfo(OK::Trusted)); }
     bool isTrusted(int o) const { return objs_[o].kind == OK::Trusted; }
     int canonBase(int o) const { return objs_[o].kind == OK::View ? objs_[o].base : o; }
+    // A view of "some element of a buffer" ('&buf[i]' through a reference,
+    // as a container's 'at'/'get' hands out): it is invalidated with the
+    // buffer, but what it points to is trusted memory like 'buf[i]' itself.
+    bool isElemView(int o) const { return objs_[o].kind == OK::View && objs_[o].prefix.find('@') != std::string::npos; }
+    int elemView(int o) { return isElemView(o) ? o : viewObj(o, "@"); }
+    int trusted_ = -1;
     bool strongObj(int o) const;
     CellRef cellOf(const VEnt &e, const std::string &sel) const;
 
@@ -393,6 +415,7 @@ private:
     std::unordered_map<const Expr *, const Stmt *> outerLoop_;
     void freshAlloc(int mr, int old, const std::string &region);
     void freeObjs(const VSet &v);
+    void moveObjs(const VSet &v);
     void resetRegion(const std::string &region, bool fromUnknownMark);
     void freeTo(const std::string &region, const VSet &marks);
     State join(const State &a, const State &b);
@@ -658,6 +681,8 @@ bool Walker::strongObj(int o) const {
 
 CellRef Walker::cellOf(const VEnt &e, const std::string &sel) const {
     const ObjInfo &oi = objs_[e.obj];
+    if (oi.kind == OK::View && oi.prefix.find('@') != std::string::npos)
+        return {trusted_, "", e.bits, false, e.obj};
     if (oi.kind == OK::View) return {oi.base, normPath(oi.prefix + sel), e.bits};
     return {e.obj, normPath(sel), e.bits};
 }
@@ -978,6 +1003,31 @@ void Walker::freeObjs(const VSet &v) {
             addDeep(objs_[b].ep.substr(0, objs_[b].ep.size() - 1) + "*", kFreed, {});
 }
 
+// A buffer that may have been moved (std::realloc_buf_raw_ and friends —
+// a container growing): the buffer pointer itself stays valid (on failure
+// it still is the buffer; on success the caller stores the new one over
+// it), but every element reference handed out into it ('&buf[i]', see
+// isElemView) may now dangle.
+void Walker::moveObjs(const VSet &v) {
+    std::set<int> bases;
+    for (auto &e : v) {
+        int b = canonBase(e.obj);
+        const ObjInfo &oi = objs_[b];
+        if (oi.kind != OK::Alloc && oi.kind != OK::Ext) continue;
+        bases.insert(b);
+        if (oi.kind == OK::Ext && epRooted(oi.ep)) summary.moves.insert(oi.ep);
+    }
+    if (bases.empty()) return;
+    auto fix = [&](VSet &vs) {
+        for (auto &x : vs) if (isElemView(x.obj) && bases.count(canonBase(x.obj))) x.bits |= kMoved;
+    };
+    for (auto &om : cur_.mem) {
+        for (auto &kv : om.second.vals) fix(kv.second);
+        fix(om.second.any);
+    }
+    for (auto &d : cur_.deep) fix(d.second.vals);
+}
+
 void Walker::resetRegion(const std::string &region, bool fromUnknownMark) {
     if (!fromUnknownMark) summary.resets.insert(region);
     std::set<int> bases;
@@ -1095,15 +1145,15 @@ void Walker::checkLoad(const Expr &e, const VSet &v, int form, const std::string
     if (!rt) return;
     uint8_t b = vsBits(v);
     if (!b) return;
-    bool heapCause = (b & kFreed) != 0;
+    bool heapCause = (b & (kFreed | kMoved)) != 0;
     std::string region;
     if (!heapCause) {
         if (rt->region == Region::Arena) region = rt->arenaName;
         for (auto &x : v)
             if (region.empty() && (x.bits & kReset)) region = objs_[canonBase(x.obj)].region;
     }
-    std::string after = heapCause
-        ? "std::dealloc() freed it"
+    std::string after = (b & kFreed) ? "std::dealloc() freed it"
+        : heapCause ? "its buffer may have been reallocated (a push/insert/reserve that grows the container)"
         : "arena_reset<" + region + ">(), arena_destroy<" + region + ">(), or arena_free_to<" +
               region + ">() invalidated it";
     std::string what;
@@ -1188,7 +1238,13 @@ std::vector<CellRef> Walker::lval(Expr &e) {
             return out;
         }
         if (!refToArray) {
-            // Raw pointer or unsafe reference indexing: trusted memory.
+            // Raw pointer or unsafe reference indexing: trusted memory. An
+            // element of a reference's buffer remembers that buffer, so its
+            // address stays tied to it (see CellRef::elem).
+            if (bt && bt->kind == TypeKind::Reference && !b.v.empty()) {
+                for (auto &x : b.v) out.push_back({trustedObj(), "", x.bits, false, x.obj});
+                return out;
+            }
             out.push_back({trustedObj(), ""});
             return out;
         }
@@ -1314,8 +1370,14 @@ EV Walker::rval(Expr &e) {
     case ExprKind::AddrOf: {
         auto cells = lval(*static_cast<UnaryExpr &>(e).operand);
         if (!cells.empty() &&
-            std::all_of(cells.begin(), cells.end(), [&](const CellRef &c) { return isTrusted(c.obj); }))
-            return opaqueResult(e, e.type);
+            std::all_of(cells.begin(), cells.end(), [&](const CellRef &c) { return isTrusted(c.obj); })) {
+            // '&buf[i]' (or a field of it) through a reference: an element
+            // view of the buffer; through a raw pointer: untracked.
+            if (!std::all_of(cells.begin(), cells.end(), [](const CellRef &c) { return c.elem >= 0; }))
+                return opaqueResult(e, e.type);
+            for (auto &c : cells) vsAdd(r.v, elemView(c.elem), c.bits);
+            return r;
+        }
         for (auto &c : cells) vsAdd(r.v, viewObj(c.obj, c.path), c.bits);
         return r;
     }
@@ -1665,6 +1727,9 @@ EV Walker::evalCall(CallExpr &e) {
     default: break;
     }
 
+    if (fd && !fd->body && args.size() > firstArg && isReallocName(fd->name))
+        moveObjs(args[firstArg].v);
+
     FunctionDecl *callee = drv_.bodyOf(fd);
     const Summary *s = callee ? drv_.summaryOf(callee) : nullptr;
     if (!s) return opaqueResult(e, e.type);
@@ -1699,6 +1764,7 @@ void Walker::closure(const std::vector<CellRef> &cells, std::vector<CellRef> &ou
     std::set<int> seen;
     std::vector<int> work;
     auto addObj = [&](int o) {
+        if (isElemView(o)) return;   // its contents are trusted memory
         o = canonBase(o);
         if (seen.insert(o).second) work.push_back(o);
     };
@@ -1853,6 +1919,8 @@ EV Walker::applySummary(const Expr &e, FunctionDecl *callee, const Summary &s, s
             if (!b) continue;
             if (b & kFreed)
                 report(e.loc, "call to '" + calleeName + "' reads a &heap reference after std::dealloc() freed it");
+            else if (b & kMoved)
+                report(e.loc, "call to '" + calleeName + "' reads an element reference after its buffer may have been reallocated");
             else {
                 std::string region;
                 for (auto &x : v) if (region.empty() && (x.bits & kReset)) region = objs_[canonBase(x.obj)].region;
@@ -1875,6 +1943,8 @@ EV Walker::applySummary(const Expr &e, FunctionDecl *callee, const Summary &s, s
     std::vector<std::string> freedDeep;
     std::vector<VSet> freed;
     for (auto &f : s.frees) freed.push_back(resolveObjs(f, argObjs, &freedDeep));
+    std::vector<VSet> moved;
+    for (auto &m : s.moves) moved.push_back(resolveObjs(m, argObjs, nullptr));
     std::vector<std::pair<std::string, VSet>> freeTos;
     for (auto &ft : s.freeTos) freeTos.push_back({ft.first, resolveObjs(ft.second, argObjs, nullptr)});
     struct Pending {
@@ -1936,6 +2006,7 @@ EV Walker::applySummary(const Expr &e, FunctionDecl *callee, const Summary &s, s
             report(e.loc, "call to '" + calleeName + "' frees memory after std::dealloc() freed it");
         freeObjs(v);
     }
+    for (auto &v : moved) moveObjs(v);
     for (auto &d : freedDeep) {
         if (epRooted(d)) summary.frees.insert(d + "~");
         addDeep(d, kFreed, {});
@@ -2244,6 +2315,7 @@ void Walker::run() {
     for (size_t i = 0; i < fn_.paramVars.size(); ++i)
         if (fn_.paramVars[i]) paramIdx_[fn_.paramVars[i]] = (int)i;
     retObj_ = intern("R", objInfo(OK::Ret));
+    trusted_ = trustedObj();
     // Preorder statement numbering: a return runs exactly the defers
     // registered textually before it (CodeGen's order).
     int n = 0;
@@ -2401,6 +2473,7 @@ void joinFacts(FactCells &into, const FactCells &other, const std::string &desig
 Summary joinSummary(const Summary &a, const Summary &b) {
     Summary r = a;
     r.frees.insert(b.frees.begin(), b.frees.end());
+    r.moves.insert(b.moves.begin(), b.moves.end());
     r.resets.insert(b.resets.begin(), b.resets.end());
     r.freeTos.insert(b.freeTos.begin(), b.freeTos.end());
     r.uses.insert(b.uses.begin(), b.uses.end());

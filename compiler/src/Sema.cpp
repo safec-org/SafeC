@@ -4145,11 +4145,12 @@ TypePtr Sema::checkMember(MemberExpr &e) {
 
     // Auto-dereference references for dot access (SafeC references are non-null
     // and always valid — dot access on a reference implicitly dereferences it)
-    bool derefMut = false;
+    bool viaRef = false, derefMut = false;
     if (!e.isArrow && baseTy->kind == TypeKind::Reference) {
         auto &rt = static_cast<ReferenceType &>(*baseTy);
         checkNullabilityDeref(baseTy, e.loc);
         e.isLValue = rt.mut;
+        viaRef = true;
         derefMut = rt.mut;
         baseTy = rt.base;
     }
@@ -4213,10 +4214,12 @@ TypePtr Sema::checkMember(MemberExpr &e) {
         diag_.error(e.loc, "struct '" + st->name + "' has no field '" + e.field + "'");
         return makeError();
     }
-    // Through a mutable reference the field is the referent's storage even
-    // when the base itself isn't an lvalue: 'v.at(i).field' (a call
-    // returning '&T') designates the element's field, not a copy of it.
-    if (!e.isArrow) e.isLValue = e.base->isLValue || derefMut;
+    // Through a reference the field is the referent's storage, writable
+    // exactly when the reference is mutable — whether the base is a
+    // variable ('r.x' with 'const &T r' is read-only even though 'r' itself
+    // is an lvalue) or a call ('v.at(i).field' designates the element's
+    // field, not a copy of it).
+    if (!e.isArrow) e.isLValue = viaRef ? derefMut : e.base->isLValue;
     return fd->type;
 }
 
@@ -4343,9 +4346,11 @@ TypePtr Sema::checkAssign(AssignExpr &e) {
 
     // Region escape: RHS &stack/&arena can't be assigned to variable with wider
     // scope. This also has to cover assignment through struct fields
-    // ('h.ref = &x') — not just plain identifiers — by walking the '.' chain
-    // down to its base variable ('->' breaks the chain: it indirects through
-    // a pointer/reference with its own, independent lifetime).
+    // ('h.ref = &x', 'h->ref = &x') — not just plain identifiers — by
+    // walking the '.'/'->' chain down to its base variable. '->' is judged
+    // like '.' through a reference: by the scope of the variable holding
+    // the pointer/reference (a pointer to storage in an outer scope is
+    // caught when it's stored there, by this same check).
     if (rhsTy && rhsTy->kind == TypeKind::Reference) {
         auto &rt = static_cast<ReferenceType &>(*rhsTy);
         VarDecl *baseVd = nullptr;
@@ -4354,7 +4359,10 @@ TypePtr Sema::checkAssign(AssignExpr &e) {
         bool callRoot = false;
         for (Expr *cur = e.lhs.get(); cur; ) {
             if (cur->kind == ExprKind::Ident) { baseVd = static_cast<IdentExpr *>(cur)->resolved; break; }
-            if (cur->kind == ExprKind::Member) { cur = static_cast<MemberExpr *>(cur)->base.get(); continue; }
+            if (cur->kind == ExprKind::Member || cur->kind == ExprKind::Arrow) {
+                cur = static_cast<MemberExpr *>(cur)->base.get();
+                continue;
+            }
             callRoot = cur != e.lhs.get() && cur->kind == ExprKind::Call;
             break;
         }
