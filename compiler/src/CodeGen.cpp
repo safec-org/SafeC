@@ -3603,7 +3603,16 @@ llvm::Value *CodeGen::genCall(CallExpr &e, FnEnv &env) {
             // ends up pointing at the stack slot holding the pointer rather
             // than at the object, and every field read is garbage.
             selfPtr = genExpr(*e.methodBase, env);
-        } else if (e.methodBase->isLValue) {
+        } else if (e.methodBase->isLValue ||
+                   e.methodBase->kind == ExprKind::Member ||
+                   e.methodBase->kind == ExprKind::Arrow ||
+                   e.methodBase->kind == ExprKind::Subscript) {
+            // A member/element chain is addressed even when it isn't
+            // assignable ('v.at(i).field.push(x)' with 'at' returning a
+            // const reference): genMember GEPs into the referenced storage,
+            // so the method mutates the real object. Only an aggregate
+            // rvalue somewhere in the chain ('make().field') is spilled to a
+            // temporary, by genLValue's default case.
             selfPtr = genLValue(*e.methodBase, env);
         } else {
             // Base is a value expression — allocate temp storage

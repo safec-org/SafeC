@@ -679,6 +679,62 @@ void t_traits() {
     dealloc(btq);
 }
 
+// Mutation through a call chain on a returned reference reaches the element
+// itself, not a temporary copy: 'v.at(i).field.push(x)', 'a.b().c.d()'.
+struct ChainBucket { struct Vec<int> xs; };
+struct ChainEntry { struct String name; struct Vec<int> vals; struct ChainBucket b; };
+struct ChainReg {
+    struct Vec<struct ChainEntry> entries;
+    struct StrMap<int> index;
+    &struct ChainEntry entry(unsigned long i);
+};
+&struct ChainEntry ChainReg::entry(unsigned long i) { return self.entries.at(i); }
+
+// Recursive registration: StrMap inserts (rehashing as it grows) next to
+// the Vec of entries, both reached through the struct.
+static void chain_register(&struct ChainReg r, int depth) {
+    if (depth > 0) { chain_register(r, depth - 1); }
+    struct ChainEntry e;
+    e.name = String::new();
+    e.name.push_char((char)('a' + depth));
+    e.vals = Vec::new();
+    e.b.xs = Vec::new();
+    r.entries.push(e);
+    r.index.insert(r.entries.at(r.entries.len - 1UL).name.as_ptr(), depth);
+    r.entries.at(0UL).vals.push(depth);
+}
+
+void t_ref_chains() {
+    struct ChainReg r;
+    r.entries = Vec::new();
+    r.index = StrMap::new();
+    chain_register(&r, 19);
+    ASSERT_EQ(r.entries.len, 20UL);
+    ASSERT_EQ(r.index.length(), 20UL);
+    ASSERT_EQ(r.index.get("t").default(-1), 19);
+    ASSERT_EQ(r.entries.at(0UL).vals.len, 20UL);
+    ASSERT_EQ(*r.entries.at(0UL).vals.at(19UL), 19);
+
+    r.entries.at(3UL).name.push(":x");
+    ASSERT_TRUE(r.entries.at(3UL).name.eq_cstr("d:x"));
+    r.entries.at(3UL).b.xs.push(5);
+    r.entry(3UL).b.xs.push(6);
+    r.entry(3UL).vals.push(7);
+    ASSERT_EQ(r.entries.at(3UL).b.xs.len, 2UL);
+    ASSERT_EQ(*r.entries.at(3UL).b.xs.at(1UL), 6);
+    ASSERT_EQ(r.entries.at(3UL).vals.len, 1UL);
+    r.entry(4UL).b.xs = Vec::new();             // assignment through the chain
+    r.entry(4UL).b.xs.push(8);
+    ASSERT_EQ(*r.entries.at(4UL).b.xs.at(0UL), 8);
+
+    for (unsigned long i = 0UL; i < r.entries.len; i = i + 1UL) {
+        &struct ChainEntry e = r.entries.at(i);
+        e.name.free(); e.vals.free(); e.b.xs.free();
+    }
+    r.entries.free();
+    r.index.free();
+}
+
 int main() {
     struct TestSuite t = TestSuite::new();
     unsafe {
@@ -694,6 +750,7 @@ int main() {
         t.add("slice", t_slice);
         t.add("string/capacity extras", t_string_more);
         t.add("container traits", t_traits);
+        t.add("reference call chains", t_ref_chains);
     }
     t.run();
     t.print_summary();

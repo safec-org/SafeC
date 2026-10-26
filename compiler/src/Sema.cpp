@@ -4380,28 +4380,37 @@ TypePtr Sema::checkAssign(AssignExpr &e) {
 
     // Region escape: RHS &stack/&arena can't be assigned to variable with wider
     // scope. This also has to cover assignment through struct fields
-    // ('h.ref = &x') — not just plain identifiers — by walking the '.' chain
-    // down to its base variable ('->' breaks the chain: it indirects through
-    // a pointer/reference with its own, independent lifetime).
+    // ('h.ref = &x', 'h->ref = &x') — not just plain identifiers — by
+    // walking the '.'/'->' chain down to its base variable. '->' is judged
+    // like '.' through a reference: by the scope of the variable holding
+    // the pointer/reference (a pointer to storage in an outer scope is
+    // caught when it's stored there, by this same check).
     if (rhsTy && rhsTy->kind == TypeKind::Reference) {
         auto &rt = static_cast<ReferenceType &>(*rhsTy);
         VarDecl *baseVd = nullptr;
+        // 'f().field = r': the storage a returned reference designates
+        // outlives every scope of this function, like an outermost variable.
+        bool callRoot = false;
         for (Expr *cur = e.lhs.get(); cur; ) {
             if (cur->kind == ExprKind::Ident) { baseVd = static_cast<IdentExpr *>(cur)->resolved; break; }
-            if (cur->kind == ExprKind::Member) { cur = static_cast<MemberExpr *>(cur)->base.get(); continue; }
+            if (cur->kind == ExprKind::Member || cur->kind == ExprKind::Arrow) {
+                cur = static_cast<MemberExpr *>(cur)->base.get();
+                continue;
+            }
+            callRoot = cur != e.lhs.get() && cur->kind == ExprKind::Call;
             break;
         }
-        if (rt.region == Region::Stack && baseVd) {
-            if (baseVd->scopeDepth < scopeDepth_) {
+        if (rt.region == Region::Stack && (baseVd || callRoot)) {
+            if (callRoot || baseVd->scopeDepth < scopeDepth_) {
                 diag_.error(e.loc,
                     "cannot assign '&stack " + rt.base->str() +
                     "' to variable in outer scope: reference would escape");
             }
         }
-        if (rt.region == Region::Arena && baseVd) {
+        if (rt.region == Region::Arena && (baseVd || callRoot)) {
             auto it = regionRegistry_.find(rt.arenaName);
             int minDepth = (it != regionRegistry_.end()) ? it->second->declScopeDepth : 0;
-            if (baseVd->scopeDepth < minDepth) {
+            if ((callRoot ? 0 : baseVd->scopeDepth) < minDepth) {
                 diag_.error(e.loc,
                     "cannot assign '&arena<" + rt.arenaName + "> " + rt.base->str() +
                     "' to variable in outer scope: arena reference would escape");

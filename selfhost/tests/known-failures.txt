@@ -5,6 +5,7 @@
 
 # SIMD vector types are not supported
 ctests/simd/vector_align.sc
-# a safec (C++ compiler) bug, not scc's: '!x' passed to a variadic function
-# is emitted as an unpromoted i1, so printf("%d", !x) prints 254 natively
-examples/stdlib_complete.sc
+# element references into a container's buffer ('v.at(i)', 'm.get(k)')
+# are not tracked, so one held across a push or a rehashing insert is not
+# reported (SUBSET.md, "Memory-flow analysis")
+ctests/lifetimes/container_refs_err.sc
