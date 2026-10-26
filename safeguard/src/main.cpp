@@ -40,6 +40,22 @@ Commands:
                 a .deb and build/<name>.AppDir (Linux), and with
                 --target wasm32 build/<name>.web/: the module, its JS glue
                 and an index.html (no [bundle] table needed)
+  doc   [--serve] [--std]
+                Generate the API reference (build/doc/): every public
+                declaration of include/ and src/ headers with its doc
+                comment, per-item pages, a module tree, search, source
+                pages and links into std's reference. --serve serves it
+                (--port N, default 8000); --std documents SafeC's std
+                instead; --out DIR, --private (hidden items too),
+                --std-url URL (where std links point), --no-check
+  publish [--ci=github|gitlab|gitea|forgejo] [--bump=patch|minor|major]
+          [--write] [--tag] [--push]
+                Prepare a library for publishing to git: .gitignore,
+                README/LICENSE checks, CI that builds and tests on
+                Linux/macOS/Windows, attaches prebuilt libraries to a
+                release and deploys 'safeguard doc' to Pages on a tag.
+                Dry run (prints the plan) unless --write; commits/tags
+                only with --tag, pushes only with --push
   clean         Remove the build/ and deps/ directories
   verify-lock   Check Package.lock against current dependency state
   lint          Run static-analysis lint passes on all source files
@@ -250,6 +266,50 @@ int main(int argc, char** argv) {
             std::string srcDir = (fs::path(root) / "src").string();
             bool ok = fmt.run(srcDir, checkOnly, verbose);
             return ok ? 0 : 1;
+        } catch (std::exception& e) {
+            std::cerr << "safeguard error: " << e.what() << "\n";
+            return 1;
+        }
+    }
+
+    // ── doc ───────────────────────────────────────────────────────────────────
+    if (cmd == "doc") {
+        safeguard::DocOptions dopts;
+        safeguard::BuildOptions bopts;
+        for (int i = 2; i < argc; ++i) {
+            std::string arg = argv[i];
+            auto value = [&](const char* flag) -> std::string {
+                std::string f = flag;
+                if (arg.rfind(f + "=", 0) == 0) return arg.substr(f.size() + 1);
+                if (i + 1 >= argc) throw std::runtime_error(f + " requires an argument");
+                return argv[++i];
+            };
+            try {
+                if (arg == "--std") dopts.std = true;
+                else if (arg == "--serve") dopts.serve = true;
+                else if (arg == "--private" || arg == "--document-private-items") dopts.includePrivate = true;
+                else if (arg == "--no-check") dopts.check = false;
+                else if (arg == "--verbose") bopts.verbose = true;
+                else if (arg == "--port" || arg.rfind("--port=", 0) == 0) dopts.port = std::atoi(value("--port").c_str());
+                else if (arg == "--out" || arg.rfind("--out=", 0) == 0) dopts.out = value("--out");
+                else if (arg == "--std-url" || arg.rfind("--std-url=", 0) == 0) dopts.stdUrl = value("--std-url");
+                else if (arg == "--source-ref" || arg.rfind("--source-ref=", 0) == 0) dopts.sourceRef = value("--source-ref");
+                else { std::cerr << "safeguard: unknown option '" << arg << "'\n"; return 1; }
+            } catch (std::exception& e) {
+                std::cerr << "safeguard: " << e.what() << "\n";
+                return 1;
+            }
+        }
+        try {
+            if (dopts.std) {
+                safeguard::Manifest none;
+                none.package.name = "std";
+                safeguard::Builder builder(fs::current_path().string(), none, bopts);
+                return builder.doc(dopts) ? 0 : 1;
+            }
+            auto [root, manifest] = requireProject();
+            safeguard::Builder builder(root, manifest, bopts);
+            return builder.doc(dopts) ? 0 : 1;
         } catch (std::exception& e) {
             std::cerr << "safeguard error: " << e.what() << "\n";
             return 1;

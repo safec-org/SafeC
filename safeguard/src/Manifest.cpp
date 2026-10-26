@@ -167,6 +167,21 @@ Manifest ManifestParser::buildManifest(const std::vector<Token>& tokens,
         else if (tok.key == "package.author")  m.package.author      = tok.value;
         else if (tok.key == "package.description") m.package.description = tok.value;
         else if (tok.key == "package.license") m.package.license     = tok.value;
+        else if (tok.key == "package.repository")    m.package.repository    = tok.value;
+        else if (tok.key == "package.homepage")      m.package.homepage      = tok.value;
+        else if (tok.key == "package.documentation") m.package.documentation = tok.value;
+        else if (tok.key == "package.readme")        m.package.readme        = tok.value;
+        else if (tok.key == "package.keywords")      m.package.keywords      = splitList(tok.value);
+
+        // publish.*
+        else if (tok.key == "publish.ci")         m.publish.ci        = tok.value;
+        else if (tok.key == "publish.branch")     m.publish.branch    = tok.value;
+        else if (tok.key == "publish.tag_prefix") m.publish.tagPrefix = tok.value;
+        else if (tok.key == "publish.pages")      m.publish.pages     = boolean(tok);
+        else if (tok.key == "publish.release")    m.publish.release   = boolean(tok);
+        else if (tok.key.rfind("publish.", 0) == 0)
+            throw std::runtime_error(srcName + ": unknown key '" + tok.key.substr(8) + "' in [publish] "
+                                     "(expected ci, branch, tag_prefix, pages or release)");
 
         // build.*
         else if (tok.key == "build.edition")  m.build.edition  = tok.value;
@@ -263,6 +278,11 @@ Manifest ManifestParser::buildManifest(const std::vector<Token>& tokens,
             throw std::runtime_error(where + "build = \"sources\" produces its own library; drop 'lib'");
     }
 
+    if (!m.publish.ci.empty() && m.publish.ci != "github" && m.publish.ci != "gitlab" &&
+        m.publish.ci != "gitea" && m.publish.ci != "forgejo")
+        throw std::runtime_error(srcName + ": publish.ci must be \"github\", \"gitlab\", \"gitea\" or "
+                                 "\"forgejo\", got \"" + m.publish.ci + "\"");
+
     if (m.bundle.present) {
         if (m.bundle.identifier.empty())
             throw std::runtime_error(srcName + ": [bundle] identifier is required "
@@ -326,6 +346,20 @@ std::string ManifestParser::serialize(const Manifest& m) {
         o << "description = \"" << m.package.description << "\"\n";
     if (!m.package.license.empty())
         o << "license     = \"" << m.package.license     << "\"\n";
+    if (!m.package.repository.empty())
+        o << "repository  = \"" << m.package.repository  << "\"\n";
+    if (!m.package.homepage.empty())
+        o << "homepage    = \"" << m.package.homepage    << "\"\n";
+    if (!m.package.documentation.empty())
+        o << "documentation = \"" << m.package.documentation << "\"\n";
+    if (!m.package.readme.empty())
+        o << "readme      = \"" << m.package.readme      << "\"\n";
+    if (!m.package.keywords.empty()) {
+        o << "keywords    = [";
+        for (size_t i = 0; i < m.package.keywords.size(); ++i)
+            o << (i ? ", " : "") << "\"" << m.package.keywords[i] << "\"";
+        o << "]\n";
+    }
 
     o << "\n[build]\n";
     o << "edition = \"" << m.build.edition << "\"\n";
@@ -398,6 +432,20 @@ std::string ManifestParser::serialize(const Manifest& m) {
         list("cflags  = ", d.cflags);
         list("cmake_args = ", d.cmakeArgs);
         list("frameworks = ", d.frameworks);
+    }
+
+    {
+        const PublishConfig def;
+        const PublishConfig& p = m.publish;
+        if (!p.ci.empty() || !p.branch.empty() || p.tagPrefix != def.tagPrefix ||
+            p.pages != def.pages || p.release != def.release) {
+            o << "\n[publish]\n";
+            if (!p.ci.empty())     o << "ci         = \"" << p.ci << "\"\n";
+            if (!p.branch.empty()) o << "branch     = \"" << p.branch << "\"\n";
+            if (p.tagPrefix != def.tagPrefix) o << "tag_prefix = \"" << p.tagPrefix << "\"\n";
+            if (p.pages != def.pages)     o << "pages      = " << (p.pages ? "true" : "false") << "\n";
+            if (p.release != def.release) o << "release    = " << (p.release ? "true" : "false") << "\n";
+        }
     }
 
     if (!m.features.empty()) {

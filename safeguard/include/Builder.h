@@ -48,8 +48,29 @@ struct BuildOptions {
     std::string signIdentity;
 };
 
+// 'safeguard doc' (see Doc.cpp).
+struct DocOptions {
+    bool std = false;          // document SafeC's std instead of the project
+    bool serve = false;        // serve the result over HTTP afterwards
+    int  port = 8000;
+    bool includePrivate = false;  // also hidden items ('@hidden', names_ending_in_, static)
+    bool check = true;         // run the link check on the result
+    std::string out;           // output directory (default <project>/build/doc)
+    std::string stdUrl;        // the std reference links point into
+    std::string sourceRef;     // --std: the git ref source links name (default "main")
+};
+
 class Builder {
 public:
+    // Generates the project's (or std's) API reference with safec-doc: safec
+    // --emit-doc-json over its headers and sources, then the doc tool
+    // (prebuilt beside safeguard, or built from its SafeC sources on first
+    // use), into build/doc/. Returns true on success. Defined in Doc.cpp.
+    bool doc(const DocOptions& opts);
+    // The safec-doc binary and its assets directory (built and cached on
+    // first use when no prebuilt one is installed). False if unavailable.
+    bool findDocTool(std::string& binary, std::string& assets);
+
     explicit Builder(std::string projectRoot, Manifest manifest,
                      BuildOptions opts = {});
 

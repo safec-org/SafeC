@@ -51,8 +51,10 @@ for (const p of list) {
   await page.keyboard.press('Escape');
   const name = p.replace(/[^a-zA-Z0-9]+/g, '_');
   await page.evaluate(() => document.documentElement.classList.remove('dark'));
+  await page.waitForTimeout(600);   // the theme's color transitions
   await page.screenshot({ path: `${shots}/${name}-light.png`, fullPage: false });
   await page.evaluate(() => document.documentElement.classList.add('dark'));
+  await page.waitForTimeout(600);
   await page.screenshot({ path: `${shots}/${name}-dark.png`, fullPage: false });
   await page.evaluate(() => document.documentElement.classList.remove('dark'));
   if (!opened) fail(`${p}: the wasm client did not start (search did not open)`);
