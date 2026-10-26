@@ -4265,6 +4265,16 @@ TypePtr Sema::checkCast(CastExpr &e) {
         srcTy = checkExpr(*e.operand);
     }
 
+    // A slice is a (pointer, length) pair, not a pointer: '(T*)s' would
+    // reinterpret the pair. Take its '.ptr' (or re-slice it) instead.
+    if (srcTy && srcTy->kind == TypeKind::Slice && e.targetType &&
+        e.targetType->kind != TypeKind::Slice && !e.targetType->isError()) {
+        diag_.error(e.loc,
+            "cannot cast slice '" + srcTy->str() + "' to '" + e.targetType->str() +
+            "': use its '.ptr' (and '.len'), or slice it");
+        return e.targetType;
+    }
+
     // A cast can't drop nullability: '(&T)q' on a '?&T' would skip the null
     // check nullable references always require (in safe and unsafe code
     // alike). '(?&T)q' — keeping it nullable — is fine. Narrow with

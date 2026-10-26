@@ -8,3 +8,9 @@ int main() {
     fill(ro);           // EXPECT-ERROR: argument 1: cannot convert '[]const int' to '[]int'
     return 0;
 }
+
+void slice_to_pointer_cast([]const unsigned char s) {
+    unsafe {
+        const unsigned char* p = (const unsigned char*)s; // EXPECT-ERROR: cannot cast slice
+    }
+}
