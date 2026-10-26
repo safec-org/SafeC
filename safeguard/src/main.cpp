@@ -8,6 +8,7 @@
 #include <vector>
 #include <filesystem>
 #include <cstdlib>
+#include <random>
 
 namespace fs = std::filesystem;
 
@@ -472,7 +473,7 @@ int main(int argc, char** argv) {
                 }
                 // Built in a scratch project of its own, removed afterwards.
                 fs::path work = fs::temp_directory_path() /
-                                ("safeguard-std-prebuilt-" + std::to_string(std::rand()));
+                                ("safeguard-std-prebuilt-" + std::to_string(std::random_device{}()));
                 fs::create_directories(work);
                 opts.release = true;
                 safeguard::Manifest none;
