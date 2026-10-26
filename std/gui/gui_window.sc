@@ -285,7 +285,7 @@ struct GuiWindow GuiWindow::create_with(const &GuiWindowOptions opts) {
         unsafe {   // the state block (raw heap) is taken apart and freed
             st.queue.free();
             st.title.free();
-            dealloc_raw_((void*)st);
+            dealloc((?&heap GuiWindowState)st);
         }
         return win;
     }
@@ -336,13 +336,13 @@ void GuiWindow::drop() {
             unsafe {   // the state block (raw heap) is taken apart and freed
                 st.queue.free();
                 st.title.free();
-                dealloc_raw_((void*)st);
+                dealloc((?&heap GuiWindowState)st);
             }
         }
         case null: { }
     }
     unsafe {
-        if ((void*)self.pixels != (void*)0) { dealloc_raw_((void*)self.pixels); }
+        if ((void*)self.pixels != (void*)0) { dealloc(self.pixels); }
         self.pixels = (&heap unsigned char)0;
     }
     self.platform = null;
@@ -359,7 +359,7 @@ static void __gui_window_apply_size(&GuiWindow win, &GuiWindowState st, int w, i
     if (w == win.width && h == win.height) { return; }
     &heap unsigned char px = __gui_alloc_pixels(w, h);
     unsafe {
-        if ((void*)win.pixels != (void*)0) { dealloc_raw_((void*)win.pixels); }
+        if ((void*)win.pixels != (void*)0) { dealloc(win.pixels); }
     }
     win.pixels = px;
     win.width = w;

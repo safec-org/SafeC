@@ -136,7 +136,7 @@ struct SpawnedThread<T, R> thread_spawn(fn R(T) f, T arg) {
             unsafe { s.f = f; s.arg = arg; }   // arg moves into the start block
             fn ?&ThreadStart_<T, R>(?&ThreadStart_<T, R>) entry = thread_start_main_;
             if (thread_create(&t.tid_, entry, (?&ThreadStart_<T, R>)s) != 0) {
-                unsafe { drop(s.arg); dealloc_raw_((void*)s); }
+                unsafe { drop(s.arg); dealloc(s); }
                 return t;
             }
             t.start_ = s;
@@ -156,7 +156,7 @@ R SpawnedThread::join() {
             self.start_ = null;
             unsafe {
                 R r = s.out;   // moves out of the start block, which goes away
-                dealloc_raw_((void*)s);
+                dealloc(s);
                 return r;
             }
         }
@@ -231,7 +231,7 @@ generic<T>
 T Mutex::into_inner() {
     unsafe {
         T v = *self.value_;   // moves out of the box
-        dealloc_raw_((void*)self.value_);
+        dealloc(self.value_);
         mutex_destroy(&self.raw_);
         return v;
     }
@@ -241,7 +241,7 @@ generic<T>
 void Mutex::drop() {
     unsafe {
         drop(*self.value_);
-        dealloc_raw_((void*)self.value_);
+        dealloc(self.value_);
         self.value_ = (T*)0;
     }
     mutex_destroy(&self.raw_);
@@ -325,7 +325,7 @@ generic<T>
 void RwLock::drop() {
     unsafe {
         drop(*self.value_);
-        dealloc_raw_((void*)self.value_);
+        dealloc(self.value_);
         self.value_ = (T*)0;
     }
     rwlock_destroy(&self.raw_);

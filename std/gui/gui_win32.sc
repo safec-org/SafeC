@@ -551,9 +551,9 @@ static int __gui_win32_create(&GuiWindowState st, const &GuiWindowOptions opts) 
         unsigned short* title = __gui_win32_wide((const char*)st.title.data);
         void* hwnd = CreateWindowExW(w->exStyle, (const void*)&gW32ClassName[0], (const void*)title, w->style,
                                      px, py, ow, oh, (void*)0, (void*)0, gW32Instance, (void*)0);
-        dealloc_raw_((void*)title);
+        dealloc(title);
         if (hwnd == (void*)0) {
-            dealloc_raw_((void*)w);
+            dealloc(w);
             return 0;
         }
         w->hwnd = hwnd;
@@ -579,8 +579,8 @@ static void __gui_win32_destroy(&GuiWindowState st) {
         if (w == (struct GuiWin32Window*)0) { return; }
         SetWindowLongPtrW(w->hwnd, GUI_GWLP_USERDATA, 0LL);
         DestroyWindow(w->hwnd);
-        if (w->staging != (unsigned char*)0) { dealloc_raw_((void*)w->staging); }
-        dealloc_raw_((void*)w);
+        if (w->staging != (unsigned char*)0) { dealloc(w->staging); }
+        dealloc(w);
         st.native = null;
     }
 }
@@ -591,7 +591,7 @@ static void __gui_win32_present(&GuiWindowState st, const &unsigned char px, int
     unsafe {
         if (w == (struct GuiWin32Window*)0) { return; }
         if (w->stagingW != bw || w->stagingH != bh || w->staging == (unsigned char*)0) {
-            if (w->staging != (unsigned char*)0) { dealloc_raw_((void*)w->staging); }
+            if (w->staging != (unsigned char*)0) { dealloc(w->staging); }
             w->staging = (unsigned char*)alloc_zeroed_raw_((unsigned long)bw * (unsigned long)bh * 4UL);
             w->stagingW = bw;
             w->stagingH = bh;
@@ -635,7 +635,7 @@ static void __gui_win32_set_title(&GuiWindowState st, const &char title) {
         if (w == (struct GuiWin32Window*)0) { return; }
         unsigned short* t = __gui_win32_wide(title);
         SetWindowTextW(w->hwnd, (const void*)t);
-        dealloc_raw_((void*)t);
+        dealloc(t);
     }
 }
 
@@ -785,7 +785,7 @@ static int __gui_win32_clip_set(const &char utf8, unsigned long n) {
             }
             CloseClipboard();
         }
-        dealloc_raw_((void*)buf);
+        dealloc(buf);
         return ok;
     }
 }

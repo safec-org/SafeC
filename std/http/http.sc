@@ -1786,7 +1786,7 @@ struct HttpServerShared_ {
     int listenFd;
     unsigned short port;
     HttpDispatchFn_ dispatch;
-    void* ctx;
+    ?&Erased ctx;
     int stopping;
     int running;           // worker threads alive
     int serving;           // serve() between start and return
@@ -1901,7 +1901,7 @@ static ?&HttpWorkerArg_ http_server_worker_(?&HttpWorkerArg_ argPtr) {
     unsafe {
         sh = a->sh;
         idx = a->index;
-        dealloc_raw_((void*)a);
+        dealloc(a);
     }
     while (1) {
         int stopping;
@@ -1984,9 +1984,9 @@ struct HttpServer HttpServer::bind(const &HttpServerConfig cfg, ?&int ok) {
                         } else {
                             ar.drop();
                             good = 0;
-                            dealloc_raw_((void*)sh->activeFds);
-                            dealloc_raw_((void*)sh->tids);
-                            dealloc_raw_((void*)sh);
+                            dealloc(sh->activeFds);
+                            dealloc(sh->tids);
+                            dealloc(sh);
                             srv.shared_ = null;
                         }
                     }
@@ -2001,9 +2001,12 @@ struct HttpServer HttpServer::bind(const &HttpServerConfig cfg, ?&int ok) {
 }
 
 static struct HttpResponse http_plain_dispatch_(?&Erased ctx, &HttpRequest req, &HttpConn conn) {
-    HttpHandler h;
-    unsafe { h = (HttpHandler)(void*)ctx; }
-    return h(req);
+    // ctx is serve()'s / start()'s plain handler, erased.
+    match (ctx) {
+        case some(c): { unsafe { HttpHandler h = (HttpHandler)c; return h(req); } }
+        case null: {}
+    }
+    return HttpResponse::text(500, "no handler");
 }
 
 // Spawns the workers and waits for them; closes the listening socket at
@@ -2027,7 +2030,7 @@ static int http_server_run_(struct HttpServerShared_* sh) {
                 sh->running = sh->running - 1;
                 sh->stopping = 1;
                 mutex_unlock(&sh->mtx);
-                dealloc_raw_((void*)a);
+                dealloc(a);
                 failed = 1;
                 break;
             }

@@ -1303,7 +1303,7 @@ static ?&void attn_kernel_(int kind, int dtype, unsigned long d) {
         memcpy((void*)(buf + p), (const void*)src, srcLen);
         buf[p + srcLen] = (char)0;
         void* module = cuda_load_module((const &char)buf, "safec_attention.cu");
-        dealloc_raw_((void*)buf);
+        dealloc(buf);
         if (module == (void*)0) return (void*)0;
         void* func = (void*)0;
         if (cuModuleGetFunction(&func, module, "attn_entry") != 0) return (void*)0;

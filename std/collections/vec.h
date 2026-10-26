@@ -124,7 +124,7 @@ generic<T>
 void Vec::shrink() {
     if (self.len == self.cap) return;
     if (self.len == 0UL) {
-        unsafe { dealloc_raw_((void*)self.data); }
+        unsafe { dealloc(self.data); }
         self.data = null;
         self.cap = 0UL;
         return;
@@ -457,7 +457,7 @@ void Vec::free() { self.drop(); }
 generic<T>
 void Vec::drop() {
     self.clear();
-    unsafe { dealloc_raw_((void*)self.data); }
+    unsafe { dealloc(self.data); }
     self.data = null;
     self.len = 0UL;
     self.cap = 0UL;

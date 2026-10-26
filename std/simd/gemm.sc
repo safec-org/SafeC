@@ -452,7 +452,7 @@ static thread_local unsigned long g_gemm_pack_cap = 0UL;
 static float* gemm_pack_buf_(unsigned long floats) {
     if (floats > g_gemm_pack_cap) {
         unsafe {
-            if (g_gemm_pack != (float*)0) dealloc_raw_((void*)g_gemm_pack);
+            if (g_gemm_pack != (float*)0) dealloc(g_gemm_pack);
             g_gemm_pack = (float*)alloc_raw_(sizeof(float) * floats);
         }
         if (g_gemm_pack == (float*)0) panic_at("sgemm: out of memory", "gemm.sc", __LINE__);

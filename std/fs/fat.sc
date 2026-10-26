@@ -6,8 +6,6 @@
 
 namespace std {
 
-extern void* memset(void* p, int v, size_t n);
-extern void* memcpy(void* d, const void* s, size_t n);
 extern int   strncmp(const char* a, const char* b, size_t n);
 extern size_t strlen(const char* s);
 
@@ -217,11 +215,9 @@ static int fat_split_path_(const char* path, char parts[][VFS_MAX_NAME], int max
 // ── FileSystem methods (see vfs.h) ────────────────────────────────────────────
 
 int FatCtx::open(const &char path_ref, int flags, &VfsNode node_out) {
-    void* ctx;
-    unsafe { ctx = (void*)self; }
     const char* path = path_ref;
     struct FatCtx* fc;
-    unsafe { fc = (struct FatCtx*)ctx; }
+    unsafe { fc = (struct FatCtx*)self; }
     // Tokenise path.
     char parts[FAT_MAX_DEPTH][VFS_MAX_NAME];
     int n = fat_split_path_(path, parts, FAT_MAX_DEPTH);
@@ -268,10 +264,8 @@ int FatCtx::open(const &char path_ref, int flags, &VfsNode node_out) {
 
 unsigned long FatCtx::read(unsigned long inode, unsigned long offset, []unsigned char buf) {
     unsigned long len = buf.len;
-    void* ctx;
-    unsafe { ctx = (void*)self; }
     struct FatCtx* fc;
-    unsafe { fc = (struct FatCtx*)ctx; }
+    unsafe { fc = (struct FatCtx*)self; }
     unsigned long bpc;
     unsafe { bpc = fc->bytes_per_cluster; }
     unsigned long cluster_idx = offset / bpc;
@@ -296,10 +290,8 @@ unsigned long FatCtx::read(unsigned long inode, unsigned long offset, []unsigned
 }
 
 int FatCtx::readdir_raw_(unsigned long inode, fn void(&VfsNode, ?&Erased) cb, ?&Erased user) {
-    void* ctx;
-    unsafe { ctx = (void*)self; }
     struct FatCtx* fc;
-    unsafe { fc = (struct FatCtx*)ctx; }
+    unsafe { fc = (struct FatCtx*)self; }
     int count = 0;
     unsigned long cluster = inode;
     unsigned char buf[FAT_MAX_CLUSTER];

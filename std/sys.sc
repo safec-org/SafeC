@@ -23,12 +23,11 @@ extern long long strtoll(const char* s, char** end, int base);
 extern unsigned long long strtoull(const char* s, char** end, int base);
 extern double strtod(const char* s, char** end);
 extern float  strtof(const char* s, char** end);
-// atexit: declared with void* for SafeC compatibility (no function pointer type syntax yet)
-extern int   atexit(void* func);
-// qsort/bsearch: declared with void* comparator for SafeC compatibility
-extern void  qsort(void* base, size_t n, size_t size, void* cmp);
-extern void* bsearch(const void* key, const void* base, size_t n,
-                     size_t size, void* cmp);
+extern int   atexit(fn void() func);
+// qsort/bsearch over the elements' bytes, with sys.h's erased comparator.
+extern void  qsort(unsigned char* base, size_t n, size_t size, SysCmpRaw_ cmp);
+extern const unsigned char* bsearch(const &Erased key, const unsigned char* base, size_t n,
+                                    size_t size, SysCmpRaw_ cmp);
 
 // ── Process control ───────────────────────────────────────────────────────────
 
@@ -76,7 +75,7 @@ inline int sys_system(const &char cmd) {
 // Register a function to be called at normal process exit.
 // Returns 0 on success, non-zero if the registration limit is exceeded.
 inline int sys_atexit(fn void() func) {
-    unsafe { return atexit((void*)func); }
+    unsafe { return atexit(func); }
 }
 
 // ── PRNG ──────────────────────────────────────────────────────────────────────
@@ -165,14 +164,14 @@ inline float sys_strtof(const &char s, ?&&const char end) {
 // ── Sorting and searching ─────────────────────────────────────────────────────
 
 // Sort n elements of elem_size bytes in place.
-// cmp is a pointer to a function: int cmp(const void* a, const void* b)
-inline void sys_qsort_raw_(void* base, unsigned long n, unsigned long elem_size, void* cmp) {
+// cmp(a, b) compares two elements (int cmp(const T*, const T*), erased).
+inline void sys_qsort_raw_(unsigned char* base, unsigned long n, unsigned long elem_size, SysCmpRaw_ cmp) {
     unsafe { qsort(base, n, elem_size, cmp); }
 }
 
 // Binary search in sorted array.  Returns pointer to match or NULL.
-void* sys_bsearch_raw_(const void* key, const void* base,
-                  unsigned long n, unsigned long elem_size, void* cmp) {
+const unsigned char* sys_bsearch_raw_(const &Erased key, const unsigned char* base,
+                                      unsigned long n, unsigned long elem_size, SysCmpRaw_ cmp) {
     unsafe { return bsearch(key, base, n, elem_size, cmp); }
 }
 

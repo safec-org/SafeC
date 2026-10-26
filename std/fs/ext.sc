@@ -6,8 +6,6 @@
 
 namespace std {
 
-extern void* memset(void* p, int v, size_t n);
-extern void* memcpy(void* d, const void* s, size_t n);
 extern int   strncmp(const char* a, const char* b, size_t n);
 extern size_t strlen(const char* s);
 
@@ -303,11 +301,9 @@ static int ext2_split_path_(const char* path,
 // ── FileSystem methods (see vfs.h) ────────────────────────────────────────────
 
 int Ext2Ctx::open(const &char path_ref, int flags, &VfsNode node_out) {
-    void* ctx;
-    unsafe { ctx = (void*)self; }
     const char* path = path_ref;
     struct Ext2Ctx* ec;
-    unsafe { ec = (struct Ext2Ctx*)ctx; }
+    unsafe { ec = (struct Ext2Ctx*)self; }
 
     const char* comp_ptrs[EXT2_MAX_DEPTH];
     unsigned long comp_lens[EXT2_MAX_DEPTH];
@@ -367,10 +363,8 @@ unsigned long Ext2Ctx::read(unsigned long inode, unsigned long offset, []unsigne
 }
 
 int Ext2Ctx::readdir_raw_(unsigned long dir_ino, fn void(&VfsNode, ?&Erased) cb, ?&Erased user) {
-    void* ctx;
-    unsafe { ctx = (void*)self; }
     struct Ext2Ctx* ec;
-    unsafe { ec = (struct Ext2Ctx*)ctx; }
+    unsafe { ec = (struct Ext2Ctx*)self; }
 
     struct Ext2Inode dir_inode;
     if (ec->read_inode(dir_ino, &dir_inode) != 0) { return -1; }

@@ -96,7 +96,7 @@ void Stack::free() { self.drop(); }
 
 generic<T>
 void Stack::drop() {
-    unsafe { dealloc_raw_((void*)self.data); }
+    unsafe { dealloc(self.data); }
     self.data = null;
     self.top = 0UL;
     self.cap = 0UL;

@@ -125,7 +125,7 @@ void GuiFont::free() { self.drop(); }
 
 void GuiFont::drop() {
     unsafe {
-        if ((void*)self.bitmap != (void*)0) { dealloc_raw_((void*)self.bitmap); }
+        if ((void*)self.bitmap != (void*)0) { dealloc(self.bitmap); }
         self.bitmap = (&heap unsigned char)0;
         self.count = 0;
     }

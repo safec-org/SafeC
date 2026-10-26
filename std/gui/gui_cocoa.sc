@@ -442,7 +442,7 @@ static void __gui_cocoa_destroy(&GuiWindowState st) {
         MsgSendVoid0 releaseMsg = (MsgSendVoid0)objc_msgSend;
         releaseMsg(w->window, __gui_cocoa_sel("release"));
         releaseMsg(w->delegate, __gui_cocoa_sel("release"));
-        dealloc_raw_((void*)w);
+        dealloc(w);
         st.native = null;
     }
 }
@@ -829,7 +829,7 @@ static int __gui_cocoa_clip_set(const &char utf8, unsigned long n) {
         memcpy((void*)z, (const void*)utf8, n);
         z[n] = '\0';
         void* str = __gui_cocoa_str(z);
-        dealloc_raw_((void*)z);
+        dealloc(z);
         MsgSendBool2 setStr = (MsgSendBool2)objc_msgSend;
         signed char ok = setStr(pb, __gui_cocoa_sel("setString:forType:"), str, gPasteType);
         objc_autoreleasePoolPop(pool);

@@ -135,7 +135,7 @@ static int dom_str_into_(&DomStrReq_ r, &String out) {
         int m = dom_str_call_(r, big, n);
         if (m > n) { m = n; }
         if (m > 0) { out.push_n_((const char*)big, (unsigned long)m); }
-        dealloc_raw_((void*)big);
+        dealloc(big);
     }
     return 1;
 }
@@ -231,7 +231,7 @@ static unsigned long dom_collect_(int parent, const char* sel, int selLen, int c
         if (m > n) { m = n; }
         int k = 0;
         while (k < m) { out.push(big[k]); k = k + 1; }
-        dealloc_raw_((void*)big);
+        dealloc(big);
         return (unsigned long)m;
     }
 }

@@ -351,7 +351,7 @@ static void __gl_free(struct GuiGlWindow* w) {
         if (dpy != (void*)0 && w->surface != (void*)0) { gGl.destroySurface(dpy, w->surface); }
         if (dpy != (void*)0 && w->ctx != (void*)0) { gGl.destroyContext(dpy, w->ctx); }
         if (w->wlEgl != (void*)0) { gGl.wlEglDestroy(w->wlEgl); }
-        dealloc_raw_((void*)w);
+        dealloc(w);
     }
 }
 

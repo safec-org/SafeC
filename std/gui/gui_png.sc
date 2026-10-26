@@ -478,8 +478,8 @@ int GuiImage::load_png_n_(const &unsigned char data_ref, unsigned long size) { c
     }
 
     unsafe {
-        dealloc_raw_((void*)prevRow);
-        dealloc_raw_((void*)curRow);
+        dealloc(prevRow);
+        dealloc(curRow);
         raw.free();
     }
     return 1;
@@ -519,7 +519,7 @@ void GuiImage::free() { self.drop(); }
 
 void GuiImage::drop() {
     unsafe {
-        if ((void*)self.pixels != (void*)0) { dealloc_raw_((void*)self.pixels); }
+        if ((void*)self.pixels != (void*)0) { dealloc(self.pixels); }
         self.pixels = (&heap unsigned char)0;
         self.width = 0;
         self.height = 0;

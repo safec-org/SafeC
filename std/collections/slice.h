@@ -119,7 +119,7 @@ int Slice::is_empty() const { return self.len == 0UL; }
 
 generic<T>
 void Slice::free() {
-    unsafe { dealloc_raw_((void*)self.ptr); }
+    unsafe { dealloc((?&heap T)self.ptr); }
     self.ptr = null;
     self.len = 0UL;
 }

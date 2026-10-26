@@ -121,7 +121,7 @@ static void fft2d_cols_(&Fft2dJob j, unsigned long lo, unsigned long hi) {
             }
             g = g + 1UL;
         }
-        dealloc_raw_((void*)buf);
+        dealloc(buf);
     }
 }
 

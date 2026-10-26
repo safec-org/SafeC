@@ -114,7 +114,7 @@ void LFQueue::destroy() { self.drop(); }
 
 generic<T>
 void LFQueue::drop() {
-    if (self.owned && self.buffer.len != 0UL) { unsafe { dealloc_raw_((void*)self.buffer.ptr); } }
+    if (self.owned && self.buffer.len != 0UL) { unsafe { dealloc(self.buffer.ptr); } }
     self.buffer = self.buffer[0..0];
     self.cap = 0UL;
 }

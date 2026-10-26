@@ -102,7 +102,7 @@ void MpscQueue::destroy() { self.drop(); }
 
 generic<T>
 void MpscQueue::drop() {
-    unsafe { dealloc_raw_((void*)self.buffer); }
+    unsafe { dealloc(self.buffer); }
     self.buffer = null;
     self.cap = 0UL;
 }

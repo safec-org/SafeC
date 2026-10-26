@@ -93,7 +93,7 @@ void tensor_arena_track_raw_(&TensorArena a, void* t) {
             void** old = (void**)a.tracked;
             unsigned long i = 0UL;
             while (i < a.trackedCount) { list[i] = old[i]; i = i + 1UL; }
-            if (old != (void**)0) dealloc_raw_((void*)old);
+            if (old != (void**)0) dealloc(old);
             a.tracked = (unsigned long)list;
             a.trackedCap = cap;
         }
@@ -136,10 +136,10 @@ void TensorArena::drop() {
         unsigned long* c = (unsigned long*)self.first;
         while (c != (unsigned long*)0) {
             unsigned long* next = (unsigned long*)c[0];
-            dealloc_raw_((void*)c);
+            dealloc(c);
             c = next;
         }
-        if (self.tracked != 0UL) dealloc_raw_((void*)self.tracked);
+        if (self.tracked != 0UL) dealloc((unsigned char*)self.tracked);
     }
     self.first = 0UL;
     self.current = 0UL;

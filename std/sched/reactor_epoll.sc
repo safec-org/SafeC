@@ -191,7 +191,7 @@ inline void Reactor::remove(int fd, int filter) {
 }
 
 // Reactor::poll(sched, ...) is reactor.sc's, over this.
-inline int Reactor::poll_events_raw_(void* on_ready, void* ctx, long long timeout_ms) {
+inline int Reactor::poll_events_raw_(fn void(?&Erased, int, int) on_ready, ?&Erased ctx, long long timeout_ms) {
     struct EpollEvent events[64];
     int timeout;
     if (timeout_ms < 0LL) {
@@ -219,10 +219,10 @@ inline int Reactor::poll_events_raw_(void* on_ready, void* ctx, long long timeou
             // matters.
             struct SignalfdSiginfo info;
             unsafe { read(fd, (void*)&info, sizeof(struct SignalfdSiginfo)); }
-            unsafe { fn void(void*, int, int) cb = (fn void(void*, int, int))on_ready; cb(ctx, signum, SCHED_SIGNAL); }
+            on_ready(ctx, signum, SCHED_SIGNAL);
         } else {
             int filter = (events[i].events & (unsigned int)SAFEC_EPOLLOUT) != 0U ? SCHED_WRITE : SCHED_READ;
-            unsafe { fn void(void*, int, int) cb = (fn void(void*, int, int))on_ready; cb(ctx, fd, filter); }
+            on_ready(ctx, fd, filter);
         }
         i = i + 1;
     }

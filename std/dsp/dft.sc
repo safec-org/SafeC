@@ -126,7 +126,7 @@ static void dft_run_(const double* in, double* out, unsigned long n, int inv, in
         j.real = real;
         if (n >= 256UL) parallel_for(n, 4096UL / n + 1UL, dft_bins_, &j);
         else dft_bins_(&j, 0UL, n);
-        dealloc_raw_((void*)tab);
+        dealloc(tab);
     }
 }
 
@@ -155,7 +155,7 @@ static void dft_run_f32_(const float* in, float* out, unsigned long n, int inv, 
         dft_run_((const double*)buf, &buf[inVals], n, inv, real);
         i = 0UL;
         while (i < 2UL * n) { out[i] = (float)buf[inVals + i]; i = i + 1UL; }
-        dealloc_raw_((void*)buf);
+        dealloc(buf);
     }
 }
 

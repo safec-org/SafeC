@@ -58,7 +58,7 @@ void stft_forward_n_(const &double signal, unsigned long signalLen,
     // at a time instead).
     unsafe { fft_real_batch_inplace_n_(out, frameSize, numFrames); }
 
-    unsafe { dealloc_raw_((void*)win); }
+    unsafe { dealloc(win); }
 }
 
 void stft_inverse_n_(const &Complex frames, unsigned long numFrames,
@@ -116,9 +116,9 @@ void stft_inverse_n_(const &Complex frames, unsigned long numFrames,
     }
 
     unsafe {
-        dealloc_raw_((void*)win);
-        dealloc_raw_((void*)winSumSq);
-        dealloc_raw_((void*)frameBuf);
+        dealloc(win);
+        dealloc(winSumSq);
+        dealloc(frameBuf);
     }
 }
 
@@ -168,7 +168,7 @@ void stft_forward_f32_n_(const &float signal, unsigned long signalLen,
     // at a time instead).
     unsafe { fft_real_batch_inplace_f32_n_(out, frameSize, numFrames); }
 
-    unsafe { dealloc_raw_((void*)win); }
+    unsafe { dealloc(win); }
 }
 
 void stft_inverse_f32_n_(const &Complex32 frames, unsigned long numFrames,
@@ -226,9 +226,9 @@ void stft_inverse_f32_n_(const &Complex32 frames, unsigned long numFrames,
     }
 
     unsafe {
-        dealloc_raw_((void*)win);
-        dealloc_raw_((void*)winSumSq);
-        dealloc_raw_((void*)frameBuf);
+        dealloc(win);
+        dealloc(winSumSq);
+        dealloc(frameBuf);
     }
 }
 
@@ -282,8 +282,8 @@ double mr_stft_loss_n_(const &double x, const &double y, unsigned long len,
             validCount = validCount + 1UL;
 
             unsafe {
-                dealloc_raw_((void*)sx);
-                dealloc_raw_((void*)sy);
+                dealloc(sx);
+                dealloc(sy);
             }
         }
         r = r + 1UL;

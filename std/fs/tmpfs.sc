@@ -1,19 +1,18 @@
 // SafeC Standard Library — tmpfs Implementation
 #pragma once
 #include <std/stddef.h>
+#include <std/mem.h>
 #include <std/fs/tmpfs.h>
 
 namespace std {
 
-extern void* memset(void* p, int v, size_t n);
-extern void* memcpy(void* d, const void* s, size_t n);
 extern int   strcmp(const char* a, const char* b);
 extern int   strncmp(const char* a, const char* b, size_t n);
 extern size_t strlen(const char* s);
-extern void* strncpy(char* d, const char* s, size_t n);
+extern char* strncpy(char* d, const char* s, size_t n);
 
 inline void TmpfsCtx::init() {
-    unsafe { memset((void*)self, 0, sizeof(struct TmpfsCtx)); }
+    safe_memset_obj(self, 0);
     // Create root inode at index 0.
     self.inodes[0].used   = 1;
     self.inodes[0].type   = VFS_TYPE_DIR;
@@ -109,11 +108,9 @@ static void tmpfs_split_path_(const char* path,
 // ── FileSystem methods (see vfs.h) ────────────────────────────────────────────
 
 int TmpfsCtx::open(const &char path_ref, int flags, &VfsNode node_out) {
-    void* ctx;
-    unsafe { ctx = (void*)self; }
     const char* path = path_ref;
     struct TmpfsCtx* tc;
-    unsafe { tc = (struct TmpfsCtx*)ctx; }
+    unsafe { tc = (struct TmpfsCtx*)self; }
     int idx = tmpfs_resolve_(tc, path);
     if (idx < 0) {
         // Create if VFS_O_CREATE.
@@ -154,11 +151,9 @@ int TmpfsCtx::open(const &char path_ref, int flags, &VfsNode node_out) {
 }
 
 int TmpfsCtx::unlink(const &char path_ref) {
-    void* ctx;
-    unsafe { ctx = (void*)self; }
     const char* path = path_ref;
     struct TmpfsCtx* tc;
-    unsafe { tc = (struct TmpfsCtx*)ctx; }
+    unsafe { tc = (struct TmpfsCtx*)self; }
     int idx = tmpfs_resolve_(tc, path);
     if (idx < 0) { return -1; }
     unsafe {
@@ -169,11 +164,9 @@ int TmpfsCtx::unlink(const &char path_ref) {
 }
 
 int TmpfsCtx::mkdir(const &char path_ref) {
-    void* ctx;
-    unsafe { ctx = (void*)self; }
     const char* path = path_ref;
     struct TmpfsCtx* tc;
-    unsafe { tc = (struct TmpfsCtx*)ctx; }
+    unsafe { tc = (struct TmpfsCtx*)self; }
     char parent[VFS_MAX_PATH];
     char leaf[VFS_MAX_NAME];
     tmpfs_split_path_(path, (char*)parent, (char*)leaf);
@@ -198,10 +191,8 @@ unsigned long TmpfsCtx::read(unsigned long inode, unsigned long offset, []unsign
     unsigned long len = buf_s.len;
     unsigned char* buf;
     unsafe { buf = (unsigned char*)buf_s.ptr; }
-    void* ctx;
-    unsafe { ctx = (void*)self; }
     struct TmpfsCtx* tc;
-    unsafe { tc = (struct TmpfsCtx*)ctx; }
+    unsafe { tc = (struct TmpfsCtx*)self; }
     int idx = (int)inode;
     if (idx < 0 || idx >= TMPFS_MAX_FILES) { return (unsigned long)0; }
     unsigned long fsize;
@@ -229,10 +220,8 @@ unsigned long TmpfsCtx::write(unsigned long inode, unsigned long offset, []const
     unsigned long len = buf_s.len;
     const unsigned char* buf;
     unsafe { buf = (const unsigned char*)buf_s.ptr; }
-    void* ctx;
-    unsafe { ctx = (void*)self; }
     struct TmpfsCtx* tc;
-    unsafe { tc = (struct TmpfsCtx*)ctx; }
+    unsafe { tc = (struct TmpfsCtx*)self; }
     int idx = (int)inode;
     if (idx < 0 || idx >= TMPFS_MAX_FILES) { return (unsigned long)0; }
     unsigned long doff;
@@ -259,10 +248,8 @@ unsigned long TmpfsCtx::write(unsigned long inode, unsigned long offset, []const
 }
 
 int TmpfsCtx::readdir_raw_(unsigned long inode, fn void(&VfsNode, ?&Erased) cb, ?&Erased user) {
-    void* ctx;
-    unsafe { ctx = (void*)self; }
     struct TmpfsCtx* tc;
-    unsafe { tc = (struct TmpfsCtx*)ctx; }
+    unsafe { tc = (struct TmpfsCtx*)self; }
     int count = 0;
     int j = 0;
     while (j < TMPFS_MAX_FILES) {

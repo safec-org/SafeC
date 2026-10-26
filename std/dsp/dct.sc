@@ -119,7 +119,7 @@ static void dct_run_(const double* in, double* out, unsigned long n, int inverse
         j.inverse = inverse;
         if (n >= 512UL) parallel_for(n, 8192UL / n + 1UL, dct_outs_, &j);
         else dct_outs_(&j, 0UL, n);
-        dealloc_raw_((void*)tab);
+        dealloc(tab);
     }
 }
 
@@ -143,7 +143,7 @@ static void dct_run_f32_(const float* in, float* out, unsigned long n, int inver
         dct_run_((const double*)buf, &buf[n], n, inverse);
         i = 0UL;
         while (i < n) { out[i] = (float)buf[n + i]; i = i + 1UL; }
-        dealloc_raw_((void*)buf);
+        dealloc(buf);
     }
 }
 

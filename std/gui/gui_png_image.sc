@@ -50,7 +50,7 @@ int GuiImage::load_png_file(const &char path) {
             f.close();
             int r = 0;
             if (ok) { unsafe { r = self.load_png_n_((const unsigned char*)buf, (unsigned long)n); } }
-            unsafe { dealloc_raw_((void*)buf); }
+            unsafe { dealloc(buf); }
             return r;
         }
     }
@@ -211,8 +211,8 @@ int GuiImage::save_png(const &char path) const {
         }
     }
     unsafe {
-        dealloc_raw_((void*)raw);
-        dealloc_raw_((void*)z);
+        dealloc(raw);
+        dealloc(z);
     }
     return ok;
 }

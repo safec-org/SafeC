@@ -132,7 +132,7 @@ inline void String::free() { self.drop(); }
 
 inline void String::drop() {
     unsafe {
-        if (self.cap > 0UL) { dealloc_raw_((void*)self.data); }
+        if (self.cap > 0UL) { dealloc(self.data); }
         self.data = (&heap char)0;
     }
     self.len  = 0UL;
@@ -329,7 +329,7 @@ inline int String::replace_all(const &char from, const &char to) {
         }
         newBuf[dst] = (char)0;
 
-        if (self.data != (&heap char)0) { dealloc_raw_((void*)self.data); }
+        if (self.data != (&heap char)0) { dealloc(self.data); }
         self.data = (&heap char)newBuf;
         self.len  = newLen;
         self.cap  = newLen + 1UL;

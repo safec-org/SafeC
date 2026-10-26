@@ -27,7 +27,7 @@ void WsMessage::free() { self.drop(); }
 
 void WsMessage::drop() {
     if (self.data != (unsigned char*)0) {
-        unsafe { dealloc_raw_((void*)self.data); }
+        unsafe { dealloc(self.data); }
     }
 }
 
@@ -170,7 +170,7 @@ static int ws_keep_early_(&WsConn c, &BufReader<TcpStream> in) {
         case some(b): {
             long long got;
             unsafe { got = in.read(((unsigned char*)b)[0..n]); }
-            if (got != (long long)n) { unsafe { dealloc_raw_((void*)b); } return 0; }
+            if (got != (long long)n) { unsafe { dealloc(b); } return 0; }
             c.early = b;
             c.earlyLen = n;
         }
@@ -199,7 +199,7 @@ long long WsSource_::read([]unsigned char out_s) {
         }
         c.earlyPos = c.earlyPos + k;
         if (c.earlyPos == c.earlyLen) {
-            match (c.early) { case some(b): { unsafe { dealloc_raw_((void*)b); } } case null: { } }
+            match (c.early) { case some(b): { unsafe { dealloc(b); } } case null: { } }
             c.early = null;
             c.earlyLen = 0UL;
             c.earlyPos = 0UL;
@@ -424,7 +424,7 @@ static int ws_recv_frame_(&WsConn conn, &WsMessage out, &int finOut) {
         int got;
         unsafe { got = read_exact(&s, ((unsigned char*)payload)[0..payloadLen]); }
         if (!got) {
-            unsafe { dealloc_raw_((void*)payload); }
+            unsafe { dealloc(payload); }
             return 0;
         }
         if (maskBit != 0) {
@@ -606,7 +606,7 @@ void WsConn::drop() {
         self.fd = -1;
         self.tls = null;
     }
-    match (self.early) { case some(b): { unsafe { dealloc_raw_((void*)b); } } case null: { } }
+    match (self.early) { case some(b): { unsafe { dealloc(b); } } case null: { } }
     self.early = null;
     self.earlyLen = 0UL;
     self.earlyPos = 0UL;

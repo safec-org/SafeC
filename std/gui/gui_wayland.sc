@@ -725,7 +725,7 @@ static void __wl_buffer_free(struct GuiWlBuffer* b) {
         if (b == (struct GuiWlBuffer*)0) { return; }
         if (b->buffer != (void*)0) { __wl_destroy_req(b->buffer, 0U /* destroy */); }
         if (b->data != (unsigned char*)0) { munmap((void*)b->data, b->size); }
-        dealloc_raw_((void*)b);
+        dealloc(b);
     }
 }
 
@@ -1038,7 +1038,7 @@ static int __wl_create(&GuiWindowState st, const &GuiWindowOptions opts) {
         w->st = (struct GuiWindowState*)st;
         struct GuiWlArgs a = __wl_args();
         w->surface = __wl_new(gWl.compositor, 0U /* create_surface */, gWlLib.iSurface, &a);
-        if (w->surface == (void*)0) { dealloc_raw_((void*)w); return 0; }
+        if (w->surface == (void*)0) { dealloc(w); return 0; }
         gWlLib.add_dispatcher(w->surface, (void*)__wl_surface_dispatch, (const void*)w, (void*)w);
 
         struct GuiWlArgs b = __wl_args();
@@ -1080,7 +1080,7 @@ static int __wl_create(&GuiWindowState st, const &GuiWindowOptions opts) {
         if (opts.visible) { __wl_map(w); }
         if (gWl.dead) {
             st.native = null;
-            dealloc_raw_((void*)w);
+            dealloc(w);
             return 0;
         }
         // st.x/st.y: Wayland never tells a client where its window is.
@@ -1118,7 +1118,7 @@ static void __wl_destroy(&GuiWindowState st) {
         __wl_destroy_req(w->surface, 0U);
         __wl_window_free_buffers(w);
         gWlLib.display_flush(gWl.display);
-        dealloc_raw_((void*)w);
+        dealloc(w);
         st.native = null;
     }
 }
