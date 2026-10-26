@@ -490,8 +490,23 @@ static void* __mps_exp_pipeline  = (void*)0;
 static void* __mps_sqrt_pipeline = (void*)0;
 static void* __mps_relu_backward_pipeline = (void*)0;
 
-int mps_add_f32(const &float a, const &float b, &float out, unsigned long n) {
+int mps_add_f32_n_(const &float a, const &float b, &float out, unsigned long n) {
     return __mps_run_binary_kernel(&__mps_add_pipeline, "add_kernel", a, b, out, n);
+}
+
+int mps_add_f32([]const float a_s, []const float b_s, []float out_s) {
+    unsigned long n = out_s.len;
+    if (a_s.len < n || b_s.len < n) { return 0; }
+    float a_d_[1];
+    const &float a = &a_d_[0];
+    if (a_s.len > 0UL) { unsafe { a = (const &float)a_s.ptr; } }
+    float b_d_[1];
+    const &float b = &b_d_[0];
+    if (b_s.len > 0UL) { unsafe { b = (const &float)b_s.ptr; } }
+    float out_d_[1];
+    &float out = &out_d_[0];
+    if (out_s.len > 0UL) { unsafe { out = (&float)out_s.ptr; } }
+    return mps_add_f32_n_(a, b, out, n);
 }
 
 // mps_relu_backward_f32's own definition (batch-aware, not routed through
@@ -504,28 +519,109 @@ int mps_add_f32(const &float a, const &float b, &float out, unsigned long n) {
 // the batching primitives it needs to reference -- same reasoning as
 // mps_relu_f32/mps_relu_backward_f32 above (see mps_relu_f32's comment).
 
-int mps_mul_f32(const &float a, const &float b, &float out, unsigned long n) {
+int mps_mul_f32_n_(const &float a, const &float b, &float out, unsigned long n) {
     return __mps_run_binary_kernel(&__mps_mul_pipeline, "mul_kernel", a, b, out, n);
 }
 
-int mps_div_f32(const &float a, const &float b, &float out, unsigned long n) {
+int mps_mul_f32([]const float a_s, []const float b_s, []float out_s) {
+    unsigned long n = out_s.len;
+    if (a_s.len < n || b_s.len < n) { return 0; }
+    float a_d_[1];
+    const &float a = &a_d_[0];
+    if (a_s.len > 0UL) { unsafe { a = (const &float)a_s.ptr; } }
+    float b_d_[1];
+    const &float b = &b_d_[0];
+    if (b_s.len > 0UL) { unsafe { b = (const &float)b_s.ptr; } }
+    float out_d_[1];
+    &float out = &out_d_[0];
+    if (out_s.len > 0UL) { unsafe { out = (&float)out_s.ptr; } }
+    return mps_mul_f32_n_(a, b, out, n);
+}
+
+int mps_div_f32_n_(const &float a, const &float b, &float out, unsigned long n) {
     return __mps_run_binary_kernel(&__mps_div_pipeline, "div_kernel", a, b, out, n);
 }
 
-int mps_pow_f32(const &float a, const &float b, &float out, unsigned long n) {
+int mps_div_f32([]const float a_s, []const float b_s, []float out_s) {
+    unsigned long n = out_s.len;
+    if (a_s.len < n || b_s.len < n) { return 0; }
+    float a_d_[1];
+    const &float a = &a_d_[0];
+    if (a_s.len > 0UL) { unsafe { a = (const &float)a_s.ptr; } }
+    float b_d_[1];
+    const &float b = &b_d_[0];
+    if (b_s.len > 0UL) { unsafe { b = (const &float)b_s.ptr; } }
+    float out_d_[1];
+    &float out = &out_d_[0];
+    if (out_s.len > 0UL) { unsafe { out = (&float)out_s.ptr; } }
+    return mps_div_f32_n_(a, b, out, n);
+}
+
+int mps_pow_f32_n_(const &float a, const &float b, &float out, unsigned long n) {
     return __mps_run_binary_kernel(&__mps_pow_pipeline, "pow_kernel", a, b, out, n);
 }
 
-int mps_log_f32(const &float a, &float out, unsigned long n) {
+int mps_pow_f32([]const float a_s, []const float b_s, []float out_s) {
+    unsigned long n = out_s.len;
+    if (a_s.len < n || b_s.len < n) { return 0; }
+    float a_d_[1];
+    const &float a = &a_d_[0];
+    if (a_s.len > 0UL) { unsafe { a = (const &float)a_s.ptr; } }
+    float b_d_[1];
+    const &float b = &b_d_[0];
+    if (b_s.len > 0UL) { unsafe { b = (const &float)b_s.ptr; } }
+    float out_d_[1];
+    &float out = &out_d_[0];
+    if (out_s.len > 0UL) { unsafe { out = (&float)out_s.ptr; } }
+    return mps_pow_f32_n_(a, b, out, n);
+}
+
+int mps_log_f32_n_(const &float a, &float out, unsigned long n) {
     return __mps_run_unary_kernel(&__mps_log_pipeline, "log_kernel", a, out, n);
 }
 
-int mps_exp_f32(const &float a, &float out, unsigned long n) {
+int mps_log_f32([]const float a_s, []float out_s) {
+    unsigned long n = out_s.len;
+    if (a_s.len < n) { return 0; }
+    float a_d_[1];
+    const &float a = &a_d_[0];
+    if (a_s.len > 0UL) { unsafe { a = (const &float)a_s.ptr; } }
+    float out_d_[1];
+    &float out = &out_d_[0];
+    if (out_s.len > 0UL) { unsafe { out = (&float)out_s.ptr; } }
+    return mps_log_f32_n_(a, out, n);
+}
+
+int mps_exp_f32_n_(const &float a, &float out, unsigned long n) {
     return __mps_run_unary_kernel(&__mps_exp_pipeline, "exp_kernel", a, out, n);
 }
 
-int mps_sqrt_f32(const &float a, &float out, unsigned long n) {
+int mps_exp_f32([]const float a_s, []float out_s) {
+    unsigned long n = out_s.len;
+    if (a_s.len < n) { return 0; }
+    float a_d_[1];
+    const &float a = &a_d_[0];
+    if (a_s.len > 0UL) { unsafe { a = (const &float)a_s.ptr; } }
+    float out_d_[1];
+    &float out = &out_d_[0];
+    if (out_s.len > 0UL) { unsafe { out = (&float)out_s.ptr; } }
+    return mps_exp_f32_n_(a, out, n);
+}
+
+int mps_sqrt_f32_n_(const &float a, &float out, unsigned long n) {
     return __mps_run_unary_kernel(&__mps_sqrt_pipeline, "sqrt_kernel", a, out, n);
+}
+
+int mps_sqrt_f32([]const float a_s, []float out_s) {
+    unsigned long n = out_s.len;
+    if (a_s.len < n) { return 0; }
+    float a_d_[1];
+    const &float a = &a_d_[0];
+    if (a_s.len > 0UL) { unsafe { a = (const &float)a_s.ptr; } }
+    float out_d_[1];
+    &float out = &out_d_[0];
+    if (out_s.len > 0UL) { unsafe { out = (&float)out_s.ptr; } }
+    return mps_sqrt_f32_n_(a, out, n);
 }
 
 // mps_relu_f32's own definition lives further down, alongside
@@ -541,7 +637,7 @@ int mps_sqrt_f32(const &float a, &float out, unsigned long n) {
 static void* __mps_scale_pipeline = (void*)0;
 static void* __mps_gated_gelu_pipeline = (void*)0;
 
-int mps_scale_f32(const &float a, float k, &float out, unsigned long n) {
+int mps_scale_f32_n_(const &float a, float k, &float out, unsigned long n) {
     unsafe {
         if (!__mps_ensure_device_queue()) return 0;
         void* device = __mps_device;
@@ -595,6 +691,18 @@ int mps_scale_f32(const &float a, float k, &float out, unsigned long n) {
         __mps_buf_put(bufOut, bytes);
         return 1;
     }
+}
+
+int mps_scale_f32([]const float a_s, float k, []float out_s) {
+    unsigned long n = out_s.len;
+    if (a_s.len < n) { return 0; }
+    float a_d_[1];
+    const &float a = &a_d_[0];
+    if (a_s.len > 0UL) { unsafe { a = (const &float)a_s.ptr; } }
+    float out_d_[1];
+    &float out = &out_d_[0];
+    if (out_s.len > 0UL) { unsafe { out = (&float)out_s.ptr; } }
+    return mps_scale_f32_n_(a, k, out, n);
 }
 
 // out[0] = sum(a[0..n)) -- two-stage parallel reduction (see
@@ -778,7 +886,7 @@ void mps_batch_submit() {
 // encode it onto a shared batch's command buffer for the fused
 // forward+loss+backward training-step path instead of forcing its own
 // commit+wait mid-batch.
-int mps_sub_f32(const &float a, const &float b, &float out, unsigned long n) {
+int mps_sub_f32_n_(const &float a, const &float b, &float out, unsigned long n) {
     unsafe {
         if (!__mps_ensure_device_queue()) return 0;
         void* device = __mps_device;
@@ -852,6 +960,21 @@ int mps_sub_f32(const &float a, const &float b, &float out, unsigned long n) {
     }
 }
 
+int mps_sub_f32([]const float a_s, []const float b_s, []float out_s) {
+    unsigned long n = out_s.len;
+    if (a_s.len < n || b_s.len < n) { return 0; }
+    float a_d_[1];
+    const &float a = &a_d_[0];
+    if (a_s.len > 0UL) { unsafe { a = (const &float)a_s.ptr; } }
+    float b_d_[1];
+    const &float b = &b_d_[0];
+    if (b_s.len > 0UL) { unsafe { b = (const &float)b_s.ptr; } }
+    float out_d_[1];
+    &float out = &out_d_[0];
+    if (out_s.len > 0UL) { unsafe { out = (&float)out_s.ptr; } }
+    return mps_sub_f32_n_(a, b, out, n);
+}
+
 // mps_sum_f32: batch-aware. Under an open batch, the CPU-side "combine the
 // partial-sums array" step (the while-loop below) can't run inline the way
 // the non-batched path does -- bufOut isn't readable until mps_batch_end()'s
@@ -878,7 +1001,7 @@ static void __mps_sum_finalize(void* ctxPtr) {
     }
 }
 
-int mps_sum_f32(const &float a, &float out, unsigned long n) {
+int mps_sum_f32_n_(const &float a, &float out, unsigned long n) {
     unsafe {
         if (!__mps_ensure_device_queue()) return 0;
         void* device = __mps_device;
@@ -960,6 +1083,18 @@ int mps_sum_f32(const &float a, &float out, unsigned long n) {
         __mps_buf_put(bufOut, partialBytes);
         return 1;
     }
+}
+
+int mps_sum_f32([]const float a_s, []float out_s) {
+    unsigned long n = a_s.len;
+    if (out_s.len < 1UL) { return 0; }
+    float a_d_[1];
+    const &float a = &a_d_[0];
+    if (a_s.len > 0UL) { unsafe { a = (const &float)a_s.ptr; } }
+    float out_d_[1];
+    &float out = &out_d_[0];
+    if (out_s.len > 0UL) { unsafe { out = (&float)out_s.ptr; } }
+    return mps_sum_f32_n_(a, out, n);
 }
 
 int mps_sum_f32_chained(struct MpsBuf bufA, &float out, unsigned long n) {
@@ -1424,7 +1559,7 @@ int mps_matmul_atb_f32(const &float a, const &float b, &float out,
 // __mps_run_binary_kernel, same reasoning as mps_relu_f32 above it in the
 // file -- batching needs to skip the always-commit-and-wait path that
 // helper takes). Same 1D-grid dispatch shape as mps_relu_f32/mps_add_f32.
-int mps_relu_backward_f32(const &float a, const &float selfGrad, &float out, unsigned long n) {
+int mps_relu_backward_f32_n_(const &float a, const &float selfGrad, &float out, unsigned long n) {
     unsafe {
         if (!__mps_ensure_device_queue()) return 0;
         void* device = __mps_device;
@@ -1498,6 +1633,21 @@ int mps_relu_backward_f32(const &float a, const &float selfGrad, &float out, uns
     }
 }
 
+int mps_relu_backward_f32([]const float a_s, []const float selfGrad_s, []float out_s) {
+    unsigned long n = out_s.len;
+    if (a_s.len < n || selfGrad_s.len < n) { return 0; }
+    float a_d_[1];
+    const &float a = &a_d_[0];
+    if (a_s.len > 0UL) { unsafe { a = (const &float)a_s.ptr; } }
+    float selfGrad_d_[1];
+    const &float selfGrad = &selfGrad_d_[0];
+    if (selfGrad_s.len > 0UL) { unsafe { selfGrad = (const &float)selfGrad_s.ptr; } }
+    float out_d_[1];
+    &float out = &out_d_[0];
+    if (out_s.len > 0UL) { unsafe { out = (&float)out_s.ptr; } }
+    return mps_relu_backward_f32_n_(a, selfGrad, out, n);
+}
+
 // out[i] = max(a[i], 0) -- cached device/queue/pipeline and batching
 // support, same pattern as mps_matmul_f32 above (not routed through
 // __mps_run_unary_kernel like log/exp/sqrt: that helper always creates
@@ -1505,7 +1655,7 @@ int mps_relu_backward_f32(const &float a, const &float selfGrad, &float out, uns
 // exactly what a batched relu — encoded onto a matmul's shared command
 // buffer, e.g. for a matmul -> relu -> matmul forward pass with no CPU
 // step in between — needs to skip).
-int mps_relu_f32(const &float a, &float out, unsigned long n) {
+int mps_relu_f32_n_(const &float a, &float out, unsigned long n) {
     unsafe {
         if (!__mps_ensure_device_queue()) return 0;
         void* device = __mps_device;
@@ -1573,6 +1723,18 @@ int mps_relu_f32(const &float a, &float out, unsigned long n) {
         __mps_buf_put(bufOut, bytes);
         return 1;
     }
+}
+
+int mps_relu_f32([]const float a_s, []float out_s) {
+    unsigned long n = out_s.len;
+    if (a_s.len < n) { return 0; }
+    float a_d_[1];
+    const &float a = &a_d_[0];
+    if (a_s.len > 0UL) { unsafe { a = (const &float)a_s.ptr; } }
+    float out_d_[1];
+    &float out = &out_d_[0];
+    if (out_s.len > 0UL) { unsafe { out = (&float)out_s.ptr; } }
+    return mps_relu_f32_n_(a, out, n);
 }
 
 // ── GPU-buffer-chained variants (see gpu_mps.h's own comment on these) ───────
@@ -1848,13 +2010,29 @@ struct MpsBuf MpsBuf::alloc(unsigned long n, int dtype) {
     unsafe { return __mps_buf_make(__mps_buf_get(n * esize), n * esize, dtype); }
 }
 
-struct MpsBuf MpsBuf::upload(const &float host, unsigned long n) {
+struct MpsBuf MpsBuf::upload_n_(const &float host, unsigned long n) {
     unsafe { return __mps_buf_upload((const void*)host, n * 4UL, 0); }
 }
 
-struct MpsBuf MpsBuf::upload_bits(const &unsigned short bits, unsigned long n, int dtype) {
+struct MpsBuf MpsBuf::upload([]const float host_s) {
+    unsigned long n = host_s.len;
+    float host_d_[1];
+    const &float host = &host_d_[0];
+    if (host_s.len > 0UL) { unsafe { host = (const &float)host_s.ptr; } }
+    return MpsBuf::upload_n_(host, n);
+}
+
+struct MpsBuf MpsBuf::upload_bits_n_(const &unsigned short bits, unsigned long n, int dtype) {
     if (dtype != MPS_FP16 && dtype != MPS_BF16) return __mps_buf_make((void*)0, 0UL, dtype);
     unsafe { return __mps_buf_upload((const void*)bits, n * 2UL, dtype); }
+}
+
+struct MpsBuf MpsBuf::upload_bits([]const unsigned short bits_s, int dtype) {
+    unsigned long n = bits_s.len;
+    unsigned short bits_d_[1];
+    const &unsigned short bits = &bits_d_[0];
+    if (bits_s.len > 0UL) { unsafe { bits = (const &unsigned short)bits_s.ptr; } }
+    return MpsBuf::upload_bits_n_(bits, n, dtype);
 }
 
 struct MpsBuf MpsBuf::batch_last_output() {
@@ -2654,8 +2832,8 @@ int mps_matmul_f16(const &float a, const &float b, &float out,
             if (outHalf != (void*)0) free((void*)outHalf);
             return 0;
         }
-        f32_to_fp16_bulk(a, aHalf, nA);
-        f32_to_fp16_bulk(b, bHalf, nB);
+        f32_to_fp16_bulk_n_(a, aHalf, nA);
+        f32_to_fp16_bulk_n_(b, bHalf, nB);
 
         unsigned long bytesA = nA * 2UL;
         unsigned long bytesB = nB * 2UL;
@@ -2713,7 +2891,7 @@ int mps_matmul_f16(const &float a, const &float b, &float out,
             return 0;
         }
         memcpy((void*)outHalf, outPtr, bytesOut);
-        fp16_to_f32_bulk(outHalf, out, nOut);
+        fp16_to_f32_bulk_n_(outHalf, out, nOut);
         free((void*)outHalf);
 
         __mps_buf_put(bufA, bytesA);
@@ -2748,8 +2926,8 @@ int mps_matmul_bf16(const &float a, const &float b, &float out,
             if (outBf != (void*)0) free((void*)outBf);
             return 0;
         }
-        f32_to_bf16_bulk(a, aBf, nA);
-        f32_to_bf16_bulk(b, bBf, nB);
+        f32_to_bf16_bulk_n_(a, aBf, nA);
+        f32_to_bf16_bulk_n_(b, bBf, nB);
 
         unsigned long bytesA = nA * 2UL;
         unsigned long bytesB = nB * 2UL;
@@ -2807,7 +2985,7 @@ int mps_matmul_bf16(const &float a, const &float b, &float out,
             return 0;
         }
         memcpy((void*)outBf, outPtr, bytesOut);
-        bf16_to_f32_bulk(outBf, out, nOut);
+        bf16_to_f32_bulk_n_(outBf, out, nOut);
         free((void*)outBf);
 
         __mps_buf_put(bufA, bytesA);
@@ -2902,37 +3080,77 @@ static int __mps_relu_reduced_precision(const char* kernelName, void** pipelineS
     }
 }
 
-int mps_relu_f16(const &float a, &float out, unsigned long n) {
+int mps_relu_f16_n_(const &float a, &float out, unsigned long n) {
     return __mps_relu_reduced_precision("relu_kernel_f16", &__mps_relu_f16_pipeline, a, out, n,
-                                         f32_to_fp16_bulk, fp16_to_f32_bulk);
+                                         f32_to_fp16_bulk_n_, fp16_to_f32_bulk_n_);
 }
 
-int mps_relu_bf16(const &float a, &float out, unsigned long n) {
+int mps_relu_f16([]const float a_s, []float out_s) {
+    unsigned long n = out_s.len;
+    if (a_s.len < n) { return 0; }
+    float a_d_[1];
+    const &float a = &a_d_[0];
+    if (a_s.len > 0UL) { unsafe { a = (const &float)a_s.ptr; } }
+    float out_d_[1];
+    &float out = &out_d_[0];
+    if (out_s.len > 0UL) { unsafe { out = (&float)out_s.ptr; } }
+    return mps_relu_f16_n_(a, out, n);
+}
+
+int mps_relu_bf16_n_(const &float a, &float out, unsigned long n) {
     return __mps_relu_reduced_precision("relu_kernel_bf16", &__mps_relu_bf16_pipeline, a, out, n,
-                                         f32_to_bf16_bulk, bf16_to_f32_bulk);
+                                         f32_to_bf16_bulk_n_, bf16_to_f32_bulk_n_);
+}
+
+int mps_relu_bf16([]const float a_s, []float out_s) {
+    unsigned long n = out_s.len;
+    if (a_s.len < n) { return 0; }
+    float a_d_[1];
+    const &float a = &a_d_[0];
+    if (a_s.len > 0UL) { unsafe { a = (const &float)a_s.ptr; } }
+    float out_d_[1];
+    &float out = &out_d_[0];
+    if (out_s.len > 0UL) { unsafe { out = (&float)out_s.ptr; } }
+    return mps_relu_bf16_n_(a, out, n);
 }
 
 // ── fp16 / bf16 persistent-buffer / batched tier (see gpu_mps.h) ────────────
-struct MpsBuf MpsBuf::upload_f16(const &float host, unsigned long n) {
+struct MpsBuf MpsBuf::upload_f16_n_(const &float host, unsigned long n) {
     unsafe {
         unsigned short* tmp = (unsigned short*)malloc(n * 2UL);
         if (tmp == (void*)0) return __mps_buf_make((void*)0, 0UL, MPS_FP16);
-        f32_to_fp16_bulk(host, tmp, n);
+        f32_to_fp16_bulk_n_(host, tmp, n);
         struct MpsBuf b = __mps_buf_upload((const void*)tmp, n * 2UL, MPS_FP16);
         free((void*)tmp);
         return b;
     }
 }
 
-struct MpsBuf MpsBuf::upload_bf16(const &float host, unsigned long n) {
+struct MpsBuf MpsBuf::upload_f16([]const float host_s) {
+    unsigned long n = host_s.len;
+    float host_d_[1];
+    const &float host = &host_d_[0];
+    if (host_s.len > 0UL) { unsafe { host = (const &float)host_s.ptr; } }
+    return MpsBuf::upload_f16_n_(host, n);
+}
+
+struct MpsBuf MpsBuf::upload_bf16_n_(const &float host, unsigned long n) {
     unsafe {
         unsigned short* tmp = (unsigned short*)malloc(n * 2UL);
         if (tmp == (void*)0) return __mps_buf_make((void*)0, 0UL, MPS_BF16);
-        f32_to_bf16_bulk(host, tmp, n);
+        f32_to_bf16_bulk_n_(host, tmp, n);
         struct MpsBuf b = __mps_buf_upload((const void*)tmp, n * 2UL, MPS_BF16);
         free((void*)tmp);
         return b;
     }
+}
+
+struct MpsBuf MpsBuf::upload_bf16([]const float host_s) {
+    unsigned long n = host_s.len;
+    float host_d_[1];
+    const &float host = &host_d_[0];
+    if (host_s.len > 0UL) { unsafe { host = (const &float)host_s.ptr; } }
+    return MpsBuf::upload_bf16_n_(host, n);
 }
 
 // Shared dispatch body for every matmul-shaped fp16/bf16 chained op

@@ -82,16 +82,16 @@ static void check_elementwise(unsigned long n) {
         while (op < 10) {
             int ok = 0;
             unsigned long i = 0UL;
-            if (op == 0) { ok = webgpu_add_f32(a, b, got, n); while (i < n) { want[i] = a[i] + b[i]; i = i + 1UL; } }
-            if (op == 1) { ok = webgpu_sub_f32(a, b, got, n); while (i < n) { want[i] = a[i] - b[i]; i = i + 1UL; } }
-            if (op == 2) { ok = webgpu_mul_f32(a, b, got, n); while (i < n) { want[i] = a[i] * b[i]; i = i + 1UL; } }
-            if (op == 3) { ok = webgpu_div_f32(a, b, got, n); while (i < n) { want[i] = a[i] / b[i]; i = i + 1UL; } }
-            if (op == 4) { ok = webgpu_pow_f32(a, b, got, n); while (i < n) { want[i] = (float)std::pow_d((double)a[i], (double)b[i]); i = i + 1UL; } }
-            if (op == 5) { ok = webgpu_relu_f32(s, got, n); while (i < n) { want[i] = s[i] > (float)0.0 ? s[i] : (float)0.0; i = i + 1UL; } }
-            if (op == 6) { ok = webgpu_log_f32(a, got, n); while (i < n) { want[i] = (float)std::log_d((double)a[i]); i = i + 1UL; } }
-            if (op == 7) { ok = webgpu_exp_f32(s, got, n); while (i < n) { want[i] = (float)std::exp_d((double)s[i]); i = i + 1UL; } }
-            if (op == 8) { ok = webgpu_sqrt_f32(a, got, n); while (i < n) { want[i] = (float)std::sqrt_d((double)a[i]); i = i + 1UL; } }
-            if (op == 9) { ok = webgpu_scale_f32(s, (float)-1.5, got, n); while (i < n) { want[i] = s[i] * (float)-1.5; i = i + 1UL; } }
+            if (op == 0) { ok = webgpu_add_f32(a[0..n], b[0..n], got[0..n]); while (i < n) { want[i] = a[i] + b[i]; i = i + 1UL; } }
+            if (op == 1) { ok = webgpu_sub_f32(a[0..n], b[0..n], got[0..n]); while (i < n) { want[i] = a[i] - b[i]; i = i + 1UL; } }
+            if (op == 2) { ok = webgpu_mul_f32(a[0..n], b[0..n], got[0..n]); while (i < n) { want[i] = a[i] * b[i]; i = i + 1UL; } }
+            if (op == 3) { ok = webgpu_div_f32(a[0..n], b[0..n], got[0..n]); while (i < n) { want[i] = a[i] / b[i]; i = i + 1UL; } }
+            if (op == 4) { ok = webgpu_pow_f32(a[0..n], b[0..n], got[0..n]); while (i < n) { want[i] = (float)std::pow_d((double)a[i], (double)b[i]); i = i + 1UL; } }
+            if (op == 5) { ok = webgpu_relu_f32(s[0..n], got[0..n]); while (i < n) { want[i] = s[i] > (float)0.0 ? s[i] : (float)0.0; i = i + 1UL; } }
+            if (op == 6) { ok = webgpu_log_f32(a[0..n], got[0..n]); while (i < n) { want[i] = (float)std::log_d((double)a[i]); i = i + 1UL; } }
+            if (op == 7) { ok = webgpu_exp_f32(s[0..n], got[0..n]); while (i < n) { want[i] = (float)std::exp_d((double)s[i]); i = i + 1UL; } }
+            if (op == 8) { ok = webgpu_sqrt_f32(a[0..n], got[0..n]); while (i < n) { want[i] = (float)std::sqrt_d((double)a[i]); i = i + 1UL; } }
+            if (op == 9) { ok = webgpu_scale_f32(s[0..n], (float)-1.5, got[0..n]); while (i < n) { want[i] = s[i] * (float)-1.5; i = i + 1UL; } }
             const char* names[10];
             names[0] = "add"; names[1] = "sub"; names[2] = "mul"; names[3] = "div"; names[4] = "pow";
             names[5] = "relu"; names[6] = "log"; names[7] = "exp"; names[8] = "sqrt"; names[9] = "scale";
@@ -112,7 +112,7 @@ static void check_sum(unsigned long n) {
     unsafe {
         unsigned long i = 0UL;
         while (i < n) { want = want + (double)a[i]; i = i + 1UL; }
-        int ok = webgpu_sum_f32(a, &got, n);
+        int ok = webgpu_sum_f32(a[0..n], ((float*)&got)[0..1]);
         double e = (double)got - want;
         if (e < 0.0) e = -e;
         printf("  sum    n %-8lu got %.6g want %.6g\n", n, (double)got, want);
@@ -163,12 +163,12 @@ static void check_matmul(unsigned long M, unsigned long K, unsigned long N, int 
         int ok = 0;
         if (dtype == 0 && outType == 0) ok = webgpu_matmul_f32(a, b, got, M, K, N);
         else {
-            struct WebGpuBuf ba = dtype == WEBGPU_FP16 ? WebGpuBuf::upload_f16(a, M * K)
-                                : (dtype == WEBGPU_BF16 ? WebGpuBuf::upload_bf16(a, M * K) : WebGpuBuf::upload(a, M * K));
-            struct WebGpuBuf bb = dtype == WEBGPU_FP16 ? WebGpuBuf::upload_f16(b, K * N)
-                                : (dtype == WEBGPU_BF16 ? WebGpuBuf::upload_bf16(b, K * N) : WebGpuBuf::upload(b, K * N));
+            struct WebGpuBuf ba = dtype == WEBGPU_FP16 ? WebGpuBuf::upload_f16(((const float*)a)[0..M * K])
+                                : (dtype == WEBGPU_BF16 ? WebGpuBuf::upload_bf16(((const float*)a)[0..M * K]) : WebGpuBuf::upload(((const float*)a)[0..M * K]));
+            struct WebGpuBuf bb = dtype == WEBGPU_FP16 ? WebGpuBuf::upload_f16(((const float*)b)[0..K * N])
+                                : (dtype == WEBGPU_BF16 ? WebGpuBuf::upload_bf16(((const float*)b)[0..K * N]) : WebGpuBuf::upload(((const float*)b)[0..K * N]));
             struct WebGpuBuf bo = WebGpuBuf::alloc(M * N, outType);
-            ok = webgpu_matmul(ba, bb, bo, M, K, N) && bo.read_f32(got, M * N);
+            ok = webgpu_matmul(ba, bb, bo, M, K, N) && bo.read_f32(((float*)got)[0..M * N]);
             ba.free(); bb.free(); bo.free();
         }
         ref_matmul(a, b, want, M, K, N);
@@ -192,21 +192,21 @@ static void check_buffers() {
     float* got = zeros(n);
     float* want = zeros(n);
     unsafe {
-        struct WebGpuBuf f = WebGpuBuf::upload(a, n);
+        struct WebGpuBuf f = WebGpuBuf::upload(((const float*)a)[0..n]);
         check(f.valid() && f.bytes == 4UL * n && f.dtype == 0, "upload: valid fp32 buffer");
-        check(f.read_f32(got, n) && relerr(got, a, n) == 0.0, "upload: fp32 round trip");
+        check(f.read_f32(((float*)got)[0..n]) && relerr(got, a, n) == 0.0, "upload: fp32 round trip");
         check(!f.read(((unsigned char*)(void*)got)[0..4UL * n + 4UL]), "read past the end refused");
         int dt = WEBGPU_FP16;
         while (dt <= WEBGPU_BF16) {
-            struct WebGpuBuf h = dt == WEBGPU_FP16 ? WebGpuBuf::upload_f16(a, n) : WebGpuBuf::upload_bf16(a, n);
+            struct WebGpuBuf h = dt == WEBGPU_FP16 ? WebGpuBuf::upload_f16(((const float*)a)[0..n]) : WebGpuBuf::upload_bf16(((const float*)a)[0..n]);
             unsigned long i = 0UL;
             while (i < n) { want[i] = a[i]; i = i + 1UL; }
             round_to(want, n, dt);
-            check(h.valid() && h.bytes == 2UL * n && h.read_f32(got, n) && relerr(got, want, n) == 0.0,
+            check(h.valid() && h.bytes == 2UL * n && h.read_f32(((float*)got)[0..n]) && relerr(got, want, n) == 0.0,
                   dt == WEBGPU_FP16 ? "upload_f16: round trip (odd length)" : "upload_bf16: round trip (odd length)");
             // w -= lr g in the buffer's type, then a write over it and a read
-            struct WebGpuBuf gb = WebGpuBuf::upload(g, n);
-            check(webgpu_sgd_update(h, gb, (float)0.25, n) && h.read_f32(got, n), "sgd update on a 16-bit buffer");
+            struct WebGpuBuf gb = WebGpuBuf::upload(((const float*)g)[0..n]);
+            check(webgpu_sgd_update(h, gb, (float)0.25, n) && h.read_f32(((float*)got)[0..n]), "sgd update on a 16-bit buffer");
             i = 0UL;
             while (i < n) { want[i] = want[i] - (float)0.25 * g[i]; i = i + 1UL; }
             round_to(want, n, dt);
@@ -215,15 +215,15 @@ static void check_buffers() {
             bits[0] = dt == WEBGPU_FP16 ? std::f32_to_fp16((float)1.5) : std::f32_to_bf16((float)1.5);
             bits[1] = dt == WEBGPU_FP16 ? std::f32_to_fp16((float)-2.0) : std::f32_to_bf16((float)-2.0);
             bits[2] = dt == WEBGPU_FP16 ? std::f32_to_fp16((float)0.25) : std::f32_to_bf16((float)0.25);
-            check(h.write(((const unsigned char*)(const void*)&bits[0])[0..6UL]) && h.read_f32(got, 4UL), "write 3 halves");
+            check(h.write(((const unsigned char*)(const void*)&bits[0])[0..6UL]) && h.read_f32(((float*)got)[0..4UL]), "write 3 halves");
             check(got[0] == (float)1.5 && got[1] == (float)-2.0 && got[2] == (float)0.25, "write 3 halves: values");
             h.free(); gb.free();
             check(!h.valid() && h.bytes == 0UL, "free invalidates");
             dt = dt + 1;
         }
         // fp32 sgd and buffers reused after free
-        struct WebGpuBuf gb = WebGpuBuf::upload(g, n);
-        check(webgpu_sgd_update(f, gb, (float)0.5, n) && f.read_f32(got, n), "sgd update fp32");
+        struct WebGpuBuf gb = WebGpuBuf::upload(((const float*)g)[0..n]);
+        check(webgpu_sgd_update(f, gb, (float)0.5, n) && f.read_f32(((float*)got)[0..n]), "sgd update fp32");
         unsigned long i = 0UL;
         while (i < n) { want[i] = a[i] - (float)0.5 * g[i]; i = i + 1UL; }
         check(relerr(got, want, n) < 1.0e-6, "sgd update fp32: values");
@@ -231,8 +231,8 @@ static void check_buffers() {
         int round = 0;
         int same = 1;
         while (round < 50) {
-            struct WebGpuBuf t = WebGpuBuf::upload(g, n);
-            if (!t.read_f32(got, n) || relerr(got, g, n) != 0.0) same = 0;
+            struct WebGpuBuf t = WebGpuBuf::upload(((const float*)g)[0..n]);
+            if (!t.read_f32(((float*)got)[0..n]) || relerr(got, g, n) != 0.0) same = 0;
             t.free();
             round = round + 1;
         }
@@ -263,7 +263,7 @@ static void check_tensor_interop() {
     b.dtype = 0;
     float got[15];
     unsafe {
-        check(b.valid() && b.read_f32((&float)&got[0], 15UL), "WebGpuTensor: the tensor's buffer reads back");
+        check(b.valid() && b.read_f32(got[0..15UL]), "WebGpuTensor: the tensor's buffer reads back");
         int same = 1;
         i = 0UL;
         while (i < 15UL) { if (got[i] != (float)i * (float)0.5 - (float)2.0) same = 0; i = i + 1UL; }
@@ -272,7 +272,7 @@ static void check_tensor_interop() {
         &FloatTensor u = t.scale((float)2.0);
         check(u.device() == DEVICE_WEBGPU, "the tensor op ran on the device");
         b.handle = webgpu_buffer_of(u);
-        check(b.valid() && b.read_f32((&float)&got[0], 15UL) && got[3] == (float)-1.0 && got[14] == (float)10.0,
+        check(b.valid() && b.read_f32(got[0..15UL]) && got[3] == (float)-1.0 && got[14] == (float)10.0,
               "a tensor op's result through the array API");
         u.free();
     }

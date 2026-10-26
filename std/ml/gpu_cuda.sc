@@ -1139,20 +1139,44 @@ struct CudaBuf CudaBuf::alloc(unsigned long n) {
     return b;
 }
 
-int cuda_write(struct CudaBuf dst, const &float host, unsigned long n) {
+int cuda_write_n_(struct CudaBuf dst, const &float host, unsigned long n) {
     if (dst.dev == 0UL || n > dst.len || !cuda_ensure_()) return 0;
     unsafe { return cuda_write_bytes_((unsigned long long)dst.dev, (const void*)host, n * sizeof(float)); }
 }
 
-struct CudaBuf CudaBuf::upload(const &float host, unsigned long n) {
+int cuda_write(struct CudaBuf dst, []const float host_s) {
+    unsigned long n = host_s.len;
+    float host_d_[1];
+    const &float host = &host_d_[0];
+    if (host_s.len > 0UL) { unsafe { host = (const &float)host_s.ptr; } }
+    return cuda_write_n_(dst, host, n);
+}
+
+struct CudaBuf CudaBuf::upload_n_(const &float host, unsigned long n) {
     struct CudaBuf b = CudaBuf::alloc(n);
-    if (b.dev != 0UL && !cuda_write(b, host, n)) b.free();
+    if (b.dev != 0UL && !cuda_write_n_(b, host, n)) b.free();
     return b;
 }
 
-int cuda_read(struct CudaBuf src, &float host, unsigned long n) {
+struct CudaBuf CudaBuf::upload([]const float host_s) {
+    unsigned long n = host_s.len;
+    float host_d_[1];
+    const &float host = &host_d_[0];
+    if (host_s.len > 0UL) { unsafe { host = (const &float)host_s.ptr; } }
+    return CudaBuf::upload_n_(host, n);
+}
+
+int cuda_read_n_(struct CudaBuf src, &float host, unsigned long n) {
     if (src.dev == 0UL || n > src.len || !cuda_ensure_()) return 0;
     unsafe { return cuda_read_bytes_((void*)host, (unsigned long long)src.dev, n * sizeof(float)); }
+}
+
+int cuda_read(struct CudaBuf src, []float host_s) {
+    unsigned long n = host_s.len;
+    float host_d_[1];
+    &float host = &host_d_[0];
+    if (host_s.len > 0UL) { unsafe { host = (&float)host_s.ptr; } }
+    return cuda_read_n_(src, host, n);
 }
 
 void CudaBuf::free() {
@@ -1599,18 +1623,153 @@ static int cuda_host_unary_(int kernel, const float* a, float k, float* out, uns
     return ok;
 }
 
-int cuda_add_f32(const &float a, const &float b, &float out, unsigned long n) { return cuda_host_binary_(K_ADD, a, b, out, n); }
-int cuda_sub_f32(const &float a, const &float b, &float out, unsigned long n) { return cuda_host_binary_(K_SUB, a, b, out, n); }
-int cuda_mul_f32(const &float a, const &float b, &float out, unsigned long n) { return cuda_host_binary_(K_MUL, a, b, out, n); }
-int cuda_div_f32(const &float a, const &float b, &float out, unsigned long n) { return cuda_host_binary_(K_DIV, a, b, out, n); }
-int cuda_pow_f32(const &float a, const &float b, &float out, unsigned long n) { return cuda_host_binary_(K_POW, a, b, out, n); }
-int cuda_relu_f32(const &float a, &float out, unsigned long n) { return cuda_host_unary_(K_RELU, a, 0.0f, out, n); }
-int cuda_log_f32(const &float a, &float out, unsigned long n) { return cuda_host_unary_(K_LOG, a, 0.0f, out, n); }
-int cuda_exp_f32(const &float a, &float out, unsigned long n) { return cuda_host_unary_(K_EXP, a, 0.0f, out, n); }
-int cuda_sqrt_f32(const &float a, &float out, unsigned long n) { return cuda_host_unary_(K_SQRT, a, 0.0f, out, n); }
-int cuda_scale_f32(const &float a, float k, &float out, unsigned long n) { return cuda_host_unary_(K_SCALE, a, k, out, n); }
+int cuda_add_f32_n_(const &float a, const &float b, &float out, unsigned long n) { return cuda_host_binary_(K_ADD, a, b, out, n); }
 
-int cuda_sum_f32(const &float a, &float out, unsigned long n) {
+int cuda_add_f32([]const float a_s, []const float b_s, []float out_s) {
+    unsigned long n = out_s.len;
+    if (a_s.len < n || b_s.len < n) { return 0; }
+    float a_d_[1];
+    const &float a = &a_d_[0];
+    if (a_s.len > 0UL) { unsafe { a = (const &float)a_s.ptr; } }
+    float b_d_[1];
+    const &float b = &b_d_[0];
+    if (b_s.len > 0UL) { unsafe { b = (const &float)b_s.ptr; } }
+    float out_d_[1];
+    &float out = &out_d_[0];
+    if (out_s.len > 0UL) { unsafe { out = (&float)out_s.ptr; } }
+    return cuda_add_f32_n_(a, b, out, n);
+}
+int cuda_sub_f32_n_(const &float a, const &float b, &float out, unsigned long n) { return cuda_host_binary_(K_SUB, a, b, out, n); }
+
+int cuda_sub_f32([]const float a_s, []const float b_s, []float out_s) {
+    unsigned long n = out_s.len;
+    if (a_s.len < n || b_s.len < n) { return 0; }
+    float a_d_[1];
+    const &float a = &a_d_[0];
+    if (a_s.len > 0UL) { unsafe { a = (const &float)a_s.ptr; } }
+    float b_d_[1];
+    const &float b = &b_d_[0];
+    if (b_s.len > 0UL) { unsafe { b = (const &float)b_s.ptr; } }
+    float out_d_[1];
+    &float out = &out_d_[0];
+    if (out_s.len > 0UL) { unsafe { out = (&float)out_s.ptr; } }
+    return cuda_sub_f32_n_(a, b, out, n);
+}
+int cuda_mul_f32_n_(const &float a, const &float b, &float out, unsigned long n) { return cuda_host_binary_(K_MUL, a, b, out, n); }
+
+int cuda_mul_f32([]const float a_s, []const float b_s, []float out_s) {
+    unsigned long n = out_s.len;
+    if (a_s.len < n || b_s.len < n) { return 0; }
+    float a_d_[1];
+    const &float a = &a_d_[0];
+    if (a_s.len > 0UL) { unsafe { a = (const &float)a_s.ptr; } }
+    float b_d_[1];
+    const &float b = &b_d_[0];
+    if (b_s.len > 0UL) { unsafe { b = (const &float)b_s.ptr; } }
+    float out_d_[1];
+    &float out = &out_d_[0];
+    if (out_s.len > 0UL) { unsafe { out = (&float)out_s.ptr; } }
+    return cuda_mul_f32_n_(a, b, out, n);
+}
+int cuda_div_f32_n_(const &float a, const &float b, &float out, unsigned long n) { return cuda_host_binary_(K_DIV, a, b, out, n); }
+
+int cuda_div_f32([]const float a_s, []const float b_s, []float out_s) {
+    unsigned long n = out_s.len;
+    if (a_s.len < n || b_s.len < n) { return 0; }
+    float a_d_[1];
+    const &float a = &a_d_[0];
+    if (a_s.len > 0UL) { unsafe { a = (const &float)a_s.ptr; } }
+    float b_d_[1];
+    const &float b = &b_d_[0];
+    if (b_s.len > 0UL) { unsafe { b = (const &float)b_s.ptr; } }
+    float out_d_[1];
+    &float out = &out_d_[0];
+    if (out_s.len > 0UL) { unsafe { out = (&float)out_s.ptr; } }
+    return cuda_div_f32_n_(a, b, out, n);
+}
+int cuda_pow_f32_n_(const &float a, const &float b, &float out, unsigned long n) { return cuda_host_binary_(K_POW, a, b, out, n); }
+
+int cuda_pow_f32([]const float a_s, []const float b_s, []float out_s) {
+    unsigned long n = out_s.len;
+    if (a_s.len < n || b_s.len < n) { return 0; }
+    float a_d_[1];
+    const &float a = &a_d_[0];
+    if (a_s.len > 0UL) { unsafe { a = (const &float)a_s.ptr; } }
+    float b_d_[1];
+    const &float b = &b_d_[0];
+    if (b_s.len > 0UL) { unsafe { b = (const &float)b_s.ptr; } }
+    float out_d_[1];
+    &float out = &out_d_[0];
+    if (out_s.len > 0UL) { unsafe { out = (&float)out_s.ptr; } }
+    return cuda_pow_f32_n_(a, b, out, n);
+}
+int cuda_relu_f32_n_(const &float a, &float out, unsigned long n) { return cuda_host_unary_(K_RELU, a, 0.0f, out, n); }
+
+int cuda_relu_f32([]const float a_s, []float out_s) {
+    unsigned long n = out_s.len;
+    if (a_s.len < n) { return 0; }
+    float a_d_[1];
+    const &float a = &a_d_[0];
+    if (a_s.len > 0UL) { unsafe { a = (const &float)a_s.ptr; } }
+    float out_d_[1];
+    &float out = &out_d_[0];
+    if (out_s.len > 0UL) { unsafe { out = (&float)out_s.ptr; } }
+    return cuda_relu_f32_n_(a, out, n);
+}
+int cuda_log_f32_n_(const &float a, &float out, unsigned long n) { return cuda_host_unary_(K_LOG, a, 0.0f, out, n); }
+
+int cuda_log_f32([]const float a_s, []float out_s) {
+    unsigned long n = out_s.len;
+    if (a_s.len < n) { return 0; }
+    float a_d_[1];
+    const &float a = &a_d_[0];
+    if (a_s.len > 0UL) { unsafe { a = (const &float)a_s.ptr; } }
+    float out_d_[1];
+    &float out = &out_d_[0];
+    if (out_s.len > 0UL) { unsafe { out = (&float)out_s.ptr; } }
+    return cuda_log_f32_n_(a, out, n);
+}
+int cuda_exp_f32_n_(const &float a, &float out, unsigned long n) { return cuda_host_unary_(K_EXP, a, 0.0f, out, n); }
+
+int cuda_exp_f32([]const float a_s, []float out_s) {
+    unsigned long n = out_s.len;
+    if (a_s.len < n) { return 0; }
+    float a_d_[1];
+    const &float a = &a_d_[0];
+    if (a_s.len > 0UL) { unsafe { a = (const &float)a_s.ptr; } }
+    float out_d_[1];
+    &float out = &out_d_[0];
+    if (out_s.len > 0UL) { unsafe { out = (&float)out_s.ptr; } }
+    return cuda_exp_f32_n_(a, out, n);
+}
+int cuda_sqrt_f32_n_(const &float a, &float out, unsigned long n) { return cuda_host_unary_(K_SQRT, a, 0.0f, out, n); }
+
+int cuda_sqrt_f32([]const float a_s, []float out_s) {
+    unsigned long n = out_s.len;
+    if (a_s.len < n) { return 0; }
+    float a_d_[1];
+    const &float a = &a_d_[0];
+    if (a_s.len > 0UL) { unsafe { a = (const &float)a_s.ptr; } }
+    float out_d_[1];
+    &float out = &out_d_[0];
+    if (out_s.len > 0UL) { unsafe { out = (&float)out_s.ptr; } }
+    return cuda_sqrt_f32_n_(a, out, n);
+}
+int cuda_scale_f32_n_(const &float a, float k, &float out, unsigned long n) { return cuda_host_unary_(K_SCALE, a, k, out, n); }
+
+int cuda_scale_f32([]const float a_s, float k, []float out_s) {
+    unsigned long n = out_s.len;
+    if (a_s.len < n) { return 0; }
+    float a_d_[1];
+    const &float a = &a_d_[0];
+    if (a_s.len > 0UL) { unsafe { a = (const &float)a_s.ptr; } }
+    float out_d_[1];
+    &float out = &out_d_[0];
+    if (out_s.len > 0UL) { unsafe { out = (&float)out_s.ptr; } }
+    return cuda_scale_f32_n_(a, k, out, n);
+}
+
+int cuda_sum_f32_n_(const &float a, &float out, unsigned long n) {
     if (n == 0UL || n > 4294967295UL || !cuda_ensure_()) return 0;
     unsigned long bytes = checked_mul_size(n, sizeof(float));
     unsigned long long da = cuda_alloc_bytes_(bytes);
@@ -1630,6 +1789,18 @@ int cuda_sum_f32(const &float a, &float out, unsigned long n) {
         if (dout != 0ULL) cuMemFree_v2(dout);
     }
     return ok;
+}
+
+int cuda_sum_f32([]const float a_s, []float out_s) {
+    unsigned long n = a_s.len;
+    if (out_s.len < 1UL) { return 0; }
+    float a_d_[1];
+    const &float a = &a_d_[0];
+    if (a_s.len > 0UL) { unsafe { a = (const &float)a_s.ptr; } }
+    float out_d_[1];
+    &float out = &out_d_[0];
+    if (out_s.len > 0UL) { unsafe { out = (&float)out_s.ptr; } }
+    return cuda_sum_f32_n_(a, out, n);
 }
 
 // Launches sgemm_nn on raw device addresses.
@@ -1710,10 +1881,10 @@ struct CudaHalfBuf CudaHalfBuf::alloc(unsigned long n, int dtype) {
     return b;
 }
 
-struct CudaHalfBuf CudaHalfBuf::upload(const &float host, unsigned long n, int dtype) {
+struct CudaHalfBuf CudaHalfBuf::upload_n_(const &float host, unsigned long n, int dtype) {
     struct CudaHalfBuf b = CudaHalfBuf::alloc(n, dtype);
     if (b.dev == 0UL) return b;
-    struct CudaBuf tmp = CudaBuf::upload(host, n);
+    struct CudaBuf tmp = CudaBuf::upload_n_(host, n);
     int ok = tmp.dev != 0UL && cuda_to_half(tmp, b);
     if (ok) ok = cuda_sync();   // tmp is freed next
     tmp.free();
@@ -1721,14 +1892,38 @@ struct CudaHalfBuf CudaHalfBuf::upload(const &float host, unsigned long n, int d
     return b;
 }
 
-int cuda_half_write(struct CudaHalfBuf dst, const &unsigned short bits, unsigned long n) {
+struct CudaHalfBuf CudaHalfBuf::upload([]const float host_s, int dtype) {
+    unsigned long n = host_s.len;
+    float host_d_[1];
+    const &float host = &host_d_[0];
+    if (host_s.len > 0UL) { unsafe { host = (const &float)host_s.ptr; } }
+    return CudaHalfBuf::upload_n_(host, n, dtype);
+}
+
+int cuda_half_write_n_(struct CudaHalfBuf dst, const &unsigned short bits, unsigned long n) {
     if (!cuda_half_ok_(dst, n) || n == 0UL || !cuda_ensure_()) return 0;
     unsafe { return cuda_write_bytes_((unsigned long long)dst.dev, (const void*)bits, n * 2UL); }
 }
 
-int cuda_half_read(struct CudaHalfBuf src, &unsigned short bits, unsigned long n) {
+int cuda_half_write(struct CudaHalfBuf dst, []const unsigned short bits_s) {
+    unsigned long n = bits_s.len;
+    unsigned short bits_d_[1];
+    const &unsigned short bits = &bits_d_[0];
+    if (bits_s.len > 0UL) { unsafe { bits = (const &unsigned short)bits_s.ptr; } }
+    return cuda_half_write_n_(dst, bits, n);
+}
+
+int cuda_half_read_n_(struct CudaHalfBuf src, &unsigned short bits, unsigned long n) {
     if (!cuda_half_ok_(src, n) || n == 0UL || !cuda_ensure_()) return 0;
     unsafe { return cuda_read_bytes_((void*)bits, (unsigned long long)src.dev, n * 2UL); }
+}
+
+int cuda_half_read(struct CudaHalfBuf src, []unsigned short bits_s) {
+    unsigned long n = bits_s.len;
+    unsigned short bits_d_[1];
+    &unsigned short bits = &bits_d_[0];
+    if (bits_s.len > 0UL) { unsafe { bits = (&unsigned short)bits_s.ptr; } }
+    return cuda_half_read_n_(src, bits, n);
 }
 
 void CudaHalfBuf::free() {

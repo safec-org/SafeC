@@ -45,8 +45,8 @@ static int tdev_down_(int device, unsigned long h, float* dst, unsigned long n) 
         if (t == (unsigned short*)0) return 0;
         int ok = device_download_(device, (&float)(float*)t, h, words);
         if (ok) {
-            if (tag == (unsigned long)DEVICE_FP16) fp16_to_f32_bulk((const &unsigned short)t, (&float)dst, n);
-            else bf16_to_f32_bulk((const &unsigned short)t, (&float)dst, n);
+            if (tag == (unsigned long)DEVICE_FP16) fp16_to_f32_bulk_n_((const &unsigned short)t, (&float)dst, n);
+            else bf16_to_f32_bulk_n_((const &unsigned short)t, (&float)dst, n);
         }
         free((void*)t);
         return ok;
@@ -60,8 +60,8 @@ static int tdev_up_(int device, unsigned long h, const float* src, unsigned long
         unsigned long words = dev_bytes_(tag, n) / 4UL;
         unsigned short* t = (unsigned short*)malloc(4UL * words);
         if (t == (unsigned short*)0) return 0;
-        if (tag == (unsigned long)DEVICE_FP16) f32_to_fp16_bulk((const &float)src, (&unsigned short)t, n);
-        else f32_to_bf16_bulk((const &float)src, (&unsigned short)t, n);
+        if (tag == (unsigned long)DEVICE_FP16) f32_to_fp16_bulk_n_((const &float)src, (&unsigned short)t, n);
+        else f32_to_bf16_bulk_n_((const &float)src, (&unsigned short)t, n);
         int ok = device_upload_(device, h, (const &float)(const float*)t, words);
         free((void*)t);
         return ok;

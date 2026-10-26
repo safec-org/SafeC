@@ -66,7 +66,7 @@ static struct Vec<float> download(struct RocmBuf b) {
     struct Vec<float> v = std::Vec::with_cap(b.len);
     unsigned long i = 0UL;
     while (i < b.len) { v.push(0.0f); i = i + 1UL; }
-    std::rocm_read(b, v.at(0UL), b.len);
+    std::rocm_read(b, v.as_slice()[0..b.len]);
     return v;
 }
 
@@ -95,7 +95,7 @@ static void check_half() {
         if (c == 4UL) scale = 3.0e4;
         v.push((float)((double)((i * 7919UL) % 20001UL) - 10000.0) * (float)(scale / 10000.0));
     }
-    struct RocmBuf dv = RocmBuf::upload(v.at(0UL), n);
+    struct RocmBuf dv = RocmBuf::upload(v.as_slice()[0..n]);
     int d = ROCM_FP16;
     while (d <= ROCM_BF16) {
         int bf = d == ROCM_BF16;
@@ -105,7 +105,7 @@ static void check_half() {
         struct Vec<unsigned short> bits = std::Vec::with_cap(n);
         unsigned long i = 0UL;
         while (i < n) { bits.push((unsigned short)0); i = i + 1UL; }
-        check(std::rocm_half_read(h, bits.at(0UL), n), "half read");
+        check(std::rocm_half_read(h, bits.as_slice()[0..n]), "half read");
         unsigned long bad = 0UL;
         i = 0UL;
         while (i < n) { if (*bits.at(i) != std::half_encode(*v.at(i), d)) bad = bad + 1UL; i = i + 1UL; }
@@ -119,11 +119,11 @@ static void check_half() {
         while (i < n) { if (*fb.at(i) != std::half_decode(*bits.at(i), d)) bad = bad + 1UL; i = i + 1UL; }
         check(bad == 0UL, bf ? "bf16 decode exact" : "fp16 decode exact");
         // RocmHalfBuf::upload rounds the same way
-        struct RocmHalfBuf hu = RocmHalfBuf::upload(v.at(0UL), n, d);
+        struct RocmHalfBuf hu = RocmHalfBuf::upload(v.as_slice()[0..n], d);
         struct Vec<unsigned short> ubits = std::Vec::with_cap(n);
         i = 0UL;
         while (i < n) { ubits.push((unsigned short)0); i = i + 1UL; }
-        check(hu.dev != 0UL && std::rocm_half_read(hu, ubits.at(0UL), n), "half upload");
+        check(hu.dev != 0UL && std::rocm_half_read(hu, ubits.as_slice()[0..n]), "half upload");
         bad = 0UL;
         i = 0UL;
         while (i < n) { if (*ubits.at(i) != *bits.at(i)) bad = bad + 1UL; i = i + 1UL; }
@@ -141,8 +141,8 @@ static void check_half() {
         while (i < m * k) { ar.push(std::half_round(*a.at(i), d)); i = i + 1UL; }
         i = 0UL;
         while (i < k * nn) { br.push(std::half_round(*b.at(i), d)); i = i + 1UL; }
-        struct RocmHalfBuf ha = RocmHalfBuf::upload(a.at(0UL), m * k, d);
-        struct RocmHalfBuf hb = RocmHalfBuf::upload(b.at(0UL), k * nn, d);
+        struct RocmHalfBuf ha = RocmHalfBuf::upload(a.as_slice()[0..m * k], d);
+        struct RocmHalfBuf hb = RocmHalfBuf::upload(b.as_slice()[0..k * nn], d);
         struct RocmBuf c32 = RocmBuf::alloc(m * nn);
         struct RocmHalfBuf c16 = RocmHalfBuf::alloc(m * nn, d);
         struct Vec<unsigned short> cb = std::Vec::with_cap(m * nn);
@@ -158,7 +158,7 @@ static void check_half() {
             check(maxdiff(&got, &ref) < 1e-4f, bf ? "bf16 gemm f32 values" : "fp16 gemm f32 values");
             got.free();
             // 16-bit output: within one 16-bit rounding of the fp32 result
-            check(std::rocm_half_gemm(ha, ta, hb, tb, c16, m, nn, k) && std::rocm_half_read(c16, cb.at(0UL), m * nn),
+            check(std::rocm_half_gemm(ha, ta, hb, tb, c16, m, nn, k) && std::rocm_half_read(c16, cb.as_slice()[0..m * nn]),
                   "half gemm ran");
             bad = 0UL;
             i = 0UL;
@@ -182,14 +182,14 @@ static void check_half() {
         i = 0UL;
         while (i < m * k) { wb.push((unsigned short)0); gbits.push(std::half_encode(*v.at(i % n), d)); i = i + 1UL; }
         struct RocmHalfBuf hg = RocmHalfBuf::alloc(m * k, d);
-        check(std::rocm_half_write(hg, gbits.at(0UL), m * k), "half write");
-        check(std::rocm_half_read(ha, wb.at(0UL), m * k), "half read w");
+        check(std::rocm_half_write(hg, gbits.as_slice()[0..m * k]), "half write");
+        check(std::rocm_half_read(ha, wb.as_slice()[0..m * k]), "half read w");
         float lr = (float)0.25;
         check(std::rocm_half_sgd(ha, hg, lr), "half sgd ran");
         struct Vec<unsigned short> wn = std::Vec::with_cap(m * k);
         i = 0UL;
         while (i < m * k) { wn.push((unsigned short)0); i = i + 1UL; }
-        check(std::rocm_half_read(ha, wn.at(0UL), m * k), "half read sgd");
+        check(std::rocm_half_read(ha, wn.as_slice()[0..m * k]), "half read sgd");
         bad = 0UL;
         i = 0UL;
         while (i < m * k) {
@@ -213,8 +213,8 @@ static void check_half() {
         while (i < obn) { ob.push((unsigned short)0); i = i + 1UL; }
         struct RocmHalfBuf hg2 = RocmHalfBuf::alloc(n, d);
         struct RocmHalfBuf ho = RocmHalfBuf::alloc(n, d);
-        check(std::rocm_half_write(hg2, gb2.at(0UL), n), "half write g");
-        check(std::rocm_half_relu(h, ho) && std::rocm_half_read(ho, ob.at(0UL), n), "half relu ran");
+        check(std::rocm_half_write(hg2, gb2.as_slice()[0..n]), "half write g");
+        check(std::rocm_half_relu(h, ho) && std::rocm_half_read(ho, ob.as_slice()[0..n]), "half relu ran");
         bad = 0UL;
         i = 0UL;
         while (i < n) {
@@ -223,7 +223,7 @@ static void check_half() {
             i = i + 1UL;
         }
         check(bad == 0UL, bf ? "bf16 relu bit-exact" : "fp16 relu bit-exact");
-        check(std::rocm_half_relu_grad(h, hg2, ho) && std::rocm_half_read(ho, ob.at(0UL), n), "half relu_grad ran");
+        check(std::rocm_half_relu_grad(h, hg2, ho) && std::rocm_half_read(ho, ob.as_slice()[0..n]), "half relu_grad ran");
         bad = 0UL;
         i = 0UL;
         while (i < n) {
@@ -234,13 +234,13 @@ static void check_half() {
         check(bad == 0UL, bf ? "bf16 relu_grad bit-exact" : "fp16 relu_grad bit-exact");
 
         unsigned long nm = m * k;
-        struct RocmHalfBuf hy = RocmHalfBuf::upload(a.at(0UL), nm, d);
-        struct RocmHalfBuf ht = RocmHalfBuf::upload(b.at(0UL), nm, d);
+        struct RocmHalfBuf hy = RocmHalfBuf::upload(a.as_slice()[0..nm], d);
+        struct RocmHalfBuf ht = RocmHalfBuf::upload(b.as_slice()[0..nm], d);
         struct RocmHalfBuf hdy = RocmHalfBuf::alloc(nm, d);
         struct RocmBuf loss = RocmBuf::alloc(1UL);
         float lossHost[1];
-        check(std::rocm_half_mse_grad(hy, ht, hdy, loss) && std::rocm_half_read(hdy, ob.at(0UL), nm) &&
-              std::rocm_read(loss, &lossHost[0], 1UL), "half mse_grad ran");
+        check(std::rocm_half_mse_grad(hy, ht, hdy, loss) && std::rocm_half_read(hdy, ob.as_slice()[0..nm]) &&
+              std::rocm_read(loss, lossHost[0..1UL]), "half mse_grad ran");
         bad = 0UL;
         double lref = 0.0;
         i = 0UL;
@@ -256,12 +256,12 @@ static void check_half() {
         check(lerr < lref * 1.0e-5, bf ? "bf16 mse_grad loss" : "fp16 mse_grad loss");
 
         // sgd2 == two sgd calls
-        struct RocmHalfBuf w1a = RocmHalfBuf::upload(a.at(0UL), nm, d);
-        struct RocmHalfBuf w2a = RocmHalfBuf::upload(b.at(0UL), k * nn, d);
-        struct RocmHalfBuf w1b = RocmHalfBuf::upload(a.at(0UL), nm, d);
-        struct RocmHalfBuf w2b = RocmHalfBuf::upload(b.at(0UL), k * nn, d);
-        struct RocmHalfBuf g1 = RocmHalfBuf::upload(b.at(0UL), nm, d);
-        struct RocmHalfBuf g2 = RocmHalfBuf::upload(b.at(0UL), k * nn, d);
+        struct RocmHalfBuf w1a = RocmHalfBuf::upload(a.as_slice()[0..nm], d);
+        struct RocmHalfBuf w2a = RocmHalfBuf::upload(b.as_slice()[0..k * nn], d);
+        struct RocmHalfBuf w1b = RocmHalfBuf::upload(a.as_slice()[0..nm], d);
+        struct RocmHalfBuf w2b = RocmHalfBuf::upload(b.as_slice()[0..k * nn], d);
+        struct RocmHalfBuf g1 = RocmHalfBuf::upload(b.as_slice()[0..nm], d);
+        struct RocmHalfBuf g2 = RocmHalfBuf::upload(b.as_slice()[0..k * nn], d);
         check(std::rocm_half_sgd2(w1a, g1, w2a, g2, (float)0.375), "half sgd2 ran");
         check(std::rocm_half_sgd(w1b, g1, (float)0.375) && std::rocm_half_sgd(w2b, g2, (float)0.375), "half sgd x2 ran");
         struct Vec<unsigned short> xa = std::Vec::with_cap(k * nn);
@@ -269,21 +269,21 @@ static void check_half() {
         i = 0UL;
         while (i < k * nn) { xa.push((unsigned short)0); xb.push((unsigned short)0); i = i + 1UL; }
         bad = 0UL;
-        check(std::rocm_half_read(w1a, xa.at(0UL), nm) && std::rocm_half_read(w1b, xb.at(0UL), nm), "half read w1");
+        check(std::rocm_half_read(w1a, xa.as_slice()[0..nm]) && std::rocm_half_read(w1b, xb.as_slice()[0..nm]), "half read w1");
         i = 0UL;
         while (i < nm) { if (*xa.at(i) != *xb.at(i)) bad = bad + 1UL; i = i + 1UL; }
-        check(std::rocm_half_read(w2a, xa.at(0UL), k * nn) && std::rocm_half_read(w2b, xb.at(0UL), k * nn), "half read w2");
+        check(std::rocm_half_read(w2a, xa.as_slice()[0..k * nn]) && std::rocm_half_read(w2b, xb.as_slice()[0..k * nn]), "half read w2");
         i = 0UL;
         while (i < k * nn) { if (*xa.at(i) != *xb.at(i)) bad = bad + 1UL; i = i + 1UL; }
         check(bad == 0UL, bf ? "bf16 sgd2 == two sgd" : "fp16 sgd2 == two sgd");
 
         // gemm_relu == gemm, then relu on the bits
-        struct RocmHalfBuf hb2 = RocmHalfBuf::upload(b.at(0UL), k * nn, d);
-        struct RocmHalfBuf ha2 = RocmHalfBuf::upload(a.at(0UL), m * k, d);
+        struct RocmHalfBuf hb2 = RocmHalfBuf::upload(b.as_slice()[0..k * nn], d);
+        struct RocmHalfBuf ha2 = RocmHalfBuf::upload(a.as_slice()[0..m * k], d);
         struct RocmHalfBuf cr = RocmHalfBuf::alloc(m * nn, d);
-        check(std::rocm_half_gemm(ha2, 0, hb2, 0, c16, m, nn, k) && std::rocm_half_read(c16, cb.at(0UL), m * nn),
+        check(std::rocm_half_gemm(ha2, 0, hb2, 0, c16, m, nn, k) && std::rocm_half_read(c16, cb.as_slice()[0..m * nn]),
               "half gemm (for relu) ran");
-        check(std::rocm_half_gemm_relu(ha2, 0, hb2, 0, cr, m, nn, k) && std::rocm_half_read(cr, ob.at(0UL), m * nn),
+        check(std::rocm_half_gemm_relu(ha2, 0, hb2, 0, cr, m, nn, k) && std::rocm_half_read(cr, ob.as_slice()[0..m * nn]),
               "half gemm_relu ran");
         bad = 0UL;
         i = 0UL;
@@ -401,12 +401,12 @@ static void check_decode_ops() {
             unsigned long k = ks[ki];
             struct Vec<float> w = seq(n * k, 0.0013f, -0.9f);
             struct Vec<float> x = seq(k, 0.017f, -0.7f);
-            struct RocmHalfBuf dw = RocmHalfBuf::upload(w.at(0UL), n * k, dts[di]);
+            struct RocmHalfBuf dw = RocmHalfBuf::upload(w.as_slice()[0..n * k], dts[di]);
             struct Vec<unsigned short> bits = std::Vec::with_cap(n * k);
             unsigned long z = 0UL;
             while (z < n * k) { bits.push((unsigned short)0); z = z + 1UL; }
-            std::rocm_half_read(dw, bits.at(0UL), n * k);   // the rounded weights the GPU uses
-            struct RocmBuf dx = RocmBuf::upload(x.at(0UL), k);
+            std::rocm_half_read(dw, bits.as_slice()[0..n * k]);   // the rounded weights the GPU uses
+            struct RocmBuf dx = RocmBuf::upload(x.as_slice()[0..k]);
             struct RocmBuf dy = RocmBuf::alloc(n);
             int ok = std::rocm_half_gemv(dw, dx, dy, n, k);
             struct Vec<float> got = download(dy);
@@ -441,8 +441,8 @@ static void check_decode_ops() {
     unsigned long n = 1536UL;
     struct Vec<float> x = seq(rows * n, 0.011f, -0.8f);
     struct Vec<float> w = seq(n, 0.002f, 0.5f);
-    struct RocmBuf dx = RocmBuf::upload(x.at(0UL), rows * n);
-    struct RocmBuf dw = RocmBuf::upload(w.at(0UL), n);
+    struct RocmBuf dx = RocmBuf::upload(x.as_slice()[0..rows * n]);
+    struct RocmBuf dw = RocmBuf::upload(w.as_slice()[0..n]);
     struct RocmBuf dy = RocmBuf::alloc(rows * n);
     int ok1 = std::rocm_rmsnorm(dx, dw, dy, rows, n, (float)1e-6);
     struct Vec<float> y1 = download(dy);
@@ -472,7 +472,7 @@ static void check_decode_ops() {
     check(ok2 && e2 < (float)1e-5, "rmsnorm without weight, in place");
     // gelu (tanh approximation)
     struct Vec<float> gx = seq(1000UL, 0.01f, -5.0f);
-    struct RocmBuf dg = RocmBuf::upload(gx.at(0UL), 1000UL);
+    struct RocmBuf dg = RocmBuf::upload(gx.as_slice()[0..1000UL]);
     struct RocmBuf dgo = RocmBuf::alloc(1000UL);
     int ok3 = std::rocm_gelu(dg, dgo);
     struct Vec<float> go = download(dgo);
@@ -569,9 +569,12 @@ static void check_attention() {
         int ok = std::rocm_linear_attention_f32(q.at(0UL), k.at(0UL), v.at(0UL), got.at(0UL), 2UL, n, n, ld[li], 1);
         check(ok && relmax(&got, &ref) < 1.0e-4f, "causal linear attention, 1100 rows");
         // the same call recorded into a graph (its per-call reset is a graph node) and replayed twice
-        struct RocmBuf dq = RocmBuf::upload(q.at(0UL), 2UL * n * ld[li]);
-        struct RocmBuf dk = RocmBuf::upload(k.at(0UL), 2UL * n * ld[li]);
-        struct RocmBuf dv = RocmBuf::upload(v.at(0UL), 2UL * n * ld[li]);
+        struct RocmBuf dq;
+        unsafe { dq = RocmBuf::upload(((const float*)(q.at(0UL)))[0..2UL * n * ld[li]]); }
+        struct RocmBuf dk;
+        unsafe { dk = RocmBuf::upload(((const float*)(k.at(0UL)))[0..2UL * n * ld[li]]); }
+        struct RocmBuf dv;
+        unsafe { dv = RocmBuf::upload(((const float*)(v.at(0UL)))[0..2UL * n * ld[li]]); }
         struct RocmBuf dout = RocmBuf::alloc(2UL * n * ld[li]);
         check(std::rocm_linear_attention(dq, dk, dv, dout, 2UL, n, n, ld[li], 1), "linear attention before capture");
         check(std::rocm_capture_begin(), "capture linear attention");
@@ -592,9 +595,9 @@ static void check_attention() {
     struct Vec<float> q1 = seq(n1 * d1, 0.017f, -0.8f);
     struct Vec<float> k1 = seq(n1 * d1, 0.015f, -0.7f);
     struct Vec<float> v1 = seq(n1 * d1, 0.03f, -1.2f);
-    &FloatTensor tq = FloatTensor::from_2d(q1.at(0UL), n1, d1, 0);
-    &FloatTensor tk = FloatTensor::from_2d(k1.at(0UL), n1, d1, 0);
-    &FloatTensor tv = FloatTensor::from_2d(v1.at(0UL), n1, d1, 0);
+    &FloatTensor tq = FloatTensor::from_2d(q1.as_slice()[0..n1 * d1], n1, d1, 0);
+    &FloatTensor tk = FloatTensor::from_2d(k1.as_slice()[0..n1 * d1], n1, d1, 0);
+    &FloatTensor tv = FloatTensor::from_2d(v1.as_slice()[0..n1 * d1], n1, d1, 0);
     &FloatTensor sa = std::attention_forward(tq, tk, tv);
     &FloatTensor la = std::linear_attention_forward(tq, tk, tv);
     struct Vec<float> g1 = std::Vec::with_cap(n1 * d1);
@@ -624,7 +627,7 @@ static struct Vec<unsigned short> read_half(struct RocmHalfBuf h) {
     struct Vec<unsigned short> v = std::Vec::with_cap(h.len);
     unsigned long i = 0UL;
     while (i < h.len) { v.push((unsigned short)0); i = i + 1UL; }
-    std::rocm_half_read(h, v.at(0UL), h.len);
+    std::rocm_half_read(h, v.as_slice()[0..h.len]);
     return v;
 }
 
@@ -645,10 +648,10 @@ static void check_mixed_precision() {
         int to = d == ROCM_FP16 ? ROCM_BF16 : ROCM_FP16;
         struct RocmHalfBuf hs = RocmHalfBuf::alloc(n, d);
         struct RocmHalfBuf hd = RocmHalfBuf::alloc(n, to);
-        check(std::rocm_half_write(hs, pat.at(0UL), n) && std::rocm_half_convert(hs, hd), "half convert ran");
+        check(std::rocm_half_write(hs, pat.as_slice()[0..n]) && std::rocm_half_convert(hs, hd), "half convert ran");
         struct Vec<unsigned short> got = read_half(hd);
-        if (d == ROCM_FP16) std::fp16_to_bf16_bulk(pat.at(0UL), cpu.at(0UL), n);
-        else std::bf16_to_fp16_bulk(pat.at(0UL), cpu.at(0UL), n);
+        if (d == ROCM_FP16) std::fp16_to_bf16_bulk(pat.as_slice()[0..n], cpu.as_slice()[0..n]);
+        else std::bf16_to_fp16_bulk(pat.as_slice()[0..n], cpu.as_slice()[0..n]);
         unsigned long bad = 0UL;
         i = 0UL;
         while (i < n) {
@@ -671,7 +674,7 @@ static void check_mixed_precision() {
     unsigned long b = 0UL;
     while (b < 40UL) {
         unsigned long len = 1UL + (b * 977UL) % 2000UL;
-        f32s.push(RocmBuf::upload(host.at(0UL), len));
+        f32s.push(RocmBuf::upload(host.as_slice()[0..len]));
         h16s.push(RocmHalfBuf::alloc(len, ROCM_BF16));
         backs.push(RocmBuf::alloc(len));
         b = b + 1UL;
@@ -707,8 +710,8 @@ static void check_mixed_precision() {
     struct Vec<float> scaled = std::Vec::with_cap(3000UL);
     i = 0UL;
     while (i < 3000UL) { scaled.push(*gv.at(i) * (float)512.0); i = i + 1UL; }
-    struct RocmHalfBuf g16a = RocmHalfBuf::upload(scaled.at(0UL), 3000UL, ROCM_FP16);
-    struct RocmHalfBuf g16b = RocmHalfBuf::upload(scaled.at(0UL), 1000UL, ROCM_FP16);
+    struct RocmHalfBuf g16a = RocmHalfBuf::upload(scaled.as_slice()[0..3000UL], ROCM_FP16);
+    struct RocmHalfBuf g16b = RocmHalfBuf::upload(scaled.as_slice()[0..1000UL], ROCM_FP16);
     struct RocmBuf g32a = RocmBuf::alloc(3000UL);
     struct RocmBuf g32b = RocmBuf::alloc(1000UL);
     struct Vec<struct RocmHalfBuf> gs = std::Vec::new();
@@ -728,7 +731,7 @@ static void check_mixed_precision() {
     check(bad == 0UL && *fl.at(0UL) == (float)0.0, "unscaled values, no overflow");
     fl.free(); u.free();
     unsigned short inf = (unsigned short)0x7C00;
-    std::rocm_half_write(g16b, &inf, 1UL);
+    unsafe { std::rocm_half_write(g16b, ((const unsigned short*)(&inf))[0..1UL]); }
     check(std::rocm_half_unscale_many(&gs, &g32s, (float)1.0 / (float)512.0, flag), "unscale ran again");
     fl = download(flag);
     check(*fl.at(0UL) == (float)1.0, "overflow flagged");
@@ -749,8 +752,8 @@ static void check_mixed_precision() {
     struct Vec<float> g0 = seq(m, (float)0.011, -(float)0.4);
     int variant = 0;
     while (variant < 3) {
-        struct RocmBuf dw = RocmBuf::upload(w0.at(0UL), m);
-        struct RocmBuf dg = RocmBuf::upload(g0.at(0UL), m);
+        struct RocmBuf dw = RocmBuf::upload(w0.as_slice()[0..m]);
+        struct RocmBuf dg = RocmBuf::upload(g0.as_slice()[0..m]);
         struct RocmBuf dm = RocmBuf::alloc(m);
         struct RocmBuf dvv = RocmBuf::alloc(m);
         struct RocmHalfBuf wh = RocmHalfBuf::alloc(m, ROCM_BF16);
@@ -810,7 +813,7 @@ static void check_mixed_precision() {
         check(bad == 0UL, "master weights' bf16 copy");
         // a flagged step changes nothing
         float one1 = (float)1.0;
-        std::rocm_write(flag, &one1, 1UL);
+        unsafe { std::rocm_write(flag, ((const float*)(&one1))[0..1UL]); }
         if (variant < 2) std::rocm_mp_adam(dw, dm, dvv, dg, wh, lr, b1, b2, eps, wd, variant, 4UL, flag);
         else std::rocm_mp_sgd(dw, dg, dm, wh, lr, mu, wd, flag);
         struct Vec<float> gw2 = download(dw);
@@ -827,8 +830,8 @@ static void check_mixed_precision() {
     struct Vec<float> xb = seq(e, -(float)0.07, (float)3.0);
     d = ROCM_FP16;
     while (d <= ROCM_BF16) {
-        struct RocmHalfBuf ha = RocmHalfBuf::upload(xa.at(0UL), e, d);
-        struct RocmHalfBuf hb = RocmHalfBuf::upload(xb.at(0UL), e, d);
+        struct RocmHalfBuf ha = RocmHalfBuf::upload(xa.as_slice()[0..e], d);
+        struct RocmHalfBuf hb = RocmHalfBuf::upload(xb.as_slice()[0..e], d);
         struct RocmHalfBuf ho = RocmHalfBuf::alloc(e, d);
         struct Vec<unsigned short> ab = read_half(ha);
         struct Vec<unsigned short> bb = read_half(hb);
@@ -856,7 +859,7 @@ static void check_mixed_precision() {
         }
         // NCHW bias + relu: 3 images x 7 channels x 5x5 (175 values per image, e >= 525)
         struct Vec<float> bias = seq(7UL, (float)0.5, -(float)1.5);
-        struct RocmHalfBuf hbias = RocmHalfBuf::upload(bias.at(0UL), 7UL, d);
+        struct RocmHalfBuf hbias = RocmHalfBuf::upload(bias.as_slice()[0..7UL], d);
         struct Vec<unsigned short> biasb = read_half(hbias);
         check(std::rocm_half_bias(ha, hbias, 3UL, 7UL, 25UL, 1), "half bias ran");
         struct Vec<unsigned short> yb = read_half(ha);
@@ -898,8 +901,8 @@ int main() {
     unsigned long n = 10007UL;   // not a multiple of the block size
     struct Vec<float> a = seq(n, 0.01f, 0.1f);
     struct Vec<float> b = seq(n, 0.02f, 0.5f);
-    struct RocmBuf da = RocmBuf::upload(a.at(0UL), n);
-    struct RocmBuf db = RocmBuf::upload(b.at(0UL), n);
+    struct RocmBuf da = RocmBuf::upload(a.as_slice()[0..n]);
+    struct RocmBuf db = RocmBuf::upload(b.as_slice()[0..n]);
     struct RocmBuf dout = RocmBuf::alloc(n);
     check(da.dev != 0UL && db.dev != 0UL && dout.dev != 0UL, "upload/alloc");
 
@@ -983,8 +986,8 @@ int main() {
     unsigned long k = 129UL;
     struct Vec<float> ga = seq(m * k, 0.003f, -0.1f);
     struct Vec<float> gb = seq(k * nn, 0.002f, -0.07f);
-    struct RocmBuf dga = RocmBuf::upload(ga.at(0UL), m * k);
-    struct RocmBuf dgb = RocmBuf::upload(gb.at(0UL), k * nn);
+    struct RocmBuf dga = RocmBuf::upload(ga.as_slice()[0..m * k]);
+    struct RocmBuf dgb = RocmBuf::upload(gb.as_slice()[0..k * nn]);
     struct RocmBuf dgc = RocmBuf::alloc(m * nn);
     int t = 0;
     while (t < 4) {

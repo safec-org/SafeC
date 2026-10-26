@@ -50,11 +50,17 @@ struct CudaBuf {
     void free();   // dev := 0
 
     static struct CudaBuf alloc(unsigned long n);   // uninitialized; dev == 0 on failure
-    static struct CudaBuf upload(const &float host, unsigned long n);   // dev == 0 on failure
+    static struct CudaBuf upload([]const float host);
+    // internal: the (reference, length) core of upload()
+    static struct CudaBuf upload_n_(const &float host, unsigned long n);   // dev == 0 on failure
 };
 
-int  cuda_write(struct CudaBuf dst, const &float host, unsigned long n);  // 1 on success
-int  cuda_read(struct CudaBuf src, &float host, unsigned long n);         // waits for queued work
+int  cuda_write(struct CudaBuf dst, []const float host);
+// internal: the (reference, length) core of cuda_write()
+int  cuda_write_n_(struct CudaBuf dst, const &float host, unsigned long n);  // 1 on success
+int  cuda_read(struct CudaBuf src, []float host);
+// internal: the (reference, length) core of cuda_read()
+int  cuda_read_n_(struct CudaBuf src, &float host, unsigned long n);         // waits for queued work
 // cuda_write returns once 'host' may be reused. Copies of 1 MiB and up run
 // as 4 parallel lanes (3 helper threads started on first use plus the
 // caller), each staging its slice through pinned buffers with the DMA of
@@ -149,11 +155,17 @@ struct CudaHalfBuf {
     void free();
 
     static struct CudaHalfBuf alloc(unsigned long n, int dtype);   // uninitialized
-    static struct CudaHalfBuf upload(const &float host, unsigned long n, int dtype);   // rounded on the GPU
+    static struct CudaHalfBuf upload([]const float host, int dtype);
+    // internal: the (reference, length) core of upload()
+    static struct CudaHalfBuf upload_n_(const &float host, unsigned long n, int dtype);   // rounded on the GPU
 };
 
-int  cuda_half_write(struct CudaHalfBuf dst, const &unsigned short bits, unsigned long n);  // raw bits
-int  cuda_half_read(struct CudaHalfBuf src, &unsigned short bits, unsigned long n);         // waits
+int  cuda_half_write(struct CudaHalfBuf dst, []const unsigned short bits);
+// internal: the (reference, length) core of cuda_half_write()
+int  cuda_half_write_n_(struct CudaHalfBuf dst, const &unsigned short bits, unsigned long n);  // raw bits
+int  cuda_half_read(struct CudaHalfBuf src, []unsigned short bits);
+// internal: the (reference, length) core of cuda_half_read()
+int  cuda_half_read_n_(struct CudaHalfBuf src, &unsigned short bits, unsigned long n);         // waits
 
 // Conversions over dst.len (to_half) / src.len (from_half) elements.
 int cuda_to_half(struct CudaBuf src, struct CudaHalfBuf dst);     // round to dst.dtype
@@ -296,17 +308,39 @@ int cuda_copy_to_host([]unsigned char host, unsigned long dev);
 // ── Host-array convenience ops (upload → compute → read back) ────────────────
 // 1 on success, 0 on failure (no GPU, allocation failure).
 
-int cuda_add_f32(const &float a, const &float b, &float out, unsigned long n);
-int cuda_sub_f32(const &float a, const &float b, &float out, unsigned long n);
-int cuda_mul_f32(const &float a, const &float b, &float out, unsigned long n);
-int cuda_div_f32(const &float a, const &float b, &float out, unsigned long n);
-int cuda_pow_f32(const &float a, const &float b, &float out, unsigned long n);
-int cuda_relu_f32(const &float a, &float out, unsigned long n);
-int cuda_log_f32(const &float a, &float out, unsigned long n);
-int cuda_exp_f32(const &float a, &float out, unsigned long n);
-int cuda_sqrt_f32(const &float a, &float out, unsigned long n);
-int cuda_scale_f32(const &float a, float k, &float out, unsigned long n);
-int cuda_sum_f32(const &float a, &float out, unsigned long n);
+int cuda_add_f32([]const float a, []const float b, []float out);
+// internal: the (reference, length) core of cuda_add_f32()
+int cuda_add_f32_n_(const &float a, const &float b, &float out, unsigned long n);
+int cuda_sub_f32([]const float a, []const float b, []float out);
+// internal: the (reference, length) core of cuda_sub_f32()
+int cuda_sub_f32_n_(const &float a, const &float b, &float out, unsigned long n);
+int cuda_mul_f32([]const float a, []const float b, []float out);
+// internal: the (reference, length) core of cuda_mul_f32()
+int cuda_mul_f32_n_(const &float a, const &float b, &float out, unsigned long n);
+int cuda_div_f32([]const float a, []const float b, []float out);
+// internal: the (reference, length) core of cuda_div_f32()
+int cuda_div_f32_n_(const &float a, const &float b, &float out, unsigned long n);
+int cuda_pow_f32([]const float a, []const float b, []float out);
+// internal: the (reference, length) core of cuda_pow_f32()
+int cuda_pow_f32_n_(const &float a, const &float b, &float out, unsigned long n);
+int cuda_relu_f32([]const float a, []float out);
+// internal: the (reference, length) core of cuda_relu_f32()
+int cuda_relu_f32_n_(const &float a, &float out, unsigned long n);
+int cuda_log_f32([]const float a, []float out);
+// internal: the (reference, length) core of cuda_log_f32()
+int cuda_log_f32_n_(const &float a, &float out, unsigned long n);
+int cuda_exp_f32([]const float a, []float out);
+// internal: the (reference, length) core of cuda_exp_f32()
+int cuda_exp_f32_n_(const &float a, &float out, unsigned long n);
+int cuda_sqrt_f32([]const float a, []float out);
+// internal: the (reference, length) core of cuda_sqrt_f32()
+int cuda_sqrt_f32_n_(const &float a, &float out, unsigned long n);
+int cuda_scale_f32([]const float a, float k, []float out);
+// internal: the (reference, length) core of cuda_scale_f32()
+int cuda_scale_f32_n_(const &float a, float k, &float out, unsigned long n);
+int cuda_sum_f32([]const float a, []float out);
+// internal: the (reference, length) core of cuda_sum_f32()
+int cuda_sum_f32_n_(const &float a, &float out, unsigned long n);
 
 // out[M,N] = a[M,K] * b[K,N] with this library's own tiled CUDA kernel
 // (64x64 tiles in shared memory, 4x4 per thread). Kept as a dependency-free

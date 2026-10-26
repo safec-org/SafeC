@@ -87,19 +87,19 @@ static float ref_(int op, float x, float y) {
 
 static int host_op_(int op, &Vec<float> a, &Vec<float> b, &Vec<float> o, unsigned long n) {
     unsafe {
-        const &float pa = (const &float)a.at(0UL);
-        const &float pb = (const &float)b.at(0UL);
-        &float po = (&float)o.at(0UL);
-        if (op == OP_ADD) return spirv_add_f32(pa, pb, po, n);
-        if (op == OP_SUB) return spirv_sub_f32(pa, pb, po, n);
-        if (op == OP_MUL) return spirv_mul_f32(pa, pb, po, n);
-        if (op == OP_DIV) return spirv_div_f32(pa, pb, po, n);
-        if (op == OP_POW) return spirv_pow_f32(pa, pb, po, n);
-        if (op == OP_RELU) return spirv_relu_f32(pa, po, n);
-        if (op == OP_LOG) return spirv_log_f32(pa, po, n);
-        if (op == OP_EXP) return spirv_exp_f32(pa, po, n);
-        if (op == OP_SQRT) return spirv_sqrt_f32(pa, po, n);
-        return spirv_scale_f32(pa, (float)1.75, po, n);
+        []const float pa = a.as_slice()[0..n];
+        []const float pb = b.as_slice()[0..n];
+        []float po = o.as_slice()[0..n];
+        if (op == OP_ADD) return spirv_add_f32(pa, pb, po);
+        if (op == OP_SUB) return spirv_sub_f32(pa, pb, po);
+        if (op == OP_MUL) return spirv_mul_f32(pa, pb, po);
+        if (op == OP_DIV) return spirv_div_f32(pa, pb, po);
+        if (op == OP_POW) return spirv_pow_f32(pa, pb, po);
+        if (op == OP_RELU) return spirv_relu_f32(pa, po);
+        if (op == OP_LOG) return spirv_log_f32(pa, po);
+        if (op == OP_EXP) return spirv_exp_f32(pa, po);
+        if (op == OP_SQRT) return spirv_sqrt_f32(pa, po);
+        return spirv_scale_f32(pa, (float)1.75, po);
     }
 }
 
@@ -138,7 +138,7 @@ static void check_reductions_(unsigned long n, unsigned long M, unsigned long K,
     while (i < n) { s = s + (double)*a.at(i); i = i + 1UL; }
     float got[1];
     int ok = 0;
-    unsafe { got[0] = (float)0.0; ok = spirv_sum_f32((const &float)a.at(0UL), (&float)&got[0], n); }
+    unsafe { got[0] = (float)0.0; ok = spirv_sum_f32(a.as_slice()[0..n], got[0..1]); }
     double d = (double)got[0] - s;
     if (d < 0.0) d = -d;
     unsafe {
@@ -183,8 +183,8 @@ static void check_chain_() {
         *r.at(i) = (v > (float)0.0 ? v : (float)0.0) * (float)2.0;
         i = i + 1UL;
     }
-    struct SpirvBuf ba = SpirvBuf::upload((const &float)a.at(0UL), n);
-    struct SpirvBuf bb = SpirvBuf::upload((const &float)b.at(0UL), n);
+    struct SpirvBuf ba = SpirvBuf::upload(a.as_slice()[0..n]);
+    struct SpirvBuf bb = SpirvBuf::upload(b.as_slice()[0..n]);
     struct SpirvBuf t = SpirvBuf::alloc(n, 0);
     check(ba.valid() && bb.valid() && t.valid(), "buffers");
     int ok = spirv_mul(ba, bb, t, n) && spirv_add(t, ba, t, n) && spirv_relu(t, t, n) && spirv_scale(t, (float)2.0, t, n);
@@ -220,7 +220,7 @@ static void check_precise_() {
     unsigned long i = 0UL;
     while (i < n) { *a.at(i) = (float)-80.0 + (float)160.0 * (float)i / (float)n; i = i + 1UL; }
     int ok = 0;
-    unsafe { ok = spirv_exp_f32((const &float)a.at(0UL), (&float)o.at(0UL), n); }
+    unsafe { ok = spirv_exp_f32(a.as_slice()[0..n], o.as_slice()[0..n]); }
     double worst = 0.0;
     i = 0UL;
     while (i < n) {
@@ -264,8 +264,8 @@ static void check_order_() {
     struct Vec<float> o = zeros(n);
     unsigned long i = 0UL;
     while (i < n) { *o.at(i) = (float)1.0; i = i + 1UL; }
-    struct SpirvBuf x = SpirvBuf::upload((const &float)z.at(0UL), n);
-    struct SpirvBuf one = SpirvBuf::upload((const &float)o.at(0UL), n);
+    struct SpirvBuf x = SpirvBuf::upload(z.as_slice()[0..n]);
+    struct SpirvBuf one = SpirvBuf::upload(o.as_slice()[0..n]);
     struct SpirvBuf y = SpirvBuf::alloc(n, 0);
     int ok = x.valid() && one.valid() && y.valid();
     int k = 0;

@@ -43,7 +43,9 @@ namespace std {
 // SafeC-to-SafeC calls (which is why that never showed up before), but not
 // what a real, externally-compiled function like objc_msgSend's target IMP
 // expects to receive in its argument registers.
-int mps_add_f32(const &float a, const &float b, &float out, unsigned long n);
+int mps_add_f32([]const float a, []const float b, []float out);
+// internal: the (reference, length) core of mps_add_f32()
+int mps_add_f32_n_(const &float a, const &float b, &float out, unsigned long n);
 
 // Same shape/verification status as mps_add_f32 (elementwise, GPU-executed,
 // unified-memory readback) — sub/mul/div/pow are two-input, log/exp/sqrt
@@ -59,15 +61,33 @@ int mps_add_f32(const &float a, const &float b, &float out, unsigned long n);
 // a per-op caller needs to encode it onto a shared batch's
 // command buffer for the fused forward+loss+backward training-step path,
 // not force its own commit+wait mid-batch.
-int mps_sub_f32(const &float a, const &float b, &float out, unsigned long n);
-int mps_mul_f32(const &float a, const &float b, &float out, unsigned long n);
-int mps_div_f32(const &float a, const &float b, &float out, unsigned long n);
-int mps_pow_f32(const &float a, const &float b, &float out, unsigned long n);
-int mps_log_f32(const &float a, &float out, unsigned long n);
-int mps_exp_f32(const &float a, &float out, unsigned long n);
-int mps_sqrt_f32(const &float a, &float out, unsigned long n);
-int mps_relu_f32(const &float a, &float out, unsigned long n);
-int mps_scale_f32(const &float a, float k, &float out, unsigned long n);
+int mps_sub_f32([]const float a, []const float b, []float out);
+// internal: the (reference, length) core of mps_sub_f32()
+int mps_sub_f32_n_(const &float a, const &float b, &float out, unsigned long n);
+int mps_mul_f32([]const float a, []const float b, []float out);
+// internal: the (reference, length) core of mps_mul_f32()
+int mps_mul_f32_n_(const &float a, const &float b, &float out, unsigned long n);
+int mps_div_f32([]const float a, []const float b, []float out);
+// internal: the (reference, length) core of mps_div_f32()
+int mps_div_f32_n_(const &float a, const &float b, &float out, unsigned long n);
+int mps_pow_f32([]const float a, []const float b, []float out);
+// internal: the (reference, length) core of mps_pow_f32()
+int mps_pow_f32_n_(const &float a, const &float b, &float out, unsigned long n);
+int mps_log_f32([]const float a, []float out);
+// internal: the (reference, length) core of mps_log_f32()
+int mps_log_f32_n_(const &float a, &float out, unsigned long n);
+int mps_exp_f32([]const float a, []float out);
+// internal: the (reference, length) core of mps_exp_f32()
+int mps_exp_f32_n_(const &float a, &float out, unsigned long n);
+int mps_sqrt_f32([]const float a, []float out);
+// internal: the (reference, length) core of mps_sqrt_f32()
+int mps_sqrt_f32_n_(const &float a, &float out, unsigned long n);
+int mps_relu_f32([]const float a, []float out);
+// internal: the (reference, length) core of mps_relu_f32()
+int mps_relu_f32_n_(const &float a, &float out, unsigned long n);
+int mps_scale_f32([]const float a, float k, []float out);
+// internal: the (reference, length) core of mps_scale_f32()
+int mps_scale_f32_n_(const &float a, float k, &float out, unsigned long n);
 
 // out[0] = sum(a[0..n)) -- two-stage parallel reduction (grid-stride
 // accumulate + threadgroup tree reduction, see gpu_mps_kernels.metal's
@@ -77,7 +97,9 @@ int mps_scale_f32(const &float a, float k, &float out, unsigned long n);
 // combine can't run until mps_batch_end()'s single wait, so it's deferred
 // into a registered finalize callback instead of happening inline here —
 // see gpu_mps.sc's implementation comment.
-int mps_sum_f32(const &float a, &float out, unsigned long n);
+int mps_sum_f32([]const float a, []float out);
+// internal: the (reference, length) core of mps_sum_f32()
+int mps_sum_f32_n_(const &float a, &float out, unsigned long n);
 
 // out[M,N] = a[M,K] . b[K,N], computed on the GPU. float32-only (Metal has
 // no 'double' type at all). Internally picks between three kernels
@@ -124,7 +146,9 @@ int mps_matmul_atb_f32(const &float a, const &float b, &float out,
 // GPU-backed relu backward: out[i] = a[i] > 0 ? selfGrad[i] : 0. Same
 // shape/verification path as mps_add_f32 (see __mps_run_binary_kernel).
 // Batch-aware, same as the two matmul-backward entry points above.
-int mps_relu_backward_f32(const &float a, const &float selfGrad, &float out, unsigned long n);
+int mps_relu_backward_f32([]const float a, []const float selfGrad, []float out);
+// internal: the (reference, length) core of mps_relu_backward_f32()
+int mps_relu_backward_f32_n_(const &float a, const &float selfGrad, &float out, unsigned long n);
 
 // True if a Metal device is available on this machine at all (checks
 // MTLCreateSystemDefaultDevice() != nil) — lets callers fall back to the
@@ -177,13 +201,21 @@ struct MpsBuf {
     ?&float contents() const;
 
     static struct MpsBuf alloc(unsigned long n, int dtype);       // n uninitialized elements
-    static struct MpsBuf upload(const &float host, unsigned long n);          // n fp32 values
+    static struct MpsBuf upload([]const float host);
+    // internal: the (reference, length) core of upload()
+    static struct MpsBuf upload_n_(const &float host, unsigned long n);          // n fp32 values
     // n fp32 values rounded on the CPU (float16.h's f32_to_fp16_bulk /
     // f32_to_bf16_bulk) and stored as fp16 / bf16.
-    static struct MpsBuf upload_f16(const &float host, unsigned long n);
-    static struct MpsBuf upload_bf16(const &float host, unsigned long n);
+    static struct MpsBuf upload_f16([]const float host);
+    // internal: the (reference, length) core of upload_f16()
+    static struct MpsBuf upload_f16_n_(const &float host, unsigned long n);
+    static struct MpsBuf upload_bf16([]const float host);
+    // internal: the (reference, length) core of upload_bf16()
+    static struct MpsBuf upload_bf16_n_(const &float host, unsigned long n);
     // n raw fp16 or bf16 values (dtype MPS_FP16 / MPS_BF16), copied as is.
-    static struct MpsBuf upload_bits(const &unsigned short bits, unsigned long n, int dtype);
+    static struct MpsBuf upload_bits([]const unsigned short bits, int dtype);
+    // internal: the (reference, length) core of upload_bits()
+    static struct MpsBuf upload_bits_n_(const &unsigned short bits, unsigned long n, int dtype);
     // A zeroed recurrent linear-attention state (mps_linear_attn_bf16_chained):
     // mps_linear_attn_state_bytes(numHeads, headDim) bytes of fp32.
     static struct MpsBuf linear_attn_state(unsigned long numHeads, unsigned long headDim);
@@ -430,8 +462,12 @@ int mps_matmul_f16(const &float a, const &float b, &float out,
                     unsigned long M, unsigned long K, unsigned long N);
 int mps_matmul_bf16(const &float a, const &float b, &float out,
                      unsigned long M, unsigned long K, unsigned long N);
-int mps_relu_f16(const &float a, &float out, unsigned long n);
-int mps_relu_bf16(const &float a, &float out, unsigned long n);
+int mps_relu_f16([]const float a, []float out);
+// internal: the (reference, length) core of mps_relu_f16()
+int mps_relu_f16_n_(const &float a, &float out, unsigned long n);
+int mps_relu_bf16([]const float a, []float out);
+// internal: the (reference, length) core of mps_relu_bf16()
+int mps_relu_bf16_n_(const &float a, &float out, unsigned long n);
 
 // ── fp16 / bf16 persistent-buffer / batched tier ────────────────────────
 // Mirrors MpsBuf::upload/mps_matmul_f32_persistent/mps_relu_f32_

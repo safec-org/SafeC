@@ -335,8 +335,8 @@ struct RocmConv2D RocmConv2D::upload(const &Conv2D layer) {
     d.stride = layer.stride;
     d.padding = layer.padding;
     unsigned long wn = layer.outChannels * layer.inChannels * layer.kH * layer.kW;
-    d.weight = RocmBuf::upload(layer.weight, wn);
-    d.bias = RocmBuf::upload(layer.bias, layer.outChannels);
+    d.weight = RocmBuf::upload_n_(layer.weight, wn);
+    d.bias = RocmBuf::upload_n_(layer.bias, layer.outChannels);
     if (d.weight.dev == 0UL || d.bias.dev == 0UL) {
         d.weight.free();
         d.bias.free();
@@ -362,8 +362,8 @@ struct RocmHalfConv2D RocmHalfConv2D::upload(const &Conv2D layer, int dtype) {
     d.stride = layer.stride;
     d.padding = layer.padding;
     unsigned long wn = layer.outChannels * layer.inChannels * layer.kH * layer.kW;
-    d.weight = RocmHalfBuf::upload(layer.weight, wn, dtype);
-    d.bias = RocmHalfBuf::upload(layer.bias, layer.outChannels, dtype);
+    d.weight = RocmHalfBuf::upload_n_(layer.weight, wn, dtype);
+    d.bias = RocmHalfBuf::upload_n_(layer.bias, layer.outChannels, dtype);
     if (d.weight.dev == 0UL || d.bias.dev == 0UL) {
         d.weight.free();
         d.bias.free();
@@ -491,11 +491,11 @@ struct FeatureMap conv2d_forward_rocm(const &Conv2D layer, const &FeatureMap inp
     unsigned long outW = rocm_conv_out_dim(w, layer.kW, layer.stride, layer.padding);
     if (inC == layer.inChannels && outH > 0UL && outW > 0UL && miopen_ensure_()) {
         struct RocmConv2D d = RocmConv2D::upload(layer);
-        struct RocmBuf x = RocmBuf::upload(input.data, inC * h * w);
+        struct RocmBuf x = RocmBuf::upload_n_(input.data, inC * h * w);
         struct RocmBuf y = RocmBuf::alloc(layer.outChannels * outH * outW);
         struct FeatureMap out = FeatureMap::new(layer.outChannels, outH, outW);
         int ok = d.weight.dev != 0UL && x.dev != 0UL && y.dev != 0UL &&
-                 d.forward(x, y, 1UL, h, w) && rocm_read(y, out.data, y.len);
+                 d.forward(x, y, 1UL, h, w) && rocm_read_n_(y, out.data, y.len);
         d.free();
         x.free();
         y.free();
@@ -511,11 +511,11 @@ struct FeatureMap unet_forward_rocm(&UNet net, const &FeatureMap input) {
     if (input.channels == net.encConv1.inChannels && miopen_ensure_()) {
         struct RocmUNet g = RocmUNet::new(net, 1UL, h, w);
         unsigned long outC = net.decConv2.outChannels;
-        struct RocmBuf x = RocmBuf::upload(input.data, input.channels * h * w);
+        struct RocmBuf x = RocmBuf::upload_n_(input.data, input.channels * h * w);
         struct RocmBuf y = RocmBuf::alloc(outC * h * w);
         struct FeatureMap out = FeatureMap::new(outC, h, w);
         int ok = g.ok && x.dev != 0UL && y.dev != 0UL &&
-                 g.forward(x, y) && rocm_read(y, out.data, y.len);
+                 g.forward(x, y) && rocm_read_n_(y, out.data, y.len);
         g.free();
         x.free();
         y.free();

@@ -439,28 +439,94 @@ static void hc_run_(const void* src, void* dst, unsigned long n, int op) {
     else hc_range_(&j, 0UL, n);
 }
 
-void f32_to_fp16_bulk(const &float src, &unsigned short dst, unsigned long n) {
+void f32_to_fp16_bulk_n_(const &float src, &unsigned short dst, unsigned long n) {
     unsafe { hc_run_((const void*)src, (void*)dst, n, HC_F32_FP16); }
 }
 
-void fp16_to_f32_bulk(const &unsigned short src, &float dst, unsigned long n) {
+void f32_to_fp16_bulk([]const float src_s, []unsigned short dst_s) {
+    unsigned long n = src_s.len < dst_s.len ? src_s.len : dst_s.len;
+    float src_d_[1];
+    const &float src = &src_d_[0];
+    if (src_s.len > 0UL) { unsafe { src = (const &float)src_s.ptr; } }
+    unsigned short dst_d_[1];
+    &unsigned short dst = &dst_d_[0];
+    if (dst_s.len > 0UL) { unsafe { dst = (&unsigned short)dst_s.ptr; } }
+    f32_to_fp16_bulk_n_(src, dst, n);
+}
+
+void fp16_to_f32_bulk_n_(const &unsigned short src, &float dst, unsigned long n) {
     unsafe { hc_run_((const void*)src, (void*)dst, n, HC_FP16_F32); }
 }
 
-void f32_to_bf16_bulk(const &float src, &unsigned short dst, unsigned long n) {
+void fp16_to_f32_bulk([]const unsigned short src_s, []float dst_s) {
+    unsigned long n = src_s.len < dst_s.len ? src_s.len : dst_s.len;
+    unsigned short src_d_[1];
+    const &unsigned short src = &src_d_[0];
+    if (src_s.len > 0UL) { unsafe { src = (const &unsigned short)src_s.ptr; } }
+    float dst_d_[1];
+    &float dst = &dst_d_[0];
+    if (dst_s.len > 0UL) { unsafe { dst = (&float)dst_s.ptr; } }
+    fp16_to_f32_bulk_n_(src, dst, n);
+}
+
+void f32_to_bf16_bulk_n_(const &float src, &unsigned short dst, unsigned long n) {
     unsafe { hc_run_((const void*)src, (void*)dst, n, HC_F32_BF16); }
 }
 
-void bf16_to_f32_bulk(const &unsigned short src, &float dst, unsigned long n) {
+void f32_to_bf16_bulk([]const float src_s, []unsigned short dst_s) {
+    unsigned long n = src_s.len < dst_s.len ? src_s.len : dst_s.len;
+    float src_d_[1];
+    const &float src = &src_d_[0];
+    if (src_s.len > 0UL) { unsafe { src = (const &float)src_s.ptr; } }
+    unsigned short dst_d_[1];
+    &unsigned short dst = &dst_d_[0];
+    if (dst_s.len > 0UL) { unsafe { dst = (&unsigned short)dst_s.ptr; } }
+    f32_to_bf16_bulk_n_(src, dst, n);
+}
+
+void bf16_to_f32_bulk_n_(const &unsigned short src, &float dst, unsigned long n) {
     unsafe { hc_run_((const void*)src, (void*)dst, n, HC_BF16_F32); }
 }
 
-void fp16_to_bf16_bulk(const &unsigned short src, &unsigned short dst, unsigned long n) {
+void bf16_to_f32_bulk([]const unsigned short src_s, []float dst_s) {
+    unsigned long n = src_s.len < dst_s.len ? src_s.len : dst_s.len;
+    unsigned short src_d_[1];
+    const &unsigned short src = &src_d_[0];
+    if (src_s.len > 0UL) { unsafe { src = (const &unsigned short)src_s.ptr; } }
+    float dst_d_[1];
+    &float dst = &dst_d_[0];
+    if (dst_s.len > 0UL) { unsafe { dst = (&float)dst_s.ptr; } }
+    bf16_to_f32_bulk_n_(src, dst, n);
+}
+
+void fp16_to_bf16_bulk_n_(const &unsigned short src, &unsigned short dst, unsigned long n) {
     unsafe { hc_run_((const void*)src, (void*)dst, n, HC_FP16_BF16); }
 }
 
-void bf16_to_fp16_bulk(const &unsigned short src, &unsigned short dst, unsigned long n) {
+void fp16_to_bf16_bulk([]const unsigned short src_s, []unsigned short dst_s) {
+    unsigned long n = src_s.len < dst_s.len ? src_s.len : dst_s.len;
+    unsigned short src_d_[1];
+    const &unsigned short src = &src_d_[0];
+    if (src_s.len > 0UL) { unsafe { src = (const &unsigned short)src_s.ptr; } }
+    unsigned short dst_d_[1];
+    &unsigned short dst = &dst_d_[0];
+    if (dst_s.len > 0UL) { unsafe { dst = (&unsigned short)dst_s.ptr; } }
+    fp16_to_bf16_bulk_n_(src, dst, n);
+}
+
+void bf16_to_fp16_bulk_n_(const &unsigned short src, &unsigned short dst, unsigned long n) {
     unsafe { hc_run_((const void*)src, (void*)dst, n, HC_BF16_FP16); }
+}
+
+void bf16_to_fp16_bulk([]const unsigned short src_s, []unsigned short dst_s) {
+    unsigned long n = src_s.len < dst_s.len ? src_s.len : dst_s.len;
+    unsigned short src_d_[1];
+    const &unsigned short src = &src_d_[0];
+    if (src_s.len > 0UL) { unsafe { src = (const &unsigned short)src_s.ptr; } }
+    unsigned short dst_d_[1];
+    &unsigned short dst = &dst_d_[0];
+    if (dst_s.len > 0UL) { unsafe { dst = (&unsigned short)dst_s.ptr; } }
+    bf16_to_fp16_bulk_n_(src, dst, n);
 }
 
 } // namespace std

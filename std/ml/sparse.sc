@@ -56,10 +56,19 @@ static void sp_fill_rows_(&SparseTensor s) {
     }
 }
 
-struct SparseTensor SparseTensor::new_csr(unsigned long rows, unsigned long cols, const &unsigned long rowPtr,
-                                          const &unsigned long colIdx, const &float values, int requiresGrad) {
-    unsigned long nnz;
-    unsafe { nnz = rowPtr[rows]; }
+struct SparseTensor SparseTensor::new_csr(unsigned long rows, unsigned long cols, []const unsigned long rowPtr_s,
+                                          []const unsigned long colIdx_s, []const float values_s, int requiresGrad) {
+    if (rowPtr_s.len < rows + 1UL) { panic_at("SparseTensor::new_csr: rowPtr needs rows + 1 entries", "sparse.sc", __LINE__); }
+    unsigned long nnz = rowPtr_s[rows];
+    if (colIdx_s.len < nnz || values_s.len < nnz) { panic_at("SparseTensor::new_csr: colIdx / values shorter than rowPtr[rows]", "sparse.sc", __LINE__); }
+    const &unsigned long rowPtr;
+    unsafe { rowPtr = (const &unsigned long)rowPtr_s.ptr; }
+    unsigned long colIdx_d_[1];
+    const &unsigned long colIdx = &colIdx_d_[0];
+    if (nnz > 0UL) { unsafe { colIdx = (const &unsigned long)colIdx_s.ptr; } }
+    float values_d_[1];
+    const &float values = &values_d_[0];
+    if (nnz > 0UL) { unsafe { values = (const &float)values_s.ptr; } }
     struct SparseTensor s = sp_alloc_(rows, cols, nnz, requiresGrad);
     unsafe {
         unsigned long r = 0UL;

@@ -80,7 +80,7 @@ void t_fp16_to_f32_all() {
         float* f = (float*)malloc(4UL * 65536UL);
         unsigned long i = 0UL;
         while (i < 65536UL) { h[i] = (unsigned short)i; i = i + 1UL; }
-        fp16_to_f32_bulk((const &unsigned short)h, (&float)f, 65536UL);
+        fp16_to_f32_bulk(((const unsigned short*)((const &unsigned short)h))[0..65536UL], ((float*)((&float)f))[0..65536UL]);
         unsigned long bad = 0UL;
         i = 0UL;
         while (i < 65536UL) {
@@ -105,9 +105,9 @@ static unsigned long check_narrowing_(unsigned long n, unsigned long seed) {
         unsigned short* h = (unsigned short*)malloc(2UL * n);
         unsigned short* b = (unsigned short*)malloc(2UL * n);
         float* back = (float*)malloc(4UL * n);
-        f32_to_fp16_bulk((const &float)v, (&unsigned short)h, n);
-        f32_to_bf16_bulk((const &float)v, (&unsigned short)b, n);
-        bf16_to_f32_bulk((const &unsigned short)b, (&float)back, n);
+        f32_to_fp16_bulk(((const float*)((const &float)v))[0..n], ((unsigned short*)((&unsigned short)h))[0..n]);
+        f32_to_bf16_bulk(((const float*)((const &float)v))[0..n], ((unsigned short*)((&unsigned short)b))[0..n]);
+        bf16_to_f32_bulk(((const unsigned short*)((const &unsigned short)b))[0..n], ((float*)((&float)back))[0..n]);
         unsigned long i = 0UL;
         while (i < n) {
             unsigned int u = bits_of_(v[i]);
@@ -139,7 +139,7 @@ void t_half_to_half_bulk() {
         unsigned short* d = (unsigned short*)malloc(2UL * n);
         unsigned long i = 0UL;
         while (i < n) { src[i] = (unsigned short)i; i = i + 1UL; }
-        fp16_to_bf16_bulk((const &unsigned short)src, (&unsigned short)d, n);
+        fp16_to_bf16_bulk(((const unsigned short*)((const &unsigned short)src))[0..n], ((unsigned short*)((&unsigned short)d))[0..n]);
         unsigned long bad = 0UL;
         i = 0UL;
         while (i < n) {
@@ -148,7 +148,7 @@ void t_half_to_half_bulk() {
             else if (d[i] != want) bad = bad + 1UL;
             i = i + 1UL;
         }
-        bf16_to_fp16_bulk((const &unsigned short)src, (&unsigned short)d, n);
+        bf16_to_fp16_bulk(((const unsigned short*)((const &unsigned short)src))[0..n], ((unsigned short*)((&unsigned short)d))[0..n]);
         i = 0UL;
         while (i < n) {
             unsigned short want = f32_to_fp16(bf16_to_f32(src[i]));

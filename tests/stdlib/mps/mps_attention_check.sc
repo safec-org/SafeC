@@ -144,9 +144,9 @@ static struct MpsAttnShape windowed(struct MpsAttnShape s, unsigned long w) {
 
 // A persistent buffer holding 'v' in 'dtype' (0 = fp32).
 static struct MpsBuf upload(&Vec<float> v, int dtype) {
-    if (dtype == MPS_FP16) return MpsBuf::upload_f16(v.at(0UL), v.length());
-    if (dtype == MPS_BF16) return MpsBuf::upload_bf16(v.at(0UL), v.length());
-    return MpsBuf::upload(v.at(0UL), v.length());
+    if (dtype == MPS_FP16) return MpsBuf::upload_f16(v.as_slice()[0..v.length()]);
+    if (dtype == MPS_BF16) return MpsBuf::upload_bf16(v.as_slice()[0..v.length()]);
+    return MpsBuf::upload(v.as_slice()[0..v.length()]);
 }
 
 // Reads n values of 'dtype' from 'buf' into 'out' as floats.
@@ -250,9 +250,9 @@ int main() {
     struct Vec<float> cpu = std::Vec::with_cap(qn);
     unsigned long i = 0UL;
     while (i < qn) { got.push(0.0f); cpu.push(0.0f); i = i + 1UL; }
-    &FloatTensor tq = FloatTensor::from_2d(q.at(0UL), 40UL, 64UL, 0);
-    &FloatTensor tk = FloatTensor::from_2d(k.at(0UL), 56UL, 64UL, 0);
-    &FloatTensor tv = FloatTensor::from_2d(v.at(0UL), 56UL, 64UL, 0);
+    &FloatTensor tq = FloatTensor::from_2d(q.as_slice()[0..40UL * 64UL], 40UL, 64UL, 0);
+    &FloatTensor tk = FloatTensor::from_2d(k.as_slice()[0..56UL * 64UL], 56UL, 64UL, 0);
+    &FloatTensor tv = FloatTensor::from_2d(v.as_slice()[0..56UL * 64UL], 56UL, 64UL, 0);
     int l = 0;
     while (l < 2) {
         &FloatTensor tr = l ? std::linear_attention_forward(tq, tk, tv) : std::flash_attention_forward(tq, tk, tv, 16UL);

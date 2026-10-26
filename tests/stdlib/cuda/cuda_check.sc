@@ -73,7 +73,7 @@ static struct Vec<float> download(struct CudaBuf b) {
     struct Vec<float> v = std::Vec::with_cap(b.len);
     unsigned long i = 0UL;
     while (i < b.len) { v.push(0.0f); i = i + 1UL; }
-    std::cuda_read(b, v.at(0UL), b.len);
+    std::cuda_read(b, v.as_slice()[0..b.len]);
     return v;
 }
 
@@ -149,11 +149,11 @@ static void check_cudnn() {
     struct CudaBuf dx = CudaBuf::alloc(2UL * inN);
     struct CudaBuf dy = CudaBuf::alloc(2UL * outN);
     unsafe {
-        std::cuda_write(dx, xa.data, inN);
+        std::cuda_write(dx, ((const float*)xa.data)[0..inN]);
         struct CudaBuf dx2 = dx;
         dx2.dev = dx.dev + inN * 4UL;
         dx2.len = inN;
-        std::cuda_write(dx2, xb.data, inN);
+        std::cuda_write(dx2, ((const float*)xb.data)[0..inN]);
     }
     check(d2.forward(dx, dy, 2UL, 21UL, 15UL), "CudaConv2D::forward batch ran");
     struct Vec<float> ya = fm_download(dy, 0UL, outN);
@@ -215,8 +215,10 @@ static void check_cudnn() {
     ya.free();
 
     struct FeatureMap cat = std::concat_channels(&xa, &xb);
-    struct CudaBuf dxa = CudaBuf::upload(xa.data, inN);
-    struct CudaBuf dxb = CudaBuf::upload(xb.data, inN);
+    struct CudaBuf dxa;
+    unsafe { dxa = CudaBuf::upload(((const float*)xa.data)[0..inN]); }
+    struct CudaBuf dxb;
+    unsafe { dxb = CudaBuf::upload(((const float*)xb.data)[0..inN]); }
     struct CudaBuf dc = CudaBuf::alloc(2UL * inN);
     check(std::cuda_concat_channels(dxa, 4UL, dxb, 4UL, dc, 1UL, 21UL * 15UL), "cuda_concat_channels ran");
     ya = download(dc);
@@ -374,7 +376,7 @@ static void check_half() {
         if (c == 4UL) scale = 3.0e4;
         v.push((float)((double)((i * 7919UL) % 20001UL) - 10000.0) * (float)(scale / 10000.0));
     }
-    struct CudaBuf dv = CudaBuf::upload(v.at(0UL), n);
+    struct CudaBuf dv = CudaBuf::upload(v.as_slice()[0..n]);
     int d = CUDA_FP16;
     while (d <= CUDA_BF16) {
         int bf = d == CUDA_BF16;
@@ -384,7 +386,7 @@ static void check_half() {
         struct Vec<unsigned short> bits = std::Vec::with_cap(n);
         unsigned long i = 0UL;
         while (i < n) { bits.push((unsigned short)0); i = i + 1UL; }
-        check(std::cuda_half_read(h, bits.at(0UL), n), "half read");
+        check(std::cuda_half_read(h, bits.as_slice()[0..n]), "half read");
         unsigned long bad = 0UL;
         i = 0UL;
         while (i < n) { if (*bits.at(i) != std::half_encode(*v.at(i), d)) bad = bad + 1UL; i = i + 1UL; }
@@ -398,11 +400,11 @@ static void check_half() {
         while (i < n) { if (*fb.at(i) != std::half_decode(*bits.at(i), d)) bad = bad + 1UL; i = i + 1UL; }
         check(bad == 0UL, bf ? "bf16 decode exact" : "fp16 decode exact");
         // CudaHalfBuf::upload rounds the same way
-        struct CudaHalfBuf hu = CudaHalfBuf::upload(v.at(0UL), n, d);
+        struct CudaHalfBuf hu = CudaHalfBuf::upload(v.as_slice()[0..n], d);
         struct Vec<unsigned short> ubits = std::Vec::with_cap(n);
         i = 0UL;
         while (i < n) { ubits.push((unsigned short)0); i = i + 1UL; }
-        check(hu.dev != 0UL && std::cuda_half_read(hu, ubits.at(0UL), n), "half upload");
+        check(hu.dev != 0UL && std::cuda_half_read(hu, ubits.as_slice()[0..n]), "half upload");
         bad = 0UL;
         i = 0UL;
         while (i < n) { if (*ubits.at(i) != *bits.at(i)) bad = bad + 1UL; i = i + 1UL; }
@@ -420,8 +422,8 @@ static void check_half() {
         while (i < m * k) { ar.push(std::half_round(*a.at(i), d)); i = i + 1UL; }
         i = 0UL;
         while (i < k * nn) { br.push(std::half_round(*b.at(i), d)); i = i + 1UL; }
-        struct CudaHalfBuf ha = CudaHalfBuf::upload(a.at(0UL), m * k, d);
-        struct CudaHalfBuf hb = CudaHalfBuf::upload(b.at(0UL), k * nn, d);
+        struct CudaHalfBuf ha = CudaHalfBuf::upload(a.as_slice()[0..m * k], d);
+        struct CudaHalfBuf hb = CudaHalfBuf::upload(b.as_slice()[0..k * nn], d);
         struct CudaBuf c32 = CudaBuf::alloc(m * nn);
         struct CudaHalfBuf c16 = CudaHalfBuf::alloc(m * nn, d);
         struct Vec<unsigned short> cb = std::Vec::with_cap(m * nn);
@@ -437,7 +439,7 @@ static void check_half() {
             check(maxdiff(&got, &ref) < 1e-4f, bf ? "bf16 gemm f32 values" : "fp16 gemm f32 values");
             got.free();
             // 16-bit output: within one 16-bit rounding of the fp32 result
-            check(std::cuda_half_gemm(ha, ta, hb, tb, c16, m, nn, k) && std::cuda_half_read(c16, cb.at(0UL), m * nn),
+            check(std::cuda_half_gemm(ha, ta, hb, tb, c16, m, nn, k) && std::cuda_half_read(c16, cb.as_slice()[0..m * nn]),
                   "half gemm ran");
             bad = 0UL;
             i = 0UL;
@@ -461,14 +463,14 @@ static void check_half() {
         i = 0UL;
         while (i < m * k) { wb.push((unsigned short)0); gbits.push(std::half_encode(*v.at(i % n), d)); i = i + 1UL; }
         struct CudaHalfBuf hg = CudaHalfBuf::alloc(m * k, d);
-        check(std::cuda_half_write(hg, gbits.at(0UL), m * k), "half write");
-        check(std::cuda_half_read(ha, wb.at(0UL), m * k), "half read w");
+        check(std::cuda_half_write(hg, gbits.as_slice()[0..m * k]), "half write");
+        check(std::cuda_half_read(ha, wb.as_slice()[0..m * k]), "half read w");
         float lr = (float)0.25;
         check(std::cuda_half_sgd(ha, hg, lr), "half sgd ran");
         struct Vec<unsigned short> wn = std::Vec::with_cap(m * k);
         i = 0UL;
         while (i < m * k) { wn.push((unsigned short)0); i = i + 1UL; }
-        check(std::cuda_half_read(ha, wn.at(0UL), m * k), "half read sgd");
+        check(std::cuda_half_read(ha, wn.as_slice()[0..m * k]), "half read sgd");
         bad = 0UL;
         i = 0UL;
         while (i < m * k) {
@@ -485,8 +487,8 @@ static void check_half() {
         unsigned long tn = 3000UL;
         struct Vec<float> y = seq(tn, 0.013f, -0.6f);
         struct Vec<float> tt = seq(tn, 0.009f, -0.2f);
-        struct CudaHalfBuf hy = CudaHalfBuf::upload(y.at(0UL), tn, d);
-        struct CudaHalfBuf ht = CudaHalfBuf::upload(tt.at(0UL), tn, d);
+        struct CudaHalfBuf hy = CudaHalfBuf::upload(y.as_slice()[0..tn], d);
+        struct CudaHalfBuf ht = CudaHalfBuf::upload(tt.as_slice()[0..tn], d);
         struct CudaHalfBuf hd = CudaHalfBuf::alloc(tn, d);
         struct CudaHalfBuf hr = CudaHalfBuf::alloc(tn, d);
         struct CudaBuf loss = CudaBuf::alloc(1UL);
@@ -495,9 +497,9 @@ static void check_half() {
         struct Vec<unsigned short> ob = std::Vec::with_cap(tn);
         i = 0UL;
         while (i < tn) { yb.push((unsigned short)0); tb_.push((unsigned short)0); ob.push((unsigned short)0); i = i + 1UL; }
-        std::cuda_half_read(hy, yb.at(0UL), tn);
-        std::cuda_half_read(ht, tb_.at(0UL), tn);
-        check(std::cuda_half_mse_grad(hy, ht, hd, loss) && std::cuda_half_read(hd, ob.at(0UL), tn), "half mse_grad ran");
+        std::cuda_half_read(hy, yb.as_slice()[0..tn]);
+        std::cuda_half_read(ht, tb_.as_slice()[0..tn]);
+        check(std::cuda_half_mse_grad(hy, ht, hd, loss) && std::cuda_half_read(hd, ob.as_slice()[0..tn]), "half mse_grad ran");
         double lsum = 0.0;
         bad = 0UL;
         i = 0UL;
@@ -512,7 +514,7 @@ static void check_half() {
         if (lerr < 0.0) lerr = -lerr;
         check(bad == 0UL && lerr < 1e-5, bf ? "bf16 mse_grad values" : "fp16 mse_grad values");
         lv.free();
-        check(std::cuda_half_relu(hy, hr) && std::cuda_half_read(hr, ob.at(0UL), tn), "half relu ran");
+        check(std::cuda_half_relu(hy, hr) && std::cuda_half_read(hr, ob.as_slice()[0..tn]), "half relu ran");
         bad = 0UL;
         i = 0UL;
         while (i < tn) {
@@ -521,7 +523,7 @@ static void check_half() {
             i = i + 1UL;
         }
         check(bad == 0UL, bf ? "bf16 relu values" : "fp16 relu values");
-        check(std::cuda_half_relu_grad(hy, ht, hr) && std::cuda_half_read(hr, ob.at(0UL), tn), "half relu_grad ran");
+        check(std::cuda_half_relu_grad(hy, ht, hr) && std::cuda_half_read(hr, ob.as_slice()[0..tn]), "half relu_grad ran");
         bad = 0UL;
         i = 0UL;
         while (i < tn) {
@@ -535,8 +537,8 @@ static void check_half() {
         struct Vec<unsigned short> cr = std::Vec::with_cap(m * nn);
         i = 0UL;
         while (i < m * nn) { cr.push((unsigned short)0); i = i + 1UL; }
-        check(std::cuda_half_gemm(ha, 0, hb, 0, c16, m, nn, k) && std::cuda_half_read(c16, cb.at(0UL), m * nn) &&
-              std::cuda_half_gemm_relu(ha, 0, hb, 0, c16r, m, nn, k) && std::cuda_half_read(c16r, cr.at(0UL), m * nn),
+        check(std::cuda_half_gemm(ha, 0, hb, 0, c16, m, nn, k) && std::cuda_half_read(c16, cb.as_slice()[0..m * nn]) &&
+              std::cuda_half_gemm_relu(ha, 0, hb, 0, c16r, m, nn, k) && std::cuda_half_read(c16r, cr.as_slice()[0..m * nn]),
               "half gemm_relu ran");
         bad = 0UL;
         i = 0UL;
@@ -551,23 +553,23 @@ static void check_half() {
         }
         check(bad == 0UL, bf ? "bf16 gemm_relu values" : "fp16 gemm_relu values");
         // sgd2 = two sgd calls, bit for bit
-        struct CudaHalfBuf w1 = CudaHalfBuf::upload(y.at(0UL), tn, d);
-        struct CudaHalfBuf w2 = CudaHalfBuf::upload(tt.at(0UL), 1000UL, d);
-        struct CudaHalfBuf w1b = CudaHalfBuf::upload(y.at(0UL), tn, d);
-        struct CudaHalfBuf w2b = CudaHalfBuf::upload(tt.at(0UL), 1000UL, d);
-        struct CudaHalfBuf g2 = CudaHalfBuf::upload(y.at(0UL), 1000UL, d);
+        struct CudaHalfBuf w1 = CudaHalfBuf::upload(y.as_slice()[0..tn], d);
+        struct CudaHalfBuf w2 = CudaHalfBuf::upload(tt.as_slice()[0..1000UL], d);
+        struct CudaHalfBuf w1b = CudaHalfBuf::upload(y.as_slice()[0..tn], d);
+        struct CudaHalfBuf w2b = CudaHalfBuf::upload(tt.as_slice()[0..1000UL], d);
+        struct CudaHalfBuf g2 = CudaHalfBuf::upload(y.as_slice()[0..1000UL], d);
         check(std::cuda_half_sgd2(w1, ht, w2, g2, 0.125f) && std::cuda_half_sgd(w1b, ht, 0.125f) &&
               std::cuda_half_sgd(w2b, g2, 0.125f), "half sgd2 ran");
         struct Vec<unsigned short> o2 = std::Vec::with_cap(tn);
         i = 0UL;
         while (i < tn) { o2.push((unsigned short)0); i = i + 1UL; }
-        std::cuda_half_read(w1, ob.at(0UL), tn);
-        std::cuda_half_read(w1b, o2.at(0UL), tn);
+        std::cuda_half_read(w1, ob.as_slice()[0..tn]);
+        std::cuda_half_read(w1b, o2.as_slice()[0..tn]);
         bad = 0UL;
         i = 0UL;
         while (i < tn) { if (*ob.at(i) != *o2.at(i)) bad = bad + 1UL; i = i + 1UL; }
-        std::cuda_half_read(w2, ob.at(0UL), 1000UL);
-        std::cuda_half_read(w2b, o2.at(0UL), 1000UL);
+        std::cuda_half_read(w2, ob.as_slice()[0..1000UL]);
+        std::cuda_half_read(w2b, o2.as_slice()[0..1000UL]);
         i = 0UL;
         while (i < 1000UL) { if (*ob.at(i) != *o2.at(i)) bad = bad + 1UL; i = i + 1UL; }
         check(bad == 0UL, bf ? "bf16 sgd2 matches sgd" : "fp16 sgd2 matches sgd");
@@ -614,15 +616,15 @@ static void check_decode_ops() {
             unsigned long off = ki % 4 == 3 ? 1UL : 0UL;
             struct Vec<float> w = seq(n * k, 0.0013f, -0.9f);
             struct Vec<float> x = seq(k, 0.017f, -0.7f);
-            struct CudaHalfBuf dw = CudaHalfBuf::upload(w.at(0UL), n * k + off, dts[di]);
+            struct CudaHalfBuf dw = CudaHalfBuf::upload(w.as_slice()[0..n * k + off], dts[di]);
             struct Vec<unsigned short> bits = std::Vec::with_cap(n * k + off);
             unsigned long z = 0UL;
             while (z < n * k + off) { bits.push((unsigned short)0); z = z + 1UL; }
-            std::cuda_half_read(dw, bits.at(0UL), n * k + off);   // the rounded weights the GPU uses
+            std::cuda_half_read(dw, bits.as_slice()[0..n * k + off]);   // the rounded weights the GPU uses
             struct CudaHalfBuf view = dw;
             view.dev = dw.dev + 2UL * off;
             view.len = n * k;
-            struct CudaBuf dx = CudaBuf::upload(x.at(0UL), k);
+            struct CudaBuf dx = CudaBuf::upload(x.as_slice()[0..k]);
             struct CudaBuf dy = CudaBuf::alloc(n);
             int ok = std::cuda_half_gemv(view, dx, dy, n, k);
             struct Vec<float> got = download(dy);
@@ -657,8 +659,8 @@ static void check_decode_ops() {
     unsigned long n = 1536UL;
     struct Vec<float> x = seq(rows * n, 0.011f, -0.8f);
     struct Vec<float> w = seq(n, 0.002f, 0.5f);
-    struct CudaBuf dx = CudaBuf::upload(x.at(0UL), rows * n);
-    struct CudaBuf dw = CudaBuf::upload(w.at(0UL), n);
+    struct CudaBuf dx = CudaBuf::upload(x.as_slice()[0..rows * n]);
+    struct CudaBuf dw = CudaBuf::upload(w.as_slice()[0..n]);
     struct CudaBuf dy = CudaBuf::alloc(rows * n);
     int ok1 = std::cuda_rmsnorm(dx, dw, dy, rows, n, (float)1e-6);
     struct Vec<float> y1 = download(dy);
@@ -688,7 +690,7 @@ static void check_decode_ops() {
     check(ok2 && e2 < (float)1e-5, "rmsnorm without weight, in place");
     // gelu (tanh approximation)
     struct Vec<float> gx = seq(1000UL, 0.01f, -5.0f);
-    struct CudaBuf dg = CudaBuf::upload(gx.at(0UL), 1000UL);
+    struct CudaBuf dg = CudaBuf::upload(gx.as_slice()[0..1000UL]);
     struct CudaBuf dgo = CudaBuf::alloc(1000UL);
     int ok3 = std::cuda_gelu(dg, dgo);
     struct Vec<float> go = download(dgo);
@@ -720,7 +722,7 @@ static void check_transfers() {
         unsigned long n;
         unsafe { n = sizes[si]; }
         struct Vec<float> h = seq(n, 0.001f, -3.0f);
-        struct CudaBuf d = CudaBuf::upload(h.at(0UL), n);
+        struct CudaBuf d = CudaBuf::upload(h.as_slice()[0..n]);
         struct Vec<float> back = download(d);
         check(maxdiff(&h, &back) == 0.0f, "large upload/read round trip");
         back.free();
@@ -728,7 +730,7 @@ static void check_transfers() {
         struct CudaBuf out = CudaBuf::alloc(n);
         std::cuda_scale(d, 2.0f, out);
         struct Vec<float> h2 = seq(n, 0.002f, 1.0f);
-        check(std::cuda_write(d, h2.at(0UL), n), "large write ran");
+        check(std::cuda_write(d, h2.as_slice()[0..n]), "large write ran");
         back = download(out);
         int ok = 1;
         unsigned long i = 0UL;
@@ -808,7 +810,7 @@ static void check_cufft() {
     struct Vec<float> hf = std::Vec::with_cap(2UL * fb * n);
     unsigned long i = 0UL;
     unsafe { while (i < fb * n) { hf.push((float)fx[i].re); hf.push((float)fx[i].im); i = i + 1UL; } }
-    struct CudaBuf din = CudaBuf::upload(hf.at(0UL), 2UL * fb * n);
+    struct CudaBuf din = CudaBuf::upload(hf.as_slice()[0..2UL * fb * n]);
     struct CudaBuf dfreq = CudaBuf::alloc(2UL * fb * n);
     check(std::cuda_fft_c2c(din, dfreq, n, fb, 0), "cuda_fft_c2c ran");
     struct Vec<float> gf = download(dfreq);
@@ -831,7 +833,7 @@ static void check_cufft() {
     unsafe { while (i < n) { re.push((float)fx[i].re); red[i] = (double)(float)fx[i].re; i = i + 1UL; } }
     &heap Complex rref = cplx_new(n, 0UL);
     unsafe { std::fft_real(red[0..n], cs(rref, n)); }
-    struct CudaBuf dre = CudaBuf::upload(re.at(0UL), n);
+    struct CudaBuf dre = CudaBuf::upload(re.as_slice()[0..n]);
     struct CudaBuf dhalf = CudaBuf::alloc(2UL * (n / 2UL + 1UL));
     check(std::cuda_fft_r2c(dre, dhalf, n, 1UL), "cuda_fft_r2c ran");
     gf = download(dhalf);
@@ -863,7 +865,7 @@ static struct Vec<unsigned short> read_half(struct CudaHalfBuf h) {
     struct Vec<unsigned short> v = std::Vec::with_cap(h.len);
     unsigned long i = 0UL;
     while (i < h.len) { v.push((unsigned short)0); i = i + 1UL; }
-    std::cuda_half_read(h, v.at(0UL), h.len);
+    std::cuda_half_read(h, v.as_slice()[0..h.len]);
     return v;
 }
 
@@ -884,10 +886,10 @@ static void check_mixed_precision() {
         int to = d == CUDA_FP16 ? CUDA_BF16 : CUDA_FP16;
         struct CudaHalfBuf hs = CudaHalfBuf::alloc(n, d);
         struct CudaHalfBuf hd = CudaHalfBuf::alloc(n, to);
-        check(std::cuda_half_write(hs, pat.at(0UL), n) && std::cuda_half_convert(hs, hd), "half convert ran");
+        check(std::cuda_half_write(hs, pat.as_slice()[0..n]) && std::cuda_half_convert(hs, hd), "half convert ran");
         struct Vec<unsigned short> got = read_half(hd);
-        if (d == CUDA_FP16) std::fp16_to_bf16_bulk(pat.at(0UL), cpu.at(0UL), n);
-        else std::bf16_to_fp16_bulk(pat.at(0UL), cpu.at(0UL), n);
+        if (d == CUDA_FP16) std::fp16_to_bf16_bulk(pat.as_slice()[0..n], cpu.as_slice()[0..n]);
+        else std::bf16_to_fp16_bulk(pat.as_slice()[0..n], cpu.as_slice()[0..n]);
         unsigned long bad = 0UL;
         i = 0UL;
         while (i < n) {
@@ -910,7 +912,7 @@ static void check_mixed_precision() {
     unsigned long b = 0UL;
     while (b < 40UL) {
         unsigned long len = 1UL + (b * 977UL) % 2000UL;
-        f32s.push(CudaBuf::upload(host.at(0UL), len));
+        f32s.push(CudaBuf::upload(host.as_slice()[0..len]));
         h16s.push(CudaHalfBuf::alloc(len, CUDA_BF16));
         backs.push(CudaBuf::alloc(len));
         b = b + 1UL;
@@ -946,8 +948,8 @@ static void check_mixed_precision() {
     struct Vec<float> scaled = std::Vec::with_cap(3000UL);
     i = 0UL;
     while (i < 3000UL) { scaled.push(*gv.at(i) * (float)512.0); i = i + 1UL; }
-    struct CudaHalfBuf g16a = CudaHalfBuf::upload(scaled.at(0UL), 3000UL, CUDA_FP16);
-    struct CudaHalfBuf g16b = CudaHalfBuf::upload(scaled.at(0UL), 1000UL, CUDA_FP16);
+    struct CudaHalfBuf g16a = CudaHalfBuf::upload(scaled.as_slice()[0..3000UL], CUDA_FP16);
+    struct CudaHalfBuf g16b = CudaHalfBuf::upload(scaled.as_slice()[0..1000UL], CUDA_FP16);
     struct CudaBuf g32a = CudaBuf::alloc(3000UL);
     struct CudaBuf g32b = CudaBuf::alloc(1000UL);
     struct Vec<struct CudaHalfBuf> gs = std::Vec::new();
@@ -967,7 +969,7 @@ static void check_mixed_precision() {
     check(bad == 0UL && *fl.at(0UL) == (float)0.0, "unscaled values, no overflow");
     fl.free(); u.free();
     unsigned short inf = (unsigned short)0x7C00;
-    std::cuda_half_write(g16b, &inf, 1UL);
+    unsafe { std::cuda_half_write(g16b, ((const unsigned short*)(&inf))[0..1UL]); }
     check(std::cuda_half_unscale_many(&gs, &g32s, (float)1.0 / (float)512.0, flag), "unscale ran again");
     fl = download(flag);
     check(*fl.at(0UL) == (float)1.0, "overflow flagged");
@@ -988,8 +990,8 @@ static void check_mixed_precision() {
     struct Vec<float> g0 = seq(m, (float)0.011, -(float)0.4);
     int variant = 0;
     while (variant < 3) {
-        struct CudaBuf dw = CudaBuf::upload(w0.at(0UL), m);
-        struct CudaBuf dg = CudaBuf::upload(g0.at(0UL), m);
+        struct CudaBuf dw = CudaBuf::upload(w0.as_slice()[0..m]);
+        struct CudaBuf dg = CudaBuf::upload(g0.as_slice()[0..m]);
         struct CudaBuf dm = CudaBuf::alloc(m);
         struct CudaBuf dvv = CudaBuf::alloc(m);
         struct CudaHalfBuf wh = CudaHalfBuf::alloc(m, CUDA_BF16);
@@ -1049,7 +1051,7 @@ static void check_mixed_precision() {
         check(bad == 0UL, "master weights' bf16 copy");
         // a flagged step changes nothing
         float one1 = (float)1.0;
-        std::cuda_write(flag, &one1, 1UL);
+        unsafe { std::cuda_write(flag, ((const float*)(&one1))[0..1UL]); }
         if (variant < 2) std::cuda_mp_adam(dw, dm, dvv, dg, wh, lr, b1, b2, eps, wd, variant, 4UL, flag);
         else std::cuda_mp_sgd(dw, dg, dm, wh, lr, mu, wd, flag);
         struct Vec<float> gw2 = download(dw);
@@ -1081,9 +1083,9 @@ static void check_mixed_precision() {
             unsigned long n = 1UL + (k * 397UL) % 5003UL;
             struct Vec<float> wv = seq(n + 1UL, (float)0.003, -(float)0.2);
             struct Vec<float> gv = seq(n + 1UL, (float)0.017, -(float)0.5);
-            struct CudaBuf w1 = CudaBuf::upload(wv.at(0UL), n + 1UL);
-            struct CudaBuf w2 = CudaBuf::upload(wv.at(0UL), n + 1UL);
-            struct CudaBuf gg = CudaBuf::upload(gv.at(0UL), n + 1UL);
+            struct CudaBuf w1 = CudaBuf::upload(wv.as_slice()[0..n + 1UL]);
+            struct CudaBuf w2 = CudaBuf::upload(wv.as_slice()[0..n + 1UL]);
+            struct CudaBuf gg = CudaBuf::upload(gv.as_slice()[0..n + 1UL]);
             keep.push(w1); keep.push(w2); keep.push(gg);
             struct CudaBuf vw1 = w1; struct CudaBuf vw2 = w2; struct CudaBuf vg = gg;
             if (k == 7UL) { vw1.dev = vw1.dev + 4UL; vw2.dev = vw2.dev + 4UL; vg.dev = vg.dev + 4UL; }   // unaligned
@@ -1115,7 +1117,7 @@ static void check_mixed_precision() {
         }
         // a flagged step changes nothing
         float one2 = (float)1.0;
-        std::cuda_write(flag, &one2, 1UL);
+        unsafe { std::cuda_write(flag, ((const float*)(&one2))[0..1UL]); }
         okAll = okAll && std::cuda_mp_adam_many(&bw, &bm, &bv, &ag, &bh, (float)0.01, (float)0.9, (float)0.999,
                                                 (float)1.0e-8, (float)0.05, 1, 3UL, flag);
         unsigned long diff = 0UL;
@@ -1162,8 +1164,8 @@ static void check_mixed_precision() {
     struct Vec<float> xb = seq(e, -(float)0.07, (float)3.0);
     d = CUDA_FP16;
     while (d <= CUDA_BF16) {
-        struct CudaHalfBuf ha = CudaHalfBuf::upload(xa.at(0UL), e, d);
-        struct CudaHalfBuf hb = CudaHalfBuf::upload(xb.at(0UL), e, d);
+        struct CudaHalfBuf ha = CudaHalfBuf::upload(xa.as_slice()[0..e], d);
+        struct CudaHalfBuf hb = CudaHalfBuf::upload(xb.as_slice()[0..e], d);
         struct CudaHalfBuf ho = CudaHalfBuf::alloc(e, d);
         struct Vec<unsigned short> ab = read_half(ha);
         struct Vec<unsigned short> bb = read_half(hb);
@@ -1191,7 +1193,7 @@ static void check_mixed_precision() {
         }
         // NCHW bias + relu: 3 images x 7 channels x 5x5 (175 values per image, e >= 525)
         struct Vec<float> bias = seq(7UL, (float)0.5, -(float)1.5);
-        struct CudaHalfBuf hbias = CudaHalfBuf::upload(bias.at(0UL), 7UL, d);
+        struct CudaHalfBuf hbias = CudaHalfBuf::upload(bias.as_slice()[0..7UL], d);
         struct Vec<unsigned short> biasb = read_half(hbias);
         check(std::cuda_half_bias(ha, hbias, 3UL, 7UL, 25UL, 1), "half bias ran");
         struct Vec<unsigned short> yb = read_half(ha);
@@ -1249,7 +1251,7 @@ static struct Vec<float> half_download_(struct CudaHalfBuf h, unsigned long off,
     struct Vec<unsigned short> bits = std::Vec::with_cap(h.len);
     unsigned long i = 0UL;
     while (i < h.len) { bits.push((unsigned short)0); i = i + 1UL; }
-    std::cuda_half_read(h, bits.at(0UL), h.len);
+    std::cuda_half_read(h, bits.as_slice()[0..h.len]);
     struct Vec<float> v = std::Vec::with_cap(n);
     i = 0UL;
     while (i < n) { v.push(std::half_decode(*bits.at(off + i), h.dtype)); i = i + 1UL; }
@@ -1291,7 +1293,7 @@ static void check_cudnn_half() {
                 while (i < inN) { both.push(xb.data[i]); i = i + 1UL; }
             }
             struct CudaHalfConv2D hl = CudaHalfConv2D::upload(&l, d);
-            struct CudaHalfBuf hx = CudaHalfBuf::upload(both.at(0UL), 2UL * inN, d);
+            struct CudaHalfBuf hx = CudaHalfBuf::upload(both.as_slice()[0..2UL * inN], d);
             struct CudaHalfBuf hy = CudaHalfBuf::alloc(2UL * outN, d);
             check(hl.weight.dev != 0UL && hx.dev != 0UL && hy.dev != 0UL, "half conv upload");
             check(hl.forward(hx, hy, 2UL, 21UL, 15UL), d == CUDA_FP16 ? "fp16 conv ran" : "bf16 conv ran");
@@ -1349,8 +1351,8 @@ int main() {
     unsigned long n = 10007UL;   // not a multiple of the block size
     struct Vec<float> a = seq(n, 0.01f, 0.1f);
     struct Vec<float> b = seq(n, 0.02f, 0.5f);
-    struct CudaBuf da = CudaBuf::upload(a.at(0UL), n);
-    struct CudaBuf db = CudaBuf::upload(b.at(0UL), n);
+    struct CudaBuf da = CudaBuf::upload(a.as_slice()[0..n]);
+    struct CudaBuf db = CudaBuf::upload(b.as_slice()[0..n]);
     struct CudaBuf dout = CudaBuf::alloc(n);
     check(da.dev != 0UL && db.dev != 0UL && dout.dev != 0UL, "upload/alloc");
 
@@ -1434,8 +1436,8 @@ int main() {
     unsigned long k = 129UL;
     struct Vec<float> ga = seq(m * k, 0.003f, -0.1f);
     struct Vec<float> gb = seq(k * nn, 0.002f, -0.07f);
-    struct CudaBuf dga = CudaBuf::upload(ga.at(0UL), m * k);
-    struct CudaBuf dgb = CudaBuf::upload(gb.at(0UL), k * nn);
+    struct CudaBuf dga = CudaBuf::upload(ga.as_slice()[0..m * k]);
+    struct CudaBuf dgb = CudaBuf::upload(gb.as_slice()[0..k * nn]);
     struct CudaBuf dgc = CudaBuf::alloc(m * nn);
     int t = 0;
     while (t < 4) {
@@ -1501,8 +1503,8 @@ int main() {
     while (i < n) { float z = *a.at(i) - *b.at(i); *want.at(i) = 0.0f; if (z > 0.0f) *want.at(i) = *a.at(i); i = i + 1UL; }
     check(maxdiff(&got, &want) == 0.0f, "relu_grad values");
     got.free();
-    struct CudaBuf w1 = CudaBuf::upload(a.at(0UL), n);
-    struct CudaBuf w2 = CudaBuf::upload(ga.at(0UL), m * k);
+    struct CudaBuf w1 = CudaBuf::upload(a.as_slice()[0..n]);
+    struct CudaBuf w2 = CudaBuf::upload(ga.as_slice()[0..m * k]);
     check(std::cuda_sgd2(w1, db, w2, dga, 0.25f), "sgd2 enqueued");
     got = download(w1);
     i = 0UL;
@@ -1526,13 +1528,13 @@ int main() {
     i = 0UL;
     while (i < n) { hv.push(0.0f); i = i + 1UL; }
     unsafe {
-        check(std::cuda_add_f32(a.at(0UL), b.at(0UL), hv.at(0UL), n), "add_f32 ran");
+        check(std::cuda_add_f32(a.as_slice()[0..n], b.as_slice()[0..n], hv.as_slice()[0..n]), "add_f32 ran");
     }
     i = 0UL;
     while (i < n) { *want.at(i) = *a.at(i) + *b.at(i); i = i + 1UL; }
     check(maxdiff(&hv, &want) < 1e-5f, "add_f32 values");
     float hsum = 0.0f;
-    unsafe { check(std::cuda_sum_f32(a.at(0UL), &hsum, n), "sum_f32 ran"); }
+    unsafe { check(std::cuda_sum_f32(a.as_slice()[0..n], ((float*)&hsum)[0..1]), "sum_f32 ran"); }
     rel = ((double)hsum - cpuSum) / cpuSum;
     if (rel < 0.0) rel = -rel;
     check(rel < 1e-5, "sum_f32 value");

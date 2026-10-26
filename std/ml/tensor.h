@@ -169,8 +169,9 @@ struct DenseTensor {
     static &DenseTensor<E> new_2d(unsigned long rows, unsigned long cols, int requiresGrad);
     // Copies float32 'values' (length must equal the tensor's size) into a
     // freshly allocated tensor of the given shape, rounded to E.
-    static &DenseTensor<E> from_1d(const &float values, unsigned long n, int requiresGrad);
-    static &DenseTensor<E> from_2d(const &float values, unsigned long rows, unsigned long cols, int requiresGrad);
+    static &DenseTensor<E> from_1d([]const float values, int requiresGrad);
+    // values must hold rows * cols floats (a shorter slice panics).
+    static &DenseTensor<E> from_2d([]const float values, unsigned long rows, unsigned long cols, int requiresGrad);
     &DenseTensor<E> zeros_like() const;
     void    fill(float v);   // in place
     &DenseTensor<E> scale(float k) const;   // a * scalar k
@@ -915,7 +916,11 @@ static void __dt_store(&DenseTensor<E> t, const &float values, unsigned long n) 
 }
 
 generic<E>
-&DenseTensor<E> DenseTensor::from_1d(const &float values, unsigned long n, int requiresGrad) {
+&DenseTensor<E> DenseTensor::from_1d([]const float values_s, int requiresGrad) {
+    unsigned long n = values_s.len;
+    float values_d_[1];
+    const &float values = &values_d_[0];
+    if (n > 0UL) { unsafe { values = (const &float)values_s.ptr; } }
     unsigned long shape[1];
     unsafe { shape[0] = n; }
     &DenseTensor<E> t = __dt_alloc(shape, 1UL, requiresGrad);
@@ -924,7 +929,11 @@ generic<E>
 }
 
 generic<E>
-&DenseTensor<E> DenseTensor::from_2d(const &float values, unsigned long rows, unsigned long cols, int requiresGrad) {
+&DenseTensor<E> DenseTensor::from_2d([]const float values_s, unsigned long rows, unsigned long cols, int requiresGrad) {
+    if (values_s.len < rows * cols) { panic_at("DenseTensor::from_2d: fewer values than rows * cols", "std/ml/tensor.h", __LINE__); }
+    float values_d_[1];
+    const &float values = &values_d_[0];
+    if (values_s.len > 0UL) { unsafe { values = (const &float)values_s.ptr; } }
     unsigned long shape[2];
     unsafe { shape[0] = rows; shape[1] = cols; }
     &DenseTensor<E> t = __dt_alloc(shape, 2UL, requiresGrad);
