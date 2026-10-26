@@ -9,15 +9,16 @@
 namespace std {
 
 struct RingBuffer {
-    &static unsigned char buf;   // backing store (set by RingBuffer::over)
+    []unsigned char   buf;    // backing store (set by RingBuffer::over)
     unsigned long     cap;    // capacity in bytes (must be power of two)
     unsigned long     mask;   // cap - 1
     volatile unsigned long head;   // write position (producer)
     volatile unsigned long tail;   // read position (consumer)
 
-    // Initialise over an existing backing store of `cap` bytes; `cap` is
-    // rounded down to a power of two.
-    static struct RingBuffer over(&static unsigned char buf, unsigned long cap);
+    // Initialise over an existing backing store, which must outlive the ring
+    // (a static array, typically); its length is rounded down to a power of
+    // two for the capacity.
+    static struct RingBuffer over([]unsigned char buf);
 
     // Return number of bytes currently readable.
     unsigned long length() const;
@@ -31,14 +32,14 @@ struct RingBuffer {
     // Return 1 if full.
     int  is_full() const;
 
-    // Write up to `len` bytes from `data`.  Returns bytes actually written.
-    unsigned long write(const &unsigned char data, unsigned long len);
+    // Write as much of `data` as fits.  Returns bytes actually written.
+    unsigned long write([]const unsigned char data);
 
-    // Read up to `len` bytes into `out`.  Returns bytes actually read.
-    unsigned long read(&unsigned char out, unsigned long len);
+    // Read up to out.len bytes into `out`.  Returns bytes actually read.
+    unsigned long read([]unsigned char out);
 
-    // Peek at `len` bytes without consuming them.  Returns bytes copied.
-    unsigned long peek(&unsigned char out, unsigned long len) const;
+    // Like read, without consuming.  Returns bytes copied.
+    unsigned long peek([]unsigned char out) const;
 
     // One byte at a time (the Fifo protocol, std/collections/traits.h):
     // enqueue returns 1, or 0 if full; dequeue returns null if empty.

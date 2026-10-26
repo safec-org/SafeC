@@ -23,7 +23,7 @@ static int __wt_multiline(const &Widget w) { return w.kind == WIDGET_TEXTAREA ? 
 static unsigned long __wt_next(const &Widget w, unsigned long i) {
     if (i >= w.text.len) { return w.text.len; }
     unsigned long p = i;
-    unsafe { gui_utf8_next((const char*)w.text.data, w.text.len, &p); }
+    unsafe { gui_utf8_next_n_((const char*)w.text.data, w.text.len, &p); }
     return p;
 }
 
@@ -40,7 +40,7 @@ static int __wt_is_word(unsigned int cp) {
 static unsigned int __wt_cp_at(const &Widget w, unsigned long i) {
     if (i >= w.text.len) { return 0U; }
     unsigned long p = i;
-    unsafe { return gui_utf8_next((const char*)w.text.data, w.text.len, &p); }
+    unsafe { return gui_utf8_next_n_((const char*)w.text.data, w.text.len, &p); }
 }
 
 static unsigned long __wt_word_left(const &Widget w, unsigned long i) {
@@ -85,7 +85,7 @@ void __w_edit_insert(&Widget w, const &char s, unsigned long n, int multiline) {
             else { clean.push_char(ch); }
             i = i + 1UL;
         }
-        if (w.caret >= w.text.len) { w.text.push_n((const char*)clean.data, clean.len); }
+        if (w.caret >= w.text.len) { w.text.push_n_((const char*)clean.data, clean.len); }
         else { w.text.insert(w.caret, (const char*)clean.data); }
     }
     w.caret = w.caret + clean.len;
@@ -97,7 +97,7 @@ void __w_edit_insert(&Widget w, const &char s, unsigned long n, int multiline) {
 static void __wt_display(const &Widget w, &String out) {
     out.clear();
     if (!w.password) {
-        unsafe { out.push_n((const char*)w.text.data, w.text.len); }
+        unsafe { out.push_n_((const char*)w.text.data, w.text.len); }
         return;
     }
     unsigned long i = 0UL;
@@ -136,7 +136,7 @@ static void __wt_layout(&GuiUi ui, &Widget w, &GuiTextLayout l, &String disp) {
     __wt_box(ui, w, &cx, &cy, &cw, &ch);
     __wt_display(w, disp);
     float maxW = (__wt_multiline(w) && w.wrap) ? (float)cw : 0.0f;
-    unsafe { l.build(__w_face(ui, w), __w_font_size(ui, w), (const char*)disp.data, disp.len, maxW, GUI_TEXT_LEFT); }
+    unsafe { l.build_n_(__w_face(ui, w), __w_font_size(ui, w), (const char*)disp.data, disp.len, maxW, GUI_TEXT_LEFT); }
 }
 
 // Keeps the caret in view (horizontal scroll for single-line fields,

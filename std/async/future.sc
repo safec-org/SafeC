@@ -16,13 +16,13 @@ int async_fetch_and_(&int p, int bits) { unsafe { return atomic_fetch_and((_Atom
 
 static void waker_noop_fn_(?&int data, unsigned long tag) { }
 
-struct Waker Waker::raw_(void* wake, void* clone, void* drop, void* data, unsigned long tag) {
+struct Waker Waker::empty_() {
     struct Waker w;
-    w.wake_  = wake;
-    w.clone_ = clone;
-    w.drop_  = drop;
-    w.data_  = data;
-    w.tag_   = tag;
+    w.wake_  = null;
+    w.clone_ = null;
+    w.drop_  = null;
+    w.data_  = null;
+    w.tag_   = 0UL;
     return w;
 }
 
@@ -31,10 +31,9 @@ struct Waker Waker::noop() {
 }
 
 void Waker::wake_by_ref() const {
-    unsafe {
-        if (self.wake_ == (void*)0) return;
-        fn void(void*, unsigned long) f = (fn void(void*, unsigned long))self.wake_;
-        f(self.data_, self.tag_);
+    match (self.wake_) {
+        case some(f): f(self.data_, self.tag_);
+        case null: { }
     }
 }
 
@@ -44,26 +43,23 @@ void Waker::wake() {
 }
 
 struct Waker Waker::clone() const {
-    unsafe {
-        if (self.clone_ != (void*)0) {
-            fn void(void*, unsigned long) f = (fn void(void*, unsigned long))self.clone_;
-            f(self.data_, self.tag_);
-        }
+    match (self.clone_) {
+        case some(f): f(self.data_, self.tag_);
+        case null: { }
     }
-    return Waker::raw_(self.wake_, self.clone_, self.drop_, self.data_, self.tag_);
+    struct Waker w = *self;
+    return w;
 }
 
 void Waker::drop() {
-    unsafe {
-        if (self.drop_ != (void*)0) {
-            fn void(void*, unsigned long) f = (fn void(void*, unsigned long))self.drop_;
-            f(self.data_, self.tag_);
-        }
-        // A dropped waker wakes nothing (and drops nothing) again.
-        self.wake_ = (void*)0;
-        self.drop_ = (void*)0;
-        self.clone_ = (void*)0;
+    match (self.drop_) {
+        case some(f): f(self.data_, self.tag_);
+        case null: { }
     }
+    // A dropped waker wakes nothing (and drops nothing) again.
+    self.wake_ = null;
+    self.drop_ = null;
+    self.clone_ = null;
 }
 
 int Waker::will_wake(const &Waker other) const {
@@ -75,7 +71,7 @@ int Waker::will_wake(const &Waker other) const {
 
 int Waker::is_noop() const {
     fn void(?&int, unsigned long) n = waker_noop_fn_;
-    unsafe { return (self.wake_ == (void*)n || self.wake_ == (void*)0) ? 1 : 0; }
+    unsafe { return (self.wake_ == (?fn void(?&Erased, unsigned long))n || self.wake_.is_null()) ? 1 : 0; }
 }
 
 // ── Context ────────────────────────────────────────────────────────────────
@@ -84,11 +80,9 @@ struct Context Context::from_waker(struct Waker w) {
     struct Context cx;
     cx.waker  = w;
     cx.timers = null;
-    unsafe {
-        cx.io_    = (void*)0;
-        cx.exec_  = (void*)0;
-        cx.spawn_ = (void*)0;
-    }
+    cx.io_    = null;
+    cx.exec_  = null;
+    cx.spawn_ = null;
     return cx;
 }
 
@@ -104,7 +98,7 @@ void Context::wake_by_ref() const {
 
 struct WakerSlot WakerSlot::new() {
     struct WakerSlot s;
-    s.w = Waker::raw_((void*)0, (void*)0, (void*)0, (void*)0, 0UL);
+    s.w = Waker::empty_();
     s.set = 0;
     return s;
 }
@@ -122,7 +116,7 @@ int WakerSlot::wake() {
     if (self.set == 0) return 0;
     self.set = 0;
     struct Waker w = self.w;
-    self.w = Waker::raw_((void*)0, (void*)0, (void*)0, (void*)0, 0UL);
+    self.w = Waker::empty_();
     w.wake();
     return 1;
 }
@@ -142,7 +136,7 @@ struct WaitList WaitList::new() {
     struct WaitList l;
     int i = 0;
     while (i < ASYNC_WAITERS) {
-        l.w[i] = Waker::raw_((void*)0, (void*)0, (void*)0, (void*)0, 0UL);
+        l.w[i] = Waker::empty_();
         l.serial[i] = 0;
         i = i + 1;
     }

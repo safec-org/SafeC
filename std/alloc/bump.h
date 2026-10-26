@@ -15,7 +15,7 @@ struct BumpAllocator {
     unsigned long cap;     // total buffer capacity in bytes
 
     // An arena over an existing heap buffer of `cap` bytes (not freed by destroy()).
-    static struct BumpAllocator over(&unsigned char buffer, unsigned long cap);
+    static struct BumpAllocator over([]unsigned char buffer);
 
     // A heap-backed arena of `cap` bytes (destroy() frees it).
     static struct BumpAllocator new(unsigned long cap);

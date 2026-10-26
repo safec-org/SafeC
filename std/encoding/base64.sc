@@ -18,7 +18,8 @@ static char base64_char_(int sextet) {
     return c;
 }
 
-struct String base64_encode(const &unsigned char data, unsigned long len) {
+struct String base64_encode([]const unsigned char data) {
+    unsigned long len = data.len;
     struct String out = String::new();
     unsigned long i = 0UL;
     while (i + 3UL <= len) {

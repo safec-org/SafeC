@@ -1,6 +1,7 @@
 // SafeC Standard Library — Timer Wheel Scheduler
 // Efficient O(1) timer management using a hashed timing wheel.
 #pragma once
+#include <std/erased.h>
 
 #define WHEEL_SLOTS   256    // power-of-two number of buckets
 #define WHEEL_TIMERS  64     // max timers (indices 0..WHEEL_TIMERS-1)
@@ -13,9 +14,10 @@ struct WheelTimer {
     // with unrelated context types at once, so each slot stores its
     // callback and context type-erased. They are only ever written by
     // TimerWheel::add/add_periodic below, which take a matching
-    // fn void(?&T) / ?&T pair, so the erased call is always well-typed.
-    void*         callback;  // fn void(?&T)
-    void*         ctx;       // ?&T
+    // fn void(?&T) / ?&T pair, so the erased call is always well-typed
+    // (see std/erased.h).
+    ?fn void(?&Erased) callback;  // the fn void(?&T); null when free
+    ?&Erased           ctx;       // the ?&T
     int           used;      // 1 if slot occupied, 0 if free
     int           periodic;  // 1 → auto-reschedule every `period` ticks
     unsigned long period;    // interval for periodic timers
@@ -42,8 +44,8 @@ struct TimerWheel {
     generic<T> int add_periodic(unsigned long period, fn void(?&T) cb, ?&T ctx);
 
     // Type-erased registration behind add/add_periodic.
-    int  add_raw_(unsigned long tick, void* callback, void* ctx);
-    int  add_periodic_raw_(unsigned long period, void* callback, void* ctx);
+    int  add_raw_(unsigned long tick, fn void(?&Erased) callback, ?&Erased ctx);
+    int  add_periodic_raw_(unsigned long period, fn void(?&Erased) callback, ?&Erased ctx);
 
     // Cancel a timer by its ID.  Silently ignores invalid IDs.
     void cancel(int id);
@@ -59,12 +61,12 @@ struct TimerWheel {
 
 generic<T>
 int TimerWheel::add(unsigned long tick, fn void(?&T) cb, ?&T ctx) {
-    unsafe { return self.add_raw_(tick, (void*)cb, (void*)ctx); }
+    unsafe { return self.add_raw_(tick, (fn void(?&Erased))cb, (?&Erased)ctx); }
 }
 
 generic<T>
 int TimerWheel::add_periodic(unsigned long period, fn void(?&T) cb, ?&T ctx) {
-    unsafe { return self.add_periodic_raw_(period, (void*)cb, (void*)ctx); }
+    unsafe { return self.add_periodic_raw_(period, (fn void(?&Erased))cb, (?&Erased)ctx); }
 }
 
 } // namespace std

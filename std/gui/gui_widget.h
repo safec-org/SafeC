@@ -1,4 +1,5 @@
 #pragma once
+#include <std/erased.h>
 // SafeC Standard Library — GUI: the retained-mode widget toolkit.
 //
 // A tree of Widgets — containers (vertical/horizontal boxes, grids,
@@ -264,38 +265,22 @@ struct Widget {
     int pressed;
     int focused;
 
-    // Callback/hook slots are stored as plain 'void*' — not the typed
-    // WidgetCallback/WidgetDrawFn/... aliases below — purely because those
-    // aliases reference '&Widget' themselves and safec requires a
-    // struct to be fully defined before it's used as a typedef'd function
-    // pointer's parameter type, so the typedefs can only be declared right
-    // after this struct closes, not before. (Method declarations in the
-    // body can name them; a field's type can't.) Every setter/getter still
-    // takes/returns the properly typed alias — the void* storage is an
-    // implementation detail, cast at the few call sites inside gui_widget*.sc.
-    void* onClick;      // WidgetCallback
-    void* onClickData;
-    void* onChange;     // WidgetCallback
-    void* onChangeData;
+    // Callback/hook slots: typed functions over an erased context (see
+    // std/erased.h). The context's type is each caller's own — 'children'
+    // below holds buttons, sliders, labels, ... with unrelated userData
+    // types in one tree, which one generic Widget<T> couldn't — so the
+    // generic setters (on_click<T> & co.) store fn(?&T) / ?&T as
+    // fn(?&Erased) / ?&Erased, and every call passes the pair back together.
+    ?fn void(&Widget, ?&Erased) onClick;
+    ?&Erased onClickData;
+    ?fn void(&Widget, ?&Erased) onChange;
+    ?&Erased onChangeData;
 
-    void* customDraw;   // WidgetDrawFn
-    void* customLayout; // WidgetLayoutFn
-    void* customEvent;  // WidgetCustomEventFn
-    void* userData;
+    ?fn void(&GuiWindow, &Widget) customDraw;
+    ?fn void(&Widget, int, int, int, int) customLayout;
+    ?fn int(&Widget, &GuiEvent) customEvent;
+    ?&Erased userData;
 
-    // onClickData/onChangeData/userData stay 'void*' rather than a typed
-    // '?&T' (see README's "Outliving references" section, and
-    // std/dma.h's 'generic<T> struct DmaChannel' for the pattern where a
-    // concrete T *does* fit) deliberately: 'children' below is one
-    // Vec<struct Widget*> holding buttons, sliders, labels, etc.
-    // together, each with its own unrelated userData type. Genericizing
-    // Widget over T would make 'Widget<ButtonCtx>' and 'Widget<SliderCtx>'
-    // distinct, incompatible types — unable to share one tree. Same
-    // shape as std/dsp/timer_wheel.h's WheelTimer and std/fs/block.h's
-    // BlockDevice (implemented by both the ext and FAT drivers): a
-    // single, multi-tenant collection meant to hold many unrelated
-    // context types at once, which 'void*' erasure supports and a
-    // generic struct's one-type-per-instantiation model does not.
     struct Vec<&Widget> children;
     ?&Widget parent;        // empty (null) for the root widget
 
@@ -341,12 +326,16 @@ struct Widget {
     float dragX; float dragY;
     double dragValue;
     int hotIndex;                // hovered item / row / tab / menu entry (internal)
-    void* onActivate; void* onActivateData;   // WidgetCallback
-    void* onDraw; void* onDrawData;           // WidgetCanvasFn
+    ?fn void(&Widget, ?&Erased) onActivate; ?&Erased onActivateData;
+    ?fn void(&Widget, &GuiCanvas, ?&Erased) onDraw; ?&Erased onDrawData;
+    // dialogs: run when it closes (internal: message boxes), and a message
+    // box's own onClose(dialog, result, userData)
+    ?fn void(&Widget, int, ?&Erased) onClose_; ?&Erased onCloseData_;
+    ?fn void(&Widget, int, ?&Erased) mbUser_; ?&Erased mbUserData_;
     ?&Widget contextMenu;        // shown on right click
     ?&Widget popup;              // combo: its drop-down list; menu: its open submenu
     ?&Widget owner;              // popups/menus: the widget that opened it
-    void* uiPtr;                 // the GuiUi this tree belongs to (root and overlays)
+    ?&struct GuiUi uiPtr;        // the GuiUi this tree belongs to (root and overlays)
     int result;                  // dialogs: GUI_RESULT_* when closed
     int focusable;               // -1 = by kind, 0 / 1 = forced
     double clickTime;
@@ -404,7 +393,7 @@ struct Widget {
     // it, in logical units (scaled for the window).
     generic<T>
     static &Widget canvas(fn void(&Widget, &GuiCanvas, ?&T) draw, ?&T userData);
-    static &Widget canvas_raw_(void* draw, void* userData);
+    static &Widget canvas_raw_(fn void(&Widget, &GuiCanvas, ?&Erased) draw, ?&Erased userData);
 
     // A WIDGET_CUSTOM node drawn and laid out by your own functions (see
     // "Custom widgets" below); userData is the caller's type, stored erased.
@@ -416,7 +405,7 @@ struct Widget {
     static &Widget custom(fn void(&GuiWindow, &Widget) draw, fn void(&Widget, int, int, int, int) layout,
                           fn int(&Widget, &GuiEvent) eventFn, ?&T userData);
     static &Widget custom_raw_(fn void(&GuiWindow, &Widget) draw, fn void(&Widget, int, int, int, int) layout,
-                               fn int(&Widget, &GuiEvent) eventFn, void* userData);
+                               fn int(&Widget, &GuiEvent) eventFn, ?&Erased userData);
 
     // ── tree ─────────────────────────────────────────────────────────────
     void add_child(&Widget child);
@@ -535,10 +524,10 @@ struct Widget {
     generic<T> &Widget on_change(fn void(&Widget, ?&T) cb, ?&T userData);
     generic<T> &Widget on_activate(fn void(&Widget, ?&T) cb, ?&T userData);
     generic<T> &Widget on_draw(fn void(&Widget, &GuiCanvas, ?&T) cb, ?&T userData);
-    &Widget on_click_raw_(void* cb, void* userData);
-    &Widget on_change_raw_(void* cb, void* userData);
-    &Widget on_activate_raw_(void* cb, void* userData);
-    &Widget on_draw_raw_(void* cb, void* userData);
+    &Widget on_click_raw_(fn void(&Widget, ?&Erased) cb, ?&Erased userData);
+    &Widget on_change_raw_(fn void(&Widget, ?&Erased) cb, ?&Erased userData);
+    &Widget on_activate_raw_(fn void(&Widget, ?&Erased) cb, ?&Erased userData);
+    &Widget on_draw_raw_(fn void(&Widget, &GuiCanvas, ?&Erased) cb, ?&Erased userData);
 
     // ── per-frame pipeline (for driving a tree by hand) ──────────────────
 
@@ -579,9 +568,9 @@ struct Widget {
 };
 
 // onClick/onChange/onActivate(widget, userData).
-typedef fn void(&Widget, ?&void) WidgetCallback;
+typedef fn void(&Widget, ?&Erased) WidgetCallback;
 // A canvas widget's draw(widget, canvas, userData).
-typedef fn void(&Widget, &GuiCanvas, ?&void) WidgetCanvasFn;
+typedef fn void(&Widget, &GuiCanvas, ?&Erased) WidgetCanvasFn;
 // Custom draw(window, widget) — called instead of the built-in renderer
 // for a WIDGET_CUSTOM node; must draw within [widget->x, widget->x+widget->w) x
 // [widget->y, widget->y+widget->h) using GuiWindow's drawing methods (win.fill_rect(), win.draw_text(), ...).
@@ -672,7 +661,7 @@ generic<T>
 void gui_message_box(&GuiUi ui, const &char title, const &char text, int buttons,
                      fn void(&Widget, int, ?&T) onClose, ?&T userData);
 void gui_message_box_raw_(&GuiUi ui, const &char title, const &char text, int buttons,
-                          void* onClose, void* userData);
+                          ?fn void(&Widget, int, ?&Erased) onClose, ?&Erased userData);
 
 // Custom widgets: 'draw'/'layout' are required; 'eventFn' may be NULL (the
 // widget then just participates in hit-testing/hover/press/click like a
@@ -682,38 +671,40 @@ void gui_message_box_raw_(&GuiUi ui, const &char title, const &char text, int bu
 generic<T>
 &Widget Widget::custom(WidgetDrawFn draw, WidgetLayoutFn layout,
                        WidgetCustomEventFn eventFn, ?&T userData) {
-    unsafe { return Widget::custom_raw_(draw, layout, eventFn, (void*)userData); }
+    unsafe { return Widget::custom_raw_(draw, layout, eventFn, (?&Erased)userData); }
 }
 
 generic<T>
 &Widget Widget::canvas(fn void(&Widget, &GuiCanvas, ?&T) draw, ?&T userData) {
-    unsafe { return Widget::canvas_raw_((void*)draw, (void*)userData); }
+    unsafe { return Widget::canvas_raw_((fn void(&Widget, &GuiCanvas, ?&Erased))draw, (?&Erased)userData); }
 }
 
 generic<T>
 &Widget Widget::on_click(fn void(&Widget, ?&T) cb, ?&T userData) {
-    unsafe { return self.on_click_raw_((void*)cb, (void*)userData); }
+    unsafe { return self.on_click_raw_((fn void(&Widget, ?&Erased))cb, (?&Erased)userData); }
 }
 
 generic<T>
 &Widget Widget::on_change(fn void(&Widget, ?&T) cb, ?&T userData) {
-    unsafe { return self.on_change_raw_((void*)cb, (void*)userData); }
+    unsafe { return self.on_change_raw_((fn void(&Widget, ?&Erased))cb, (?&Erased)userData); }
 }
 
 generic<T>
 &Widget Widget::on_activate(fn void(&Widget, ?&T) cb, ?&T userData) {
-    unsafe { return self.on_activate_raw_((void*)cb, (void*)userData); }
+    unsafe { return self.on_activate_raw_((fn void(&Widget, ?&Erased))cb, (?&Erased)userData); }
 }
 
 generic<T>
 &Widget Widget::on_draw(fn void(&Widget, &GuiCanvas, ?&T) cb, ?&T userData) {
-    unsafe { return self.on_draw_raw_((void*)cb, (void*)userData); }
+    unsafe { return self.on_draw_raw_((fn void(&Widget, &GuiCanvas, ?&Erased))cb, (?&Erased)userData); }
 }
 
 generic<T>
 void gui_message_box(&GuiUi ui, const &char title, const &char text, int buttons,
                      fn void(&Widget, int, ?&T) onClose, ?&T userData) {
-    unsafe { gui_message_box_raw_(ui, title, text, buttons, (void*)onClose, (void*)userData); }
+    unsafe {
+        gui_message_box_raw_(ui, title, text, buttons, (?fn void(&Widget, int, ?&Erased))onClose, (?&Erased)userData);
+    }
 }
 
 } // namespace std

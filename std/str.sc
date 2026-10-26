@@ -150,6 +150,10 @@ inline unsigned long str_len(const &char s) {
     unsafe { return strlen(s); }
 }
 
+inline []const char str_bytes(const &char s) {
+    unsafe { return ((const char*)s)[0..strlen(s)]; }
+}
+
 // Lexicographic comparison.  Returns <0, 0, or >0.
 inline int str_cmp(const &char a, const &char b) {
     unsafe { return strcmp(a, b); }
@@ -165,10 +169,26 @@ inline int str_eq(const &char a, const &char b) {
     unsafe { return strcmp(a, b) == 0; }
 }
 
-// Copy src into dst (at most `n` bytes including the NUL terminator).
-// dst must have room for at least `n` bytes.
-inline void str_copy(&char dst, const &char src, unsigned long n) {
-    unsafe { strncpy(dst, src, n); }
+// Appends src[0..n) (stopping at its NUL) to dst at 'at'. 1 when it fit.
+static int str_put_at_(&char dst, unsigned long cap, unsigned long at,
+                       const &char src, unsigned long n) {
+    unsigned long i = 0UL;
+    int fit = 1;
+    unsafe {
+        while (i < n && src[i] != (char)0) {
+            if (at + i + 1UL >= cap) { fit = 0; break; }
+            dst[at + i] = src[i];
+            i = i + 1UL;
+        }
+        dst[at + i] = (char)0;
+    }
+    return fit;
+}
+
+// Copy src into dst (at most dst.len-1 bytes plus the NUL terminator).
+inline int str_copy([]char dst, const &char src) {
+    if (dst.len == 0UL) { unsafe { return src[0] == (char)0 ? 1 : 0; } }
+    unsafe { return str_put_at_((&char)dst.ptr, dst.len, 0UL, src, (unsigned long)-1); }
 }
 
 // Return a pointer to the first occurrence of `needle` in `haystack`,
@@ -197,14 +217,18 @@ inline ?&heap char str_dup(const &char s) {
 
 // ── Concatenation ─────────────────────────────────────────────────────────────
 
-// Append src to the NUL-terminated string at dst.  dst must have room.
-inline void str_cat(&char dst, const &char src) {
-    unsafe { strcat(dst, src); }
+// Append at most n bytes of src to the NUL-terminated string in dst,
+// within dst.len; always NUL-terminated.
+inline int str_ncat([]char dst, const &char src, unsigned long n) {
+    unsigned long at = 0UL;
+    while (at < dst.len && dst[at] != (char)0) { at = at + 1UL; }
+    if (at == dst.len) { return 0; }
+    unsafe { return str_put_at_((&char)dst.ptr, dst.len, at, src, n); }
 }
 
-// Append at most `n` bytes of src to dst and always NUL-terminate.
-inline void str_ncat(&char dst, const &char src, unsigned long n) {
-    unsafe { strncat(dst, src, n); }
+// Append src to the NUL-terminated string in dst, within dst.len.
+inline int str_cat([]char dst, const &char src) {
+    return str_ncat(dst, src, (unsigned long)-1);
 }
 
 // ── Extended search ───────────────────────────────────────────────────────────
@@ -261,9 +285,10 @@ inline ?&char str_tok(?&char s, const &char delim, &?&char saveptr) {
 
 // ── Memory search ─────────────────────────────────────────────────────────────
 
-// Return pointer to first byte == `c` in the `n`-byte block at `s`.
-inline const ?&unsigned char mem_chr(const &unsigned char s, int c, unsigned long n) {
-    unsafe { return memchr(s, c, n); }
+// The first byte == `c` in `s`, or null.
+inline const ?&unsigned char mem_chr([]const unsigned char s, int c) {
+    if (s.len == 0UL) { return null; }
+    unsafe { return memchr((const &unsigned char)s.ptr, c, s.len); }
 }
 
 // ── Extended allocation ───────────────────────────────────────────────────────

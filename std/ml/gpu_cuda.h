@@ -15,9 +15,8 @@
 //  2. Host-array convenience ops (cuda_*_f32) — upload, compute, read back
 //     in one call. Simple, but each call pays two PCIe transfers; use (1)
 //     inside loops.
-//  3. Device-address handles (cuda_*_persistent, fp16/bf16) — the older
-//     '&void'-handle API, kept for existing callers; it runs on the same
-//     context and kernels as (1).
+//  3. fp16/bf16 device buffers (CudaHalfBuf) on the same context and
+//     kernels as (1).
 //
 // Ops on layer (1) are queued in order on one CUDA stream and return as
 // soon as they're enqueued; cuda_read() and cuda_sync() wait. A sequence
@@ -50,11 +49,17 @@ struct CudaBuf {
     void free();   // dev := 0
 
     static struct CudaBuf alloc(unsigned long n);   // uninitialized; dev == 0 on failure
-    static struct CudaBuf upload(const &float host, unsigned long n);   // dev == 0 on failure
+    static struct CudaBuf upload([]const float host);
+    // internal: the (reference, length) core of upload()
+    static struct CudaBuf upload_n_(const &float host, unsigned long n);   // dev == 0 on failure
 };
 
-int  cuda_write(struct CudaBuf dst, const &float host, unsigned long n);  // 1 on success
-int  cuda_read(struct CudaBuf src, &float host, unsigned long n);         // waits for queued work
+int  cuda_write(struct CudaBuf dst, []const float host);
+// internal: the (reference, length) core of cuda_write()
+int  cuda_write_n_(struct CudaBuf dst, const &float host, unsigned long n);  // 1 on success
+int  cuda_read(struct CudaBuf src, []float host);
+// internal: the (reference, length) core of cuda_read()
+int  cuda_read_n_(struct CudaBuf src, &float host, unsigned long n);         // waits for queued work
 // cuda_write returns once 'host' may be reused. Copies of 1 MiB and up run
 // as 4 parallel lanes (3 helper threads started on first use plus the
 // caller), each staging its slice through pinned buffers with the DMA of
@@ -149,11 +154,17 @@ struct CudaHalfBuf {
     void free();
 
     static struct CudaHalfBuf alloc(unsigned long n, int dtype);   // uninitialized
-    static struct CudaHalfBuf upload(const &float host, unsigned long n, int dtype);   // rounded on the GPU
+    static struct CudaHalfBuf upload([]const float host, int dtype);
+    // internal: the (reference, length) core of upload()
+    static struct CudaHalfBuf upload_n_(const &float host, unsigned long n, int dtype);   // rounded on the GPU
 };
 
-int  cuda_half_write(struct CudaHalfBuf dst, const &unsigned short bits, unsigned long n);  // raw bits
-int  cuda_half_read(struct CudaHalfBuf src, &unsigned short bits, unsigned long n);         // waits
+int  cuda_half_write(struct CudaHalfBuf dst, []const unsigned short bits);
+// internal: the (reference, length) core of cuda_half_write()
+int  cuda_half_write_n_(struct CudaHalfBuf dst, const &unsigned short bits, unsigned long n);  // raw bits
+int  cuda_half_read(struct CudaHalfBuf src, []unsigned short bits);
+// internal: the (reference, length) core of cuda_half_read()
+int  cuda_half_read_n_(struct CudaHalfBuf src, &unsigned short bits, unsigned long n);         // waits
 
 // Conversions over dst.len (to_half) / src.len (from_half) elements.
 int cuda_to_half(struct CudaBuf src, struct CudaHalfBuf dst);     // round to dst.dtype
@@ -261,11 +272,17 @@ int cuda_half_avgpool2d(struct CudaHalfBuf x, struct CudaHalfBuf y, unsigned lon
 
 // ── Interop: for libraries layered on this backend (gpu_cudnn.h, dsp/fft_cuda.h)
 
+// Opaque native handles: never constructed, only passed back to the CUDA
+// driver / runtime APIs they come from (a ?&CudaNativeStream converts to
+// their C 'void*' parameters).
+struct CudaNativeStream { char opaque_; };   // CUstream / cudaStream_t
+struct CudaNativeModule { char opaque_; };   // CUmodule
+
 // The CUstream every op above is queued on (a cudaStream_t to the runtime
 // API, cuDNN and cuFFT); null if there is no GPU. Work another library
 // queues on it is ordered with this backend's ops and recorded by graph
 // capture.
-?&void cuda_stream_handle();
+?&CudaNativeStream cuda_stream_handle();
 // 1 if cuda_set_tf32(1) is in effect.
 int cuda_tf32_enabled();
 // Compute capability of the selected GPU as major * 10 + minor (80 on an
@@ -278,67 +295,63 @@ int cuda_sm_count();
 // own kernels (gpu_cuda_attention.h). Null on failure, after printing the
 // compile log. Look kernels up with cuModuleGetFunction and launch them on
 // cuda_stream_handle().
-?&void cuda_load_module(const &char source, const &char name);
-// Byte copies between host memory and a raw device address (e.g. a
+?&CudaNativeModule cuda_load_module(const &char source, const &char name);
+// Byte copies (host.len bytes) between host memory and a raw device address (e.g. a
 // CudaBuf's dev plus an offset, or memory from cuMemAlloc), through the
 // same path as cuda_write / cuda_read (pinned lanes from 1 MiB up).
 // cuda_copy_to_device returns once 'host' may be reused; cuda_copy_to_host
 // waits for queued work first. 1 on success.
-int cuda_copy_to_device(unsigned long dev, const &void host, unsigned long bytes);
-int cuda_copy_to_host(&void host, unsigned long dev, unsigned long bytes);
+int cuda_copy_to_device(unsigned long dev, []const unsigned char host);
+int cuda_copy_to_host([]unsigned char host, unsigned long dev);
 
 // ── Host-array convenience ops (upload → compute → read back) ────────────────
 // 1 on success, 0 on failure (no GPU, allocation failure).
 
-int cuda_add_f32(const &float a, const &float b, &float out, unsigned long n);
-int cuda_sub_f32(const &float a, const &float b, &float out, unsigned long n);
-int cuda_mul_f32(const &float a, const &float b, &float out, unsigned long n);
-int cuda_div_f32(const &float a, const &float b, &float out, unsigned long n);
-int cuda_pow_f32(const &float a, const &float b, &float out, unsigned long n);
-int cuda_relu_f32(const &float a, &float out, unsigned long n);
-int cuda_log_f32(const &float a, &float out, unsigned long n);
-int cuda_exp_f32(const &float a, &float out, unsigned long n);
-int cuda_sqrt_f32(const &float a, &float out, unsigned long n);
-int cuda_scale_f32(const &float a, float k, &float out, unsigned long n);
-int cuda_sum_f32(const &float a, &float out, unsigned long n);
+int cuda_add_f32([]const float a, []const float b, []float out);
+// internal: the (reference, length) core of cuda_add_f32()
+int cuda_add_f32_n_(const &float a, const &float b, &float out, unsigned long n);
+int cuda_sub_f32([]const float a, []const float b, []float out);
+// internal: the (reference, length) core of cuda_sub_f32()
+int cuda_sub_f32_n_(const &float a, const &float b, &float out, unsigned long n);
+int cuda_mul_f32([]const float a, []const float b, []float out);
+// internal: the (reference, length) core of cuda_mul_f32()
+int cuda_mul_f32_n_(const &float a, const &float b, &float out, unsigned long n);
+int cuda_div_f32([]const float a, []const float b, []float out);
+// internal: the (reference, length) core of cuda_div_f32()
+int cuda_div_f32_n_(const &float a, const &float b, &float out, unsigned long n);
+int cuda_pow_f32([]const float a, []const float b, []float out);
+// internal: the (reference, length) core of cuda_pow_f32()
+int cuda_pow_f32_n_(const &float a, const &float b, &float out, unsigned long n);
+int cuda_relu_f32([]const float a, []float out);
+// internal: the (reference, length) core of cuda_relu_f32()
+int cuda_relu_f32_n_(const &float a, &float out, unsigned long n);
+int cuda_log_f32([]const float a, []float out);
+// internal: the (reference, length) core of cuda_log_f32()
+int cuda_log_f32_n_(const &float a, &float out, unsigned long n);
+int cuda_exp_f32([]const float a, []float out);
+// internal: the (reference, length) core of cuda_exp_f32()
+int cuda_exp_f32_n_(const &float a, &float out, unsigned long n);
+int cuda_sqrt_f32([]const float a, []float out);
+// internal: the (reference, length) core of cuda_sqrt_f32()
+int cuda_sqrt_f32_n_(const &float a, &float out, unsigned long n);
+int cuda_scale_f32([]const float a, float k, []float out);
+// internal: the (reference, length) core of cuda_scale_f32()
+int cuda_scale_f32_n_(const &float a, float k, &float out, unsigned long n);
+int cuda_sum_f32([]const float a, []float out);
+// internal: the (reference, length) core of cuda_sum_f32()
+int cuda_sum_f32_n_(const &float a, &float out, unsigned long n);
 
 // out[M,N] = a[M,K] * b[K,N] with this library's own tiled CUDA kernel
 // (64x64 tiles in shared memory, 4x4 per thread). Kept as a dependency-free
 // reference; cuda_matmul_f32_blas is faster at every size.
-int cuda_matmul_f32(const &float a, const &float b, &float out,
+int cuda_matmul_f32([]const float a, []const float b, []float out, unsigned long M, unsigned long K, unsigned long N);
+// internal: the (reference, length) core of cuda_matmul_f32()
+int cuda_matmul_f32_n_(const &float a, const &float b, &float out,
                     unsigned long M, unsigned long K, unsigned long N);
 // Same product through cuBLAS.
-int cuda_matmul_f32_blas(const &float a, const &float b, &float out,
+int cuda_matmul_f32_blas([]const float a, []const float b, []float out, unsigned long M, unsigned long K, unsigned long N);
+// internal: the (reference, length) core of cuda_matmul_f32_blas()
+int cuda_matmul_f32_blas_n_(const &float a, const &float b, &float out,
                          unsigned long M, unsigned long K, unsigned long N);
-
-// ── Raw device pointers (older API) ──────────────────────────────────────────
-// Same context and kernels as the CudaBuf layer; a '&void' here is a device
-// address. Prefer CudaBuf in new code: it carries its length, so every op
-// can check sizes.
-
-// 1 if the backend initialized (same as cuda_available()).
-int cuda_persistent_available();
-// Uploads 'bytes' of host memory to a new device buffer; null on failure.
-?&void cuda_upload_persistent(const &float data, unsigned long bytes);
-// Frees a buffer from any cuda_upload_*_persistent function.
-void cuda_release_persistent(&void devPtr);
-// out[M,N] (host) = devA[M,K] * devB[K,N], both already on the device.
-int cuda_matmul_f32_persistent(&void devA, &void devB, &float out,
-                                unsigned long M, unsigned long K, unsigned long N);
-// devW[i] -= lr * devGrad[i], in place on the device; nothing is read back.
-int cuda_sgd_update_f32(&void devW, &void devGrad, float lr, unsigned long n);
-
-// fp16 / bf16 storage (2 bytes per element), fp32 arithmetic: each kernel
-// widens on load and rounds to nearest-even on store. The upload functions
-// convert from float32 on the host; 'out' receives raw fp16/bf16 bits (see
-// float16.h's fp16_to_f32_bulk / bf16_to_f32_bulk).
-?&void cuda_upload_f16_persistent(const &float data, unsigned long n);
-?&void cuda_upload_bf16_persistent(const &float data, unsigned long n);
-int cuda_matmul_f16_persistent(&void devA, &void devB, &unsigned short out,
-                                unsigned long M, unsigned long K, unsigned long N);
-int cuda_matmul_bf16_persistent(&void devA, &void devB, &unsigned short out,
-                                 unsigned long M, unsigned long K, unsigned long N);
-int cuda_sgd_update_f16(&void devW, &void devGrad, float lr, unsigned long n);
-int cuda_sgd_update_bf16(&void devW, &void devGrad, float lr, unsigned long n);
 
 } // namespace std

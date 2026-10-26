@@ -61,7 +61,9 @@ struct SseParser {
 
     static struct SseParser new();
     // Adds received bytes.
-    void feed(const &unsigned char bytes, unsigned long len);
+    void feed([]const unsigned char bytes);
+    // internal: the (reference, length) core of feed()
+    void feed_n_(const &unsigned char bytes, unsigned long len);
     // The next complete event (1, 'out' filled — free it) or 0 if more
     // input is needed. Comment lines and events without data are skipped.
     int  next(&SseEvent out);

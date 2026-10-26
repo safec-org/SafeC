@@ -56,9 +56,9 @@ static ?&GuiAppWindow __gui_app_rec(const &GuiApp app, const &GuiWindow win) {
     rec.win = hw;
     rec.ui = null;
     unsafe {
-        rec.onEvent = (void*)0; rec.onEventData = (void*)0;
-        rec.onDraw = (void*)0; rec.onDrawData = (void*)0;
-        rec.onFrame = (void*)0; rec.onFrameData = (void*)0;
+        rec.onEvent = null; rec.onEventData = null;
+        rec.onDraw = null; rec.onDrawData = null;
+        rec.onFrame = null; rec.onFrameData = null;
     }
     rec.canvasReady = 0;
     rec.dirty = 1;
@@ -138,22 +138,22 @@ void GuiApp::redraw(&GuiWindow win) {
     match (orec) { case some(rec): { rec.dirty = 1; } case null: { } }
 }
 
-void GuiApp::on_event_raw_(&GuiWindow win, void* cb, void* data) {
+void GuiApp::on_event_raw_(&GuiWindow win, fn int(&GuiApp, &GuiWindow, &GuiEvent, ?&Erased) cb, ?&Erased data) {
     ?&GuiAppWindow orec = __gui_app_rec(self, win);
     match (orec) { case some(rec): { unsafe { rec.onEvent = cb; rec.onEventData = data; } } case null: { } }
 }
 
-void GuiApp::on_draw_raw_(&GuiWindow win, void* cb, void* data) {
+void GuiApp::on_draw_raw_(&GuiWindow win, fn void(&GuiApp, &GuiWindow, &GuiCanvas, ?&Erased) cb, ?&Erased data) {
     ?&GuiAppWindow orec = __gui_app_rec(self, win);
     match (orec) { case some(rec): { unsafe { rec.onDraw = cb; rec.onDrawData = data; } rec.dirty = 1; } case null: { } }
 }
 
-void GuiApp::on_frame_raw_(&GuiWindow win, void* cb, void* data) {
+void GuiApp::on_frame_raw_(&GuiWindow win, fn int(&GuiApp, &GuiWindow, double, ?&Erased) cb, ?&Erased data) {
     ?&GuiAppWindow orec = __gui_app_rec(self, win);
     match (orec) { case some(rec): { unsafe { rec.onFrame = cb; rec.onFrameData = data; } } case null: { } }
 }
 
-unsigned int GuiApp::add_timer_raw_(double ms, int repeat, void* cb, void* data) {
+unsigned int GuiApp::add_timer_raw_(double ms, int repeat, fn void(&GuiApp, unsigned int, ?&Erased) cb, ?&Erased data) {
     struct GuiTimer t;
     t.id = self.nextTimer;
     self.nextTimer = self.nextTimer + 1U;
@@ -161,7 +161,7 @@ unsigned int GuiApp::add_timer_raw_(double ms, int repeat, void* cb, void* data)
     if (ms < 0.0) { ms = 0.0; }
     t.due = self.now_ms() + ms;
     t.interval = repeat ? (ms > 0.5 ? ms : 0.5) : 0.0;
-    unsafe { t.cb = cb; t.data = data; }
+    t.cb = cb; t.data = data;
     t.dead = 0;
     self.timers.push(t);
     return t.id;
@@ -180,7 +180,7 @@ static int __gui_app_animating(&GuiApp app) {
     unsigned long i = 0UL;
     while (i < app.windows.len) {
         &GuiAppWindow r = *app.windows.at(i);
-        unsafe { if (r.onFrame != (void*)0) { return 1; } }
+        if (!r.onFrame.is_null()) { return 1; }
         match (r.ui) {
             case some(ui): { if (ui.animating() || !ui.tipFor.is_null()) { return 1; } }
             case null: { }
@@ -243,8 +243,8 @@ int GuiApp::pump(int timeoutMs) {
             int handled = 0;
             match (rec.ui) { case some(ui): { handled = ui.dispatch(&ev); } case null: { } }
             unsafe {
-                if (rec.onEvent != (void*)0) {
-                    fn int(&GuiApp, &GuiWindow, &GuiEvent, ?&void) cb = (fn int(&GuiApp, &GuiWindow, &GuiEvent, ?&void))rec.onEvent;
+                if (!rec.onEvent.is_null()) {
+                    fn int(&GuiApp, &GuiWindow, &GuiEvent, ?&Erased) cb = rec.onEvent!;
                     if (cb(self, rec.win, &ev, rec.onEventData)) { handled = 1; }
                 }
             }
@@ -280,8 +280,7 @@ int GuiApp::pump(int timeoutMs) {
                 tr.dead = 1;
             }
             unsafe {
-                fn void(&GuiApp, unsigned int, ?&void) cb = (fn void(&GuiApp, unsigned int, ?&void))t.cb;
-                cb(self, t.id, t.data);
+                match (t.cb) { case some(cb): cb(self, t.id, t.data); case null: { } }
             }
             // a timer may have touched any window's state
             unsigned long w = 0UL;
@@ -305,9 +304,9 @@ int GuiApp::pump(int timeoutMs) {
         match (r.ui) { case some(ui): { ui.tick(now); } case null: { } }
         if (!frameDue) { continue; }
         unsafe {
-            if (r.onFrame != (void*)0) {
-                fn int(&GuiApp, &GuiWindow, double, ?&void) cb = (fn int(&GuiApp, &GuiWindow, double, ?&void))r.onFrame;
-                if (!cb(self, r.win, now, r.onFrameData)) { r.onFrame = (void*)0; }
+            if (!r.onFrame.is_null()) {
+                fn int(&GuiApp, &GuiWindow, double, ?&Erased) cb = r.onFrame!;
+                if (!cb(self, r.win, now, r.onFrameData)) { r.onFrame = null; }
                 r.dirty = 1;
             }
         }
@@ -323,7 +322,7 @@ int GuiApp::pump(int timeoutMs) {
         if (!need) { continue; }
         match (r.ui) { case some(ui): { ui.render(); } case null: { } }
         unsafe {
-            if (r.onDraw != (void*)0) {
+            if (!r.onDraw.is_null()) {
                 if (!r.canvasReady) {
                     r.canvas = GuiCanvas::for_window(r.win);
                     r.canvasReady = 1;
@@ -332,7 +331,7 @@ int GuiApp::pump(int timeoutMs) {
                 }
                 r.canvas.reset();
                 if (r.ui.is_null()) { r.canvas.clear(GuiColor::hex(0xFFFFFFU)); }
-                fn void(&GuiApp, &GuiWindow, &GuiCanvas, ?&void) cb = (fn void(&GuiApp, &GuiWindow, &GuiCanvas, ?&void))r.onDraw;
+                fn void(&GuiApp, &GuiWindow, &GuiCanvas, ?&Erased) cb = r.onDraw!;
                 cb(self, r.win, &r.canvas, r.onDrawData);
             }
         }

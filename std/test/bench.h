@@ -3,6 +3,7 @@
 // Freestanding note: clock() requires hosted libc; in freestanding mode
 // timing is skipped and only iteration counts are reported.
 #pragma once
+#include <std/erased.h>
 
 #define BENCH_MAX      64
 #define BENCH_NAME_MAX 64
@@ -11,8 +12,8 @@ namespace std {
 
 struct BenchCase {
     char          name[BENCH_NAME_MAX];
-    void*         func;         // type-erased fn void(?&T), set by BenchSuite::add
-    void*         arg;          // type-erased ?&T passed to func
+    fn void(?&Erased) func;     // the fn void(?&T), erased (see std/erased.h), set by BenchSuite::add
+    ?&Erased      arg;          // the ?&T passed to func
     unsigned long iters;        // number of iterations to run
     double        elapsed_s;    // measured elapsed seconds (0 if unavailable)
     double        ops_per_s;    // iters / elapsed_s (0 if unavailable)
@@ -29,7 +30,7 @@ struct BenchSuite {
     generic<T> void add(const &char name, fn void(?&T) func, ?&T arg, unsigned long iters);
 
     // Type-erased registration behind add().
-    void add_raw_(const char* name, void* func, void* arg, unsigned long iters);
+    void add_raw_(const &char name, fn void(?&Erased) func, ?&Erased arg, unsigned long iters);
 
     // Run all benchmarks and record results.
     void run();
@@ -40,7 +41,7 @@ struct BenchSuite {
 
 generic<T>
 void BenchSuite::add(const &char name, fn void(?&T) func, ?&T arg, unsigned long iters) {
-    unsafe { self.add_raw_(name, (void*)func, (void*)arg, iters); }
+    unsafe { self.add_raw_(name, (fn void(?&Erased))func, (?&Erased)arg, iters); }
 }
 
 } // namespace std

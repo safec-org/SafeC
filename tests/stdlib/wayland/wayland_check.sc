@@ -267,7 +267,7 @@ static int read_file(const char* path, &String out) {
         char buf[256];
         unsigned long n = fread((void*)&buf[0], 1UL, 255UL, f);
         fclose(f);
-        out.push_n((const char*)&buf[0], n);
+        out.push_bytes(buf[0..n]);
         return 1;
     }
 }

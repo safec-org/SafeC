@@ -11,11 +11,11 @@
 //   struct BufReader<TcpStream> in = BufReader::over(&s);
 //   struct String head = String::new();
 //   if (in.read_until(&head, "\r\n\r\n")) { ... }   // the header block
-//   read_exact(&in, &body[0], len);                  // bytes after it
+//   read_exact(&in, body[0..len]);                   // bytes after it
 //
 //   struct BufWriter<TcpStream> out = BufWriter::over(&s);
-//   write_all(&out, &hdr[0], 6UL);                   // buffered
-//   write_all(&out, payload, n);
+//   write_all(&out, hdr[0..6]);                      // buffered
+//   write_all(&out, payload.as_bytes());
 //   if (out.flush() != 0) { ... }                    // one write to s
 //
 // A BufWriter holds what was written until flush() (or until its buffer
@@ -42,7 +42,7 @@ struct BufReader {
     // Reader: at most n bytes, from the buffer first. A read of at least
     // IO_BUF_SIZE bytes with nothing buffered goes straight to the stream.
     // The count read, 0 at the stream's end, -1 on error.
-    long long     read(&unsigned char out, unsigned long n);
+    long long     read([]unsigned char out);
 
     // Appends bytes to 'out' up to and including the first occurrence of
     // 'term' (a non-empty string; "\n" reads a line, "\r\n\r\n" an HTTP
@@ -66,11 +66,14 @@ struct BufReader<R> BufReader::over(&R inner) {
 }
 
 generic<R: Reader>
-long long BufReader::read(&unsigned char out, unsigned long n) {
+long long BufReader::read([]unsigned char out_s) {
+    unsigned long n = out_s.len;
     if (n == 0UL) { return 0LL; }
+    &unsigned char out;
+    unsafe { out = (&unsigned char)out_s.ptr; }
     if (self.pos == self.len) {
-        if (n >= (unsigned long)IO_BUF_SIZE) { return self.inner.read(out, n); }
-        long long k = self.inner.read(&self.buf[0], (unsigned long)IO_BUF_SIZE);
+        if (n >= (unsigned long)IO_BUF_SIZE) { return self.inner.read(out_s); }
+        long long k = self.inner.read(self.buf[0..(unsigned long)IO_BUF_SIZE]);
         if (k <= 0LL) { return k; }
         self.pos = 0UL;
         self.len = (unsigned long)k;
@@ -111,7 +114,7 @@ int BufReader::read_until(&String out, const &char term) {
     unsigned long matched = 0UL;
     while (1) {
         if (self.pos == self.len) {
-            long long k = self.inner.read(&self.buf[0], (unsigned long)IO_BUF_SIZE);
+            long long k = self.inner.read(self.buf[0..(unsigned long)IO_BUF_SIZE]);
             if (k <= 0LL) { return 0; }
             self.pos = 0UL;
             self.len = (unsigned long)k;
@@ -121,12 +124,12 @@ int BufReader::read_until(&String out, const &char term) {
             matched = io_term_step_(t, matched, self.buf[i]);
             i = i + 1UL;
             if (matched == tl) {
-                unsafe { out.push_n((const &char)(const char*)&self.buf[self.pos], i - self.pos); }
+                unsafe { out.push_n_((const &char)(const char*)&self.buf[self.pos], i - self.pos); }
                 self.pos = i;
                 return 1;
             }
         }
-        unsafe { out.push_n((const &char)(const char*)&self.buf[self.pos], self.len - self.pos); }
+        unsafe { out.push_n_((const &char)(const char*)&self.buf[self.pos], self.len - self.pos); }
         self.pos = self.len;
     }
     return 0;
@@ -145,10 +148,10 @@ struct BufWriter {
 
     static struct BufWriter<W> over(&W inner);
 
-    // Writer: takes all n bytes (into the buffer, or, for a write that
-    // doesn't fit, after flushing it, straight to the stream when n is at
-    // least IO_BUF_SIZE). n, or -1 if the stream failed.
-    long long     write(const &unsigned char data, unsigned long n);
+    // Writer: takes all of data (into the buffer, or, for a write that
+    // doesn't fit, after flushing it, straight to the stream when it is at
+    // least IO_BUF_SIZE). data.len, or -1 if the stream failed.
+    long long     write([]const unsigned char data);
 
     // Flusher: writes out everything buffered. 0 on success, -1 if the
     // stream failed (the buffered bytes are dropped either way).
@@ -164,11 +167,15 @@ struct BufWriter<W> BufWriter::over(&W inner) {
 }
 
 generic<W: Writer>
-long long BufWriter::write(const &unsigned char data, unsigned long n) {
+long long BufWriter::write([]const unsigned char data_s) {
+    unsigned long n = data_s.len;
+    if (n == 0UL) { return 0LL; }
+    const &unsigned char data;
+    unsafe { data = (const &unsigned char)data_s.ptr; }
     if (n > (unsigned long)IO_BUF_SIZE - self.len) {
         if (self.flush() != 0) { return -1LL; }
         if (n >= (unsigned long)IO_BUF_SIZE) {
-            return write_all(self.inner, data, n) ? (long long)n : -1LL;
+            return write_all(self.inner, data_s) ? (long long)n : -1LL;
         }
     }
     unsafe { safe_memcpy_raw_((void*)&self.buf[self.len], (const void*)data, n); }
@@ -179,7 +186,7 @@ long long BufWriter::write(const &unsigned char data, unsigned long n) {
 generic<W: Writer>
 int BufWriter::flush() {
     if (self.len == 0UL) { return 0; }
-    int ok = write_all(self.inner, &self.buf[0], self.len);
+    int ok = write_all(self.inner, self.buf[0..self.len]);
     self.len = 0UL;
     return ok ? 0 : -1;
 }

@@ -216,7 +216,7 @@ int RngCtx::init() {
 
 // ── RngCtx methods ─────────────────────────────────────────────────────────────
 
-inline void RngCtx::fill(&unsigned char out, unsigned long len) {
+inline void RngCtx::fill_n_(&unsigned char out, unsigned long len) {
     unsigned long i = (unsigned long)0;
     while (i < len) {
         if (self.buf_pos >= (unsigned long)RNG_BLOCK_SIZE) {
@@ -230,9 +230,15 @@ inline void RngCtx::fill(&unsigned char out, unsigned long len) {
     }
 }
 
+inline void RngCtx::fill([]unsigned char out_s) {
+    unsigned long len = out_s.len;
+    &unsigned char out = crypto_out_(out_s, 0UL);
+    self.fill_n_(out, len);
+}
+
 inline unsigned int RngCtx::rand32() {
     unsigned char b[4];
-    self.fill(&b[0], 4UL);
+    self.fill_n_(&b[0], 4UL);
     unsafe {
         return ((unsigned int)b[0])
              | ((unsigned int)b[1] << 8)

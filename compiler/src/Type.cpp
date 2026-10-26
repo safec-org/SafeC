@@ -220,7 +220,8 @@ bool OptionalType::equals(const Type &o) const {
 
 bool SliceType::equals(const Type &o) const {
     if (o.kind != TypeKind::Slice) return false;
-    return typeEqual(element, static_cast<const SliceType &>(o).element);
+    auto &os = static_cast<const SliceType &>(o);
+    return constElem == os.constElem && typeEqual(element, os.element);
 }
 
 bool NewtypeType::equals(const Type &o) const {
@@ -353,8 +354,8 @@ TypePtr makeOptional(TypePtr inner) {
     return std::make_shared<OptionalType>(std::move(inner));
 }
 
-TypePtr makeSlice(TypePtr element) {
-    return std::make_shared<SliceType>(std::move(element));
+TypePtr makeSlice(TypePtr element, bool constElem) {
+    return std::make_shared<SliceType>(std::move(element), constElem);
 }
 
 } // namespace safec

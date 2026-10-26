@@ -34,7 +34,7 @@ int FatCtx::init(&BlockDevice dev, unsigned long lba) {
     self.dev = *dev;
     self.partition_lba = lba;
     unsigned char boot[512];
-    if (dev.read(lba, (&unsigned char)boot, (unsigned long)1) != 0) { return -1; }
+    if (dev.read(lba, boot[0..512]) != 0) { return -1; }
     // BPB parsing
     unsafe {
         self.bpb.bytes_per_sector     = fat_read16_(boot + 11);
@@ -73,11 +73,12 @@ static unsigned long fat_cluster_to_lba_(struct FatCtx* ctx, unsigned long clust
     }
 }
 
-inline int FatCtx::read_cluster(unsigned long cluster, &unsigned char buf) {
+inline int FatCtx::read_cluster(unsigned long cluster, []unsigned char buf) {
     unsigned long lba;
     unsafe { lba = fat_cluster_to_lba_((struct FatCtx*)self, cluster); }
-    return self.dev.read(lba, buf,
-                         (unsigned long)self.bpb.sectors_per_cluster);
+    unsigned long bytes = (unsigned long)self.bpb.sectors_per_cluster * self.dev.sector_size;
+    if (buf.len < bytes) { return -1; }
+    return self.dev.read(lba, buf[0..bytes]);
 }
 
 inline unsigned long FatCtx::follow_fat(unsigned long start_cluster, unsigned long idx) {
@@ -88,8 +89,7 @@ inline unsigned long FatCtx::follow_fat(unsigned long start_cluster, unsigned lo
         unsigned long fat_byte_off = cluster * (unsigned long)4;
         unsigned long fat_sector   = fat_byte_off / (unsigned long)512;
         unsigned long fat_off_in   = fat_byte_off % (unsigned long)512;
-        if (self.dev.read(self.fat_lba + fat_sector,
-                          (&unsigned char)fat_sect, (unsigned long)1) != 0) {
+        if (self.dev.read(self.fat_lba + fat_sector, fat_sect[0..512]) != 0) {
             return (unsigned long)0;
         }
         unsigned int next;
@@ -151,7 +151,7 @@ static unsigned long fat_walk_component_(struct FatCtx* ctx,
     unsigned char buf[FAT_MAX_CLUSTER];
     unsigned long cluster = dir_cluster;
     while (cluster != (unsigned long)0) {
-        if (ctx->read_cluster(cluster, buf) != 0) { break; }
+        if (ctx->read_cluster(cluster, buf[0..FAT_MAX_CLUSTER]) != 0) { break; }
         unsigned long entries;
         unsafe { entries = ctx->bytes_per_cluster / (unsigned long)32; }
         unsigned long e = (unsigned long)0;
@@ -266,10 +266,10 @@ int FatCtx::open(const &char path_ref, int flags, &VfsNode node_out) {
     return 0;
 }
 
-unsigned long FatCtx::read(unsigned long inode, unsigned long offset, &unsigned char buf_ref, unsigned long len) {
+unsigned long FatCtx::read(unsigned long inode, unsigned long offset, []unsigned char buf) {
+    unsigned long len = buf.len;
     void* ctx;
     unsafe { ctx = (void*)self; }
-    unsigned char* buf = buf_ref;
     struct FatCtx* fc;
     unsafe { fc = (struct FatCtx*)ctx; }
     unsigned long bpc;
@@ -280,7 +280,7 @@ unsigned long FatCtx::read(unsigned long inode, unsigned long offset, &unsigned 
     if (cluster == (unsigned long)0) { return (unsigned long)0; }
 
     unsigned char cbuf[FAT_MAX_CLUSTER];
-    if (fc->read_cluster(cluster, cbuf) != 0) {
+    if (fc->read_cluster(cluster, cbuf[0..FAT_MAX_CLUSTER]) != 0) {
         return (unsigned long)0;
     }
     unsigned long avail = bpc - off_in;
@@ -295,7 +295,7 @@ unsigned long FatCtx::read(unsigned long inode, unsigned long offset, &unsigned 
     return avail;
 }
 
-int FatCtx::readdir(unsigned long inode, fn void(&VfsNode, ?&void) cb, ?&void user) {
+int FatCtx::readdir_raw_(unsigned long inode, fn void(&VfsNode, ?&Erased) cb, ?&Erased user) {
     void* ctx;
     unsafe { ctx = (void*)self; }
     struct FatCtx* fc;
@@ -304,7 +304,7 @@ int FatCtx::readdir(unsigned long inode, fn void(&VfsNode, ?&void) cb, ?&void us
     unsigned long cluster = inode;
     unsigned char buf[FAT_MAX_CLUSTER];
     while (cluster != (unsigned long)0) {
-        if (fc->read_cluster(cluster, buf) != 0) { break; }
+        if (fc->read_cluster(cluster, buf[0..FAT_MAX_CLUSTER]) != 0) { break; }
         unsigned long entries;
         unsafe { entries = fc->bytes_per_cluster / (unsigned long)32; }
         unsigned long e = (unsigned long)0;

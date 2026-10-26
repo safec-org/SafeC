@@ -601,7 +601,7 @@ void t_reference_device_loss_scale() {
     opt.zero_grad();
     tensor_matmul(x, W).sum().backward();
     W.sync();
-    unsafe { tensor_grad_host_((void*)W); ASSERT_TRUE(absf_((W->grad[0]) - ((float)2.0)) <= (float)1e-3); }
+    unsafe { tensor_grad_host_raw_((void*)W); ASSERT_TRUE(absf_((W->grad[0]) - ((float)2.0)) <= (float)1e-3); }
     opt.step();
     ASSERT_TRUE(absf_((W.at1(0UL)) - ((float)0.3)) <= (float)1e-3);
     ASSERT_TRUE(absf_((device_loss_scale(REF_DEVICE)) - ((float)32768.0)) <= (float)0.5);
@@ -627,7 +627,7 @@ static float at_loss_(&FloatTensor Q, &FloatTensor K, &FloatTensor V, &FloatTens
 }
 
 static void at_grads_(&FloatTensor t, &float out) {
-    unsafe { tensor_grad_host_((void*)t); unsigned long i = 0UL; while (i < t->size) { out[i] = t->grad[i]; i = i + 1UL; } }
+    unsafe { tensor_grad_host_raw_((void*)t); unsigned long i = 0UL; while (i < t->size) { out[i] = t->grad[i]; i = i + 1UL; } }
 }
 
 void t_attention_gradients() {

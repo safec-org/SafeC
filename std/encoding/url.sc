@@ -149,7 +149,8 @@ struct QueryParams QueryParams::new() {
     return q;
 }
 
-struct QueryParams QueryParams::parse_n(const &char qs, unsigned long n) {
+struct QueryParams QueryParams::parse_bytes([]const char qs) {
+    unsigned long n = qs.len;
     struct QueryParams q = QueryParams::new();
     unsigned long i = 0UL;
     unsafe {
@@ -176,7 +177,9 @@ struct QueryParams QueryParams::parse_n(const &char qs, unsigned long n) {
 struct QueryParams QueryParams::parse(const &char qs) {
     unsigned long n = 0UL;
     unsafe { while (qs[n] != (char)0) { n = n + 1UL; } }
-    return QueryParams::parse_n(qs, n);
+    []const char bytes;
+    unsafe { bytes = ((const char*)qs)[0..n]; }
+    return QueryParams::parse_bytes(bytes);
 }
 
 unsigned long QueryParams::length() const { return self.pairs.length(); }
@@ -552,7 +555,7 @@ struct String url_remove_dot_segments(const &char path) {
         unsigned long end = 0UL;
         if (in.char_at(0UL) == (int)'/') { end = 1UL; }
         while (end < in.length() && in.char_at(end) != (int)'/') { end = end + 1UL; }
-        unsafe { out.push_n(in.as_ptr(), end); }
+        unsafe { out.push_n_(in.as_ptr(), end); }
         in.remove_range(0UL, end);
     }
     in.free();
@@ -569,7 +572,7 @@ static struct String url_merge_paths_(const &Url base, const &String refPath) {
     }
     long long last = base.path.rfind_char('/');
     if (last >= 0LL) {
-        unsafe { out.push_n(base.path.as_ptr(), (unsigned long)last + 1UL); }
+        unsafe { out.push_n_(base.path.as_ptr(), (unsigned long)last + 1UL); }
     }
     out.push_str(refPath);
     return out;
@@ -679,7 +682,7 @@ struct String Url::request_target() const {
 }
 
 struct QueryParams Url::query_params() const {
-    return QueryParams::parse_n(self.query.as_ptr(), self.query.length());
+    return QueryParams::parse_bytes(self.query.as_bytes());
 }
 
 void Url::set_query_params(const &QueryParams params) {

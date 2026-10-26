@@ -23,6 +23,10 @@ namespace std {
 // have room for 'fftLen' samples — the full-length minimum-phase impulse
 // response (its energy concentrates near the start; callers typically
 // keep only the first n-ish samples).
-void minimum_phase(const &double x, unsigned long n, unsigned long fftLen, &double outMinPhase);
+int minimum_phase([]const double x, unsigned long fftLen, []double outMinPhase);
+
+// Internal: the (reference, length) forms the slice API above wraps
+// (std/dsp's own code calls these; not API).
+void minimum_phase_n_(const &double x, unsigned long n, unsigned long fftLen, &double outMinPhase);
 
 } // namespace std

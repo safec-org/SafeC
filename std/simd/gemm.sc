@@ -612,18 +612,66 @@ static void gemm_run_(int transA, int transB, unsigned long m, unsigned long n, 
         gemm_tiles_(&j, 0UL, tiles);
 }
 
-void sgemm(int transA, int transB, unsigned long m, unsigned long n, unsigned long k,
-           float alpha, const &float a, unsigned long lda,
-           const &float b, unsigned long ldb,
-           float beta, &float c, unsigned long ldc) {
+void sgemm_n_(int transA, int transB, unsigned long m, unsigned long n, unsigned long k,
+             float alpha, const &float a, unsigned long lda,
+             const &float b, unsigned long ldb,
+             float beta, &float c, unsigned long ldc) {
     gemm_run_(transA, transB, m, n, k, alpha, a, lda, b, ldb, beta, c, ldc, 1);
 }
 
-void sgemm_serial(int transA, int transB, unsigned long m, unsigned long n, unsigned long k,
-                  float alpha, const &float a, unsigned long lda,
-                  const &float b, unsigned long ldb,
-                  float beta, &float c, unsigned long ldc) {
+void sgemm_serial_n_(int transA, int transB, unsigned long m, unsigned long n, unsigned long k,
+                     float alpha, const &float a, unsigned long lda,
+                     const &float b, unsigned long ldb,
+                     float beta, &float c, unsigned long ldc) {
     gemm_run_(transA, transB, m, n, k, alpha, a, lda, b, ldb, beta, c, ldc, 0);
+}
+
+// Elements a rows x cols matrix with leading dimension ld spans (0 if empty).
+static unsigned long gemm_span_(unsigned long rows, unsigned long cols, unsigned long ld) {
+    if (rows == 0UL || cols == 0UL) { return 0UL; }
+    return (rows - 1UL) * ld + cols;
+}
+
+static int gemm_fits_(int transA, int transB, unsigned long m, unsigned long n, unsigned long k,
+                      unsigned long aLen, unsigned long lda, unsigned long bLen, unsigned long ldb,
+                      unsigned long cLen, unsigned long ldc) {
+    unsigned long aRows = transA == SGEMM_TRANS ? k : m;
+    unsigned long aCols = transA == SGEMM_TRANS ? m : k;
+    unsigned long bRows = transB == SGEMM_TRANS ? n : k;
+    unsigned long bCols = transB == SGEMM_TRANS ? k : n;
+    if (lda < aCols || ldb < bCols || ldc < n) { return 0; }
+    return aLen >= gemm_span_(aRows, aCols, lda) && bLen >= gemm_span_(bRows, bCols, ldb)
+        && cLen >= gemm_span_(m, n, ldc);
+}
+
+int sgemm(int transA, int transB, unsigned long m, unsigned long n, unsigned long k,
+          float alpha, []const float a, unsigned long lda,
+          []const float b, unsigned long ldb,
+          float beta, []float c, unsigned long ldc) {
+    if (!gemm_fits_(transA, transB, m, n, k, a.len, lda, b.len, ldb, c.len, ldc)) { return 0; }
+    if (m == 0UL || n == 0UL) { return 1; }
+    float zero = (float)0;
+    unsafe {
+        const &float ar = k == 0UL ? (const &float)&zero : (const &float)a.ptr;
+        const &float br = k == 0UL ? (const &float)&zero : (const &float)b.ptr;
+        sgemm_n_(transA, transB, m, n, k, alpha, ar, lda, br, ldb, beta, (&float)c.ptr, ldc);
+    }
+    return 1;
+}
+
+int sgemm_serial(int transA, int transB, unsigned long m, unsigned long n, unsigned long k,
+                 float alpha, []const float a, unsigned long lda,
+                 []const float b, unsigned long ldb,
+                 float beta, []float c, unsigned long ldc) {
+    if (!gemm_fits_(transA, transB, m, n, k, a.len, lda, b.len, ldb, c.len, ldc)) { return 0; }
+    if (m == 0UL || n == 0UL) { return 1; }
+    float zero = (float)0;
+    unsafe {
+        const &float ar = k == 0UL ? (const &float)&zero : (const &float)a.ptr;
+        const &float br = k == 0UL ? (const &float)&zero : (const &float)b.ptr;
+        sgemm_serial_n_(transA, transB, m, n, k, alpha, ar, lda, br, ldb, beta, (&float)c.ptr, ldc);
+    }
+    return 1;
 }
 
 } // namespace std

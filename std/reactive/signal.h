@@ -12,15 +12,17 @@
 //   count.set(count.get() + 1);      // updates, bumps version, notifies
 //   count.free();
 #include <std/collections/vec.h>
+#include <std/erased.h>
 
 namespace std {
 
 // One subscriber. Listeners on the same signal carry unrelated context
 // types, so each is stored type-erased; signal_subscribe() only ever pairs
-// a fn void(?&U) with a ?&U, so the erased call is always well-typed.
+// a fn void(?&U) with a ?&U, so the erased call is always well-typed
+// (see std/erased.h).
 struct SignalSub {
-    void* listener;   // fn void(?&U)
-    void* userdata;   // ?&U
+    fn void(?&Erased) listener;   // the fn void(?&U)
+    ?&Erased          userdata;   // the ?&U
 };
 
 generic<T>
@@ -60,8 +62,8 @@ generic<T, U>
 void signal_subscribe(&Signal<T> s, fn void(?&U) listener, ?&U userdata) {
     struct SignalSub sub;
     unsafe {
-        sub.listener = (void*)listener;
-        sub.userdata = (void*)userdata;
+        sub.listener = (fn void(?&Erased))listener;
+        sub.userdata = (?&Erased)userdata;
     }
     s.subs.push(sub);
 }
@@ -96,10 +98,7 @@ void Signal::notify() {
     unsigned long i = 0UL;
     while (i < self.subs.length()) {
         &SignalSub sub = self.subs.at(i);
-        unsafe {
-            fn void(void*) f = (fn void(void*))sub.listener;
-            f(sub.userdata);
-        }
+        sub.listener(sub.userdata);
         i = i + 1UL;
     }
 }

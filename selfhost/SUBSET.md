@@ -36,9 +36,17 @@ it, so `__SAFEC_COMPAT_PREPROCESSOR__` is defined):
   `unsafe`.
 - References `&stack T`, `&heap T`, `&static T`, `&arena<R> T` and plain
   `&T`, with `const`.
-- Nullable references `?&T`, optionals `?T`, slices `[]T`, tuples
-  `tuple(int, double)`.
-- Function types `fn R(P...)`, and C-style function pointer declarators.
+- Nullable references `?&T`, optionals `?T`, tuples `tuple(int, double)`.
+- Slices `[]T` in every declaration position (parameters, return types,
+  locals, globals, fields), read-only slices `[]const T` (`[]T` converts
+  to `[]const T`, not back; their elements can't be assigned), optional
+  slices `?[]T`, and byte slices that interconvert across `char`,
+  `signed char` and `unsigned char`. `a[i..j]`, `a[i..]` and `a[..]` are
+  range-checked outside `unsafe`, and casting a slice to a pointer is an
+  error (use `.ptr`), as in safec.
+- Function types `fn R(P...)`, nullable function references `?fn R(P...)`
+  (checked with `match` / `is_null()`, `!` unwraps to the `fn`), and C-style
+  function pointer declarators.
 - `struct`, `union`, `enum` (with an underlying type), tagged unions,
   `newtype`, `typedef`, `typeof`.
 

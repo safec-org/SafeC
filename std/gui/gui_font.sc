@@ -154,14 +154,14 @@ int GuiFont::save(const &char path) const {
         header[15] = (unsigned char)((count >> 24) & 0xFFU);
     }
     int wrote;
-    unsafe { wrote = write_all(f, &header[0], 16UL); }
+    unsafe { wrote = write_all(f, header[0..16UL]); }
     if (!wrote) { f.close(); return 0; }
 
     int glyphW; int glyphH; int count;
     unsafe { glyphW = self.glyphW; glyphH = self.glyphH; count = self.count; }
     unsigned long total = (unsigned long)(__gui_font_bytes_per_glyph(glyphW, glyphH) * count);
     int bodyWrote;
-    unsafe { bodyWrote = write_all(f, (const &unsigned char)self.bitmap, total); }
+    unsafe { bodyWrote = write_all(f, ((const unsigned char*)self.bitmap)[0..total]); }
     f.close();
     return bodyWrote;
 }
@@ -173,7 +173,7 @@ int GuiFont::load(const &char path) {
 
     unsigned char header[16];
     int got;
-    unsafe { got = read_exact(f, &header[0], 16UL); }
+    unsafe { got = read_exact(f, header[0..16UL]); }
     if (!got) { f.close(); return 0; }
 
     int ok = 1;
@@ -199,7 +199,7 @@ int GuiFont::load(const &char path) {
     struct GuiFont loaded = GuiFont::new(glyphW, glyphH, (int)first, (int)count);
     unsigned long total = (unsigned long)(__gui_font_bytes_per_glyph(glyphW, glyphH) * (int)count);
     int bodyGot;
-    unsafe { bodyGot = read_exact(f, (&unsigned char)loaded.bitmap, total); }
+    unsafe { bodyGot = read_exact(f, ((unsigned char*)loaded.bitmap)[0..total]); }
     f.close();
     if (!bodyGot) {
         loaded.free();

@@ -16,28 +16,42 @@ namespace std {
 // odd so the kernel has a well-defined center tap); 'out' must have room
 // for h*w doubles (same size as 'img' — out-of-bounds kernel taps read as
 // zero, i.e. zero-padded boundary handling).
-void conv2d(const &double img, unsigned long h, unsigned long w,
-            const &double kernel, unsigned long kh, unsigned long kw, &double out);
+int conv2d([]const double img, unsigned long h, unsigned long w,
+            []const double kernel, unsigned long kh, unsigned long kw, []double out);
 
 // In-place 2D FFT/IFFT via row-column decomposition. Both h and w must
 // be powers of two (see fft.h).
-void fft2d(&Complex img, unsigned long h, unsigned long w);
-void ifft2d(&Complex img, unsigned long h, unsigned long w);
+int fft2d([]Complex img, unsigned long h, unsigned long w);
+int ifft2d([]Complex img, unsigned long h, unsigned long w);
 
 // Fills a size*size buffer (size should be odd) with a normalized
 // (sums to 1) 2D Gaussian kernel of standard deviation 'sigma'.
-void gaussian_kernel(&double kernel, unsigned long size, double sigma);
+int gaussian_kernel([]double kernel, unsigned long size, double sigma);
 
 // Fixed 3x3 Sobel gradient kernels (horizontal/vertical edge response);
 // 'kernel' must have room for 9 doubles, row-major.
-void sobel_x_kernel(&double kernel);
-void sobel_y_kernel(&double kernel);
+int sobel_x_kernel([]double kernel);
+int sobel_y_kernel([]double kernel);
 
 // Single precision: conv2d / fft2d / ifft2d on float and Complex32, same
 // contracts (kernels can come from the double helpers above, rounded).
-void conv2d_f32(const &float img, unsigned long h, unsigned long w,
+int conv2d_f32([]const float img, unsigned long h, unsigned long w,
+            []const float kernel, unsigned long kh, unsigned long kw, []float out);
+int fft2d_f32([]Complex32 img, unsigned long h, unsigned long w);
+int ifft2d_f32([]Complex32 img, unsigned long h, unsigned long w);
+
+// Internal: the (reference, length) forms the slice API above wraps
+// (std/dsp's own code calls these; not API).
+void conv2d_n_(const &double img, unsigned long h, unsigned long w,
+            const &double kernel, unsigned long kh, unsigned long kw, &double out);
+void conv2d_f32_n_(const &float img, unsigned long h, unsigned long w,
                 const &float kernel, unsigned long kh, unsigned long kw, &float out);
-void fft2d_f32(&Complex32 img, unsigned long h, unsigned long w);
-void ifft2d_f32(&Complex32 img, unsigned long h, unsigned long w);
+void fft2d_n_(&Complex img, unsigned long h, unsigned long w);
+void ifft2d_n_(&Complex img, unsigned long h, unsigned long w);
+void fft2d_f32_n_(&Complex32 img, unsigned long h, unsigned long w);
+void ifft2d_f32_n_(&Complex32 img, unsigned long h, unsigned long w);
+void gaussian_kernel_n_(&double kernel, unsigned long size, double sigma);
+void sobel_x_kernel_n_(&double kernel);
+void sobel_y_kernel_n_(&double kernel);
 
 } // namespace std

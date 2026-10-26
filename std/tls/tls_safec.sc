@@ -203,7 +203,7 @@ static void b16_(&Vec<unsigned char> v, unsigned int x) { b8_(v, x >> 8); b8_(v,
 static void b24_(&Vec<unsigned char> v, unsigned int x) { b8_(v, x >> 16); b8_(v, x >> 8); b8_(v, x); }
 static void bput_(&Vec<unsigned char> v, const unsigned char* p, unsigned long n) {
     if (n == 0UL) { return; }
-    unsafe { v.extend((const &unsigned char)p, n); }
+    unsafe { v.extend(p[0..n]); }
 }
 // Opens a length field of 'width' bytes; bclose_ fills it in.
 static unsigned long bopen_(&Vec<unsigned char> v, int width) {
@@ -277,9 +277,9 @@ static void t13_extract_(int h, const unsigned char* salt, unsigned long sl, con
                          unsigned char* out) {
     unsafe {
         if (h == DIGEST_SHA384) {
-            hkdf_extract(Sha512Ctx::new_384(), (const ?&unsigned char)salt, sl, (const &unsigned char)ikm, il, (&unsigned char)out);
+            hkdf_extract(Sha512Ctx::new_384(), salt[0..sl], ikm[0..il], out[0..48]);
         } else {
-            hkdf_extract(Sha256Ctx::new(), (const ?&unsigned char)salt, sl, (const &unsigned char)ikm, il, (&unsigned char)out);
+            hkdf_extract(Sha256Ctx::new(), salt[0..sl], ikm[0..il], out[0..32]);
         }
     }
 }
@@ -304,9 +304,9 @@ static void t13_expand_label_(int h, const unsigned char* secret, unsigned long 
         i = 0UL;
         while (i < cl) { info[n] = ctx[i]; n = n + 1UL; i = i + 1UL; }
         if (h == DIGEST_SHA384) {
-            hkdf_expand(Sha512Ctx::new_384(), (const &unsigned char)secret, sl, &info[0], n, (&unsigned char)out, ol);
+            hkdf_expand(Sha512Ctx::new_384(), secret[0..sl], info[0..n], out[0..ol]);
         } else {
-            hkdf_expand(Sha256Ctx::new(), (const &unsigned char)secret, sl, &info[0], n, (&unsigned char)out, ol);
+            hkdf_expand(Sha256Ctx::new(), secret[0..sl], info[0..n], out[0..ol]);
         }
     }
 }
@@ -323,20 +323,20 @@ static void t13_hmac_(int h, const unsigned char* key, unsigned long kl, const u
                       unsigned char* out) {
     unsafe {
         if (h == DIGEST_SHA384) {
-            struct Hmac<Sha512Ctx> m = Hmac::new(Sha512Ctx::new_384(), (const &unsigned char)key, kl);
-            m.update((const &unsigned char)data, dl);
-            m.finish((&unsigned char)out);
+            struct Hmac<Sha512Ctx> m = Hmac::new(Sha512Ctx::new_384(), key[0..kl]);
+            m.update(data[0..dl]);
+            m.finish(out[0..48]);
         } else {
-            struct Hmac<Sha256Ctx> m = Hmac::new(Sha256Ctx::new(), (const &unsigned char)key, kl);
-            m.update((const &unsigned char)data, dl);
-            m.finish((&unsigned char)out);
+            struct Hmac<Sha256Ctx> m = Hmac::new(Sha256Ctx::new(), key[0..kl]);
+            m.update(data[0..dl]);
+            m.finish(out[0..32]);
         }
     }
 }
 
 // Hash of the transcript so far.
 static void t13_tr_hash_(&T13_ t, unsigned char* out) {
-    unsafe { digest(t.hash, (const ?&unsigned char)t.tr.data, t.tr.len, (&unsigned char)out); }
+    unsafe { digest_n_(t.hash, (const ?&unsigned char)t.tr.data, t.tr.len, (&unsigned char)out); }
 }
 
 static void t13_set_aead_(&T13_ t, &T13Aead_ a, const unsigned char* secret) {
@@ -347,8 +347,8 @@ static void t13_set_aead_(&T13_ t, &T13Aead_ a, const unsigned char* secret) {
         t13_expand_label_(t.hash, secret, t.hlen, "iv", (const unsigned char*)0, 0UL, (unsigned char*)&a.iv[0], 12UL);
     }
     a.seq = 0ULL;
-    if (a.alg == T13_AES128_) { a.aes = AesCtx::new_128(&a.key[0]); }
-    else if (a.alg == T13_AES256_) { a.aes = AesCtx::new_256(&a.key[0]); }
+    if (a.alg == T13_AES128_) { a.aes = AesCtx::new_128_n_(&a.key[0]); }
+    else if (a.alg == T13_AES256_) { a.aes = AesCtx::new_256_n_(&a.key[0]); }
 }
 
 static void t13_set_read_(&T13_ t, const unsigned char* secret) {
@@ -388,10 +388,10 @@ static void t13_seal_(&T13Aead_ a, const unsigned char* hdr, unsigned char* data
     t13_nonce_(a, &nonce[0]);
     unsafe {
         if (a.alg == T13_CHACHA_) {
-            chacha20_poly1305_seal(&a.key[0], &nonce[0], (const ?&unsigned char)hdr, 5UL, (&unsigned char)data, len,
+            chacha20_poly1305_seal_n_(&a.key[0], &nonce[0], (const ?&unsigned char)hdr, 5UL, (&unsigned char)data, len,
                                    (&unsigned char)(data + len));
         } else {
-            a.aes.gcm_encrypt(&nonce[0], (const ?&unsigned char)hdr, 5UL, (&unsigned char)data, len, (&unsigned char)(data + len));
+            a.aes.gcm_encrypt_n_(&nonce[0], (const ?&unsigned char)hdr, 5UL, (&unsigned char)data, len, (&unsigned char)(data + len));
         }
     }
     a.seq = a.seq + 1ULL;
@@ -404,10 +404,10 @@ static int t13_open_(&T13Aead_ a, const unsigned char* hdr, unsigned char* data,
     int ok = 0;
     unsafe {
         if (a.alg == T13_CHACHA_) {
-            ok = chacha20_poly1305_open(&a.key[0], &nonce[0], (const ?&unsigned char)hdr, 5UL, (&unsigned char)data,
+            ok = chacha20_poly1305_open_n_(&a.key[0], &nonce[0], (const ?&unsigned char)hdr, 5UL, (&unsigned char)data,
                                         len - 16UL, (const &unsigned char)(data + len - 16UL));
         } else {
-            ok = a.aes.gcm_decrypt(&nonce[0], (const ?&unsigned char)hdr, 5UL, (&unsigned char)data, len - 16UL,
+            ok = a.aes.gcm_decrypt_n_(&nonce[0], (const ?&unsigned char)hdr, 5UL, (&unsigned char)data, len - 16UL,
                                    (const &unsigned char)(data + len - 16UL));
         }
     }
@@ -624,8 +624,8 @@ int tls_key_from_pem_(&TlsKey_ k, const &char pem, &TlsError e) {
     int ok = 0;
     match (der.data) {
         case some(d): {
-            if (kind != 2 && k.ec.init_der(d, der.len)) { k.type = TLS_KEY_EC_; ok = 1; }
-            else if (kind != 3 && k.rsa.init_der(d, der.len)) { k.type = TLS_KEY_RSA_; ok = 1; }
+            if (kind != 2 && k.ec.init_der_n_(d, der.len)) { k.type = TLS_KEY_EC_; ok = 1; }
+            else if (kind != 3 && k.rsa.init_der_n_(d, der.len)) { k.type = TLS_KEY_RSA_; ok = 1; }
         }
         case null: { }
     }
@@ -666,11 +666,11 @@ static unsigned long t13_cv_digest_(&T13_ t, int server_side, unsigned int schem
     unsigned char sp[64];
     int i = 0;
     while (i < 64) { sp[i] = (unsigned char)0x20; i = i + 1; }
-    c.update(&sp[0], 64UL);
+    c.update_n_(&sp[0], 64UL);
     const &char ctx = server_side ? "TLS 1.3, server CertificateVerify" : "TLS 1.3, client CertificateVerify";
-    unsafe { c.update((const &unsigned char)(const unsigned char*)ctx, str_len(ctx) + 1UL); }
-    c.update(&th[0], t.hlen);
-    unsafe { return c.finish((&unsigned char)out); }
+    unsafe { c.update_n_((const &unsigned char)(const unsigned char*)ctx, str_len(ctx) + 1UL); }
+    c.update_n_(&th[0], t.hlen);
+    unsafe { return c.finish_n_((&unsigned char)out); }
 }
 
 // Verifies a CertificateVerify from the peer (whose leaf is peer_chain[0]).
@@ -685,7 +685,7 @@ static int t13_check_cv_(&TlsStream s, &T13_ t, unsigned int scheme, const unsig
     unsigned char* der = vptr_(leaf);
     int ok = 0;
     unsafe {
-        if (x509_parse((const &unsigned char)der, leaf.len, &p) != 0) {
+        if (x509_parse_n_((const &unsigned char)der, leaf.len, &p) != 0) {
             return t13_fail_(s, TLS_ERR_CERT_INVALID, T13_A_BAD_CERT_, "peer certificate doesn't parse");
         }
         const unsigned char* key = der + p.key.off;
@@ -693,12 +693,12 @@ static int t13_check_cv_(&TlsStream s, &T13_ t, unsigned int scheme, const unsig
             int curve = scheme == 0x0403U ? EC_P256 : EC_P384;
             int kt = scheme == 0x0403U ? X509_KEY_EC_P256 : X509_KEY_EC_P384;
             if (p.key_type == kt) {
-                ok = ecdsa_verify_der(curve, (const &unsigned char)key, p.key.len, &h[0], hl, (const &unsigned char)sig, slen);
+                ok = ecdsa_verify_der_n_(curve, (const &unsigned char)key, p.key.len, &h[0], hl, (const &unsigned char)sig, slen);
             }
         } else if (p.key_type == X509_KEY_RSA) {
             struct RsaPublicKey k;
-            if (k.init_der((const &unsigned char)key, p.key.len)) {
-                ok = rsa_verify_pss(&k, t13_scheme_hash_(scheme), &h[0], hl, (const &unsigned char)sig, slen, hl);
+            if (k.init_der_n_((const &unsigned char)key, p.key.len)) {
+                ok = rsa_verify_pss_n_(&k, t13_scheme_hash_(scheme), &h[0], hl, (const &unsigned char)sig, slen, hl);
             }
         }
     }
@@ -734,9 +734,9 @@ static int t13_make_cv_(&TlsStream s, &T13_ t, const &TlsKey_ key, &Vec<unsigned
     unsigned long slen = 0UL;
     int ok = 0;
     if (key.type == TLS_KEY_EC_) {
-        ok = ecdsa_sign_der(key.ec.curve, &key.ec.d[0], &h[0], hl, &sig[0], (unsigned long)RSA_MAX_BYTES, &slen);
+        ok = ecdsa_sign_der_n_(key.ec.curve, &key.ec.d[0], &h[0], hl, &sig[0], (unsigned long)RSA_MAX_BYTES, &slen);
     } else {
-        ok = rsa_sign_pss(&key.rsa, t13_scheme_hash_(scheme), &h[0], hl, &t.rng, &sig[0], (unsigned long)RSA_MAX_BYTES, &slen);
+        ok = rsa_sign_pss_n_(&key.rsa, t13_scheme_hash_(scheme), &h[0], hl, &t.rng, &sig[0], (unsigned long)RSA_MAX_BYTES, &slen);
     }
     if (!ok) { return t13_fail_(s, TLS_ERR_INTERNAL, T13_A_INTERNAL_, "signing CertificateVerify failed"); }
     b8_(msg, (unsigned int)T13_CERT_VERIFY_);
@@ -834,15 +834,15 @@ static int t13_ec_curve_(unsigned int g) { return g == (unsigned int)T13_P384_ ?
 // Our key share for group g into msg (the key bytes only).
 static int t13_make_share_(&T13_ t, unsigned int g, &Vec<unsigned char> out) {
     if (g == (unsigned int)T13_X25519_) {
-        t.rng.fill(&t.x_priv[0], 32UL);
+        t.rng.fill_n_(&t.x_priv[0], 32UL);
         unsigned char pub[32];
-        x25519_public(&pub[0], &t.x_priv[0]);
+        x25519_public_n_(&pub[0], &t.x_priv[0]);
         bput_(out, &pub[0], 32UL);
         return 1;
     }
     int curve = t13_ec_curve_(g);
     unsigned char pub[EC_MAX_POINT];
-    if (!ec_keygen(curve, &t.rng, &t.ec_priv[0], &pub[0])) { return 0; }
+    if (!ec_keygen_n_(curve, &t.rng, &t.ec_priv[0], &pub[0])) { return 0; }
     t.ec_kx_group = (int)g;
     bput_(out, &pub[0], ec_point_size(curve));
     return 1;
@@ -853,12 +853,12 @@ static unsigned long t13_shared_(&T13_ t, unsigned int g, const unsigned char* p
     unsafe {
         if (g == (unsigned int)T13_X25519_) {
             if (plen != 32UL) { return 0UL; }
-            if (!x25519((&unsigned char)out, &t.x_priv[0], (const &unsigned char)peer)) { return 0UL; }
+            if (!x25519_n_((&unsigned char)out, &t.x_priv[0], (const &unsigned char)peer)) { return 0UL; }
             return 32UL;
         }
         int curve = t13_ec_curve_(g);
         if (t.ec_kx_group != (int)g) { return 0UL; }
-        if (!ecdh_shared(curve, &t.ec_priv[0], (const &unsigned char)peer, plen, (&unsigned char)out)) { return 0UL; }
+        if (!ecdh_shared_n_(curve, &t.ec_priv[0], (const &unsigned char)peer, plen, (&unsigned char)out)) { return 0UL; }
         return ec_scalar_size(curve);
     }
 }
@@ -874,7 +874,7 @@ static void t13_handshake_secrets_(&T13_ t, const unsigned char* shared, unsigne
     int i = 0;
     while (i < 48) { zeros[i] = (unsigned char)0; i = i + 1; }
     unsafe {
-        digest(t.hash, null, 0UL, &empty_hash[0]);
+        digest_n_(t.hash, null, 0UL, &empty_hash[0]);
         t13_extract_(t.hash, (const unsigned char*)0, 0UL, &zeros[0], t.hlen, &early[0]);
         t13_expand_label_(t.hash, &early[0], t.hlen, "derived", &empty_hash[0], t.hlen, &derived[0], t.hlen);
         t13_extract_(t.hash, &derived[0], t.hlen, shared, sl, &hs[0]);
@@ -884,8 +884,8 @@ static void t13_handshake_secrets_(&T13_ t, const unsigned char* shared, unsigne
         t13_expand_label_(t.hash, &hs[0], t.hlen, "derived", &empty_hash[0], t.hlen, &derived[0], t.hlen);
         t13_extract_(t.hash, &derived[0], t.hlen, &zeros[0], t.hlen, (unsigned char*)&t.master[0]);
     }
-    mem_zero_secure(&hs[0], 48UL);
-    mem_zero_secure(&early[0], 48UL);
+    mem_zero_secure(hs[0..48UL]);
+    mem_zero_secure(early[0..48UL]);
 }
 
 // c_ap / s_ap from the transcript through the server Finished.
@@ -907,7 +907,7 @@ static void t13_finished_(&T13_ t, const unsigned char* base, unsigned char* out
     }
     t13_tr_hash_(t, &th[0]);
     t13_hmac_(t.hash, &fk[0], t.hlen, &th[0], t.hlen, out);
-    mem_zero_secure(&fk[0], 48UL);
+    mem_zero_secure(fk[0..48UL]);
 }
 
 static void t13_put_finished_(&T13_ t, const unsigned char* base, &Vec<unsigned char> msg) {
@@ -923,7 +923,7 @@ static int t13_check_finished_(&TlsStream s, &T13_ t, const unsigned char* base,
     t13_finished_(t, base, &vd[0]);
     const unsigned char* got = rbytes_(r, t.hlen);
     int ok = 0;
-    unsafe { ok = !r.bad && rleft_(r) == 0UL && ct_eq((const &unsigned char)got, &vd[0], t.hlen); }
+    unsafe { ok = !r.bad && rleft_(r) == 0UL && ct_eq_n_((const &unsigned char)got, &vd[0], t.hlen); }
     if (!ok) { return t13_fail_(s, TLS_ERR_HANDSHAKE, T13_A_DECRYPT_, "the peer's Finished doesn't verify"); }
     return 0;
 }
@@ -1073,7 +1073,7 @@ static int t13_on_server_hello_(&TlsStream s, &T13_ t, &T13Rd_ r, const unsigned
         return t13_fail_(s, TLS_ERR_PROTOCOL, T13_A_ILLEGAL_PARAM_, "invalid ServerHello");
     }
     unsafe {
-        if (sid.n > 0UL && !ct_eq((const &unsigned char)sid.p, &t.sid[0], sid.n)) {
+        if (sid.n > 0UL && !ct_eq_n_((const &unsigned char)sid.p, &t.sid[0], sid.n)) {
             return t13_fail_(s, TLS_ERR_PROTOCOL, T13_A_ILLEGAL_PARAM_, "ServerHello session id mismatch");
         }
     }
@@ -1109,8 +1109,8 @@ static int t13_on_server_hello_(&TlsStream s, &T13_ t, &T13Rd_ r, const unsigned
     unsigned long sl = t13_shared_(t, group, key, keyLen, &shared[0]);
     if (sl == 0UL) { return t13_fail_(s, TLS_ERR_HANDSHAKE, T13_A_ILLEGAL_PARAM_, "invalid server key share"); }
     t13_handshake_secrets_(t, &shared[0], sl);
-    mem_zero_secure(&shared[0], 64UL);
-    mem_zero_secure(&t.x_priv[0], 32UL);
+    mem_zero_secure(shared[0..64UL]);
+    mem_zero_secure(t.x_priv[0..32UL]);
     t13_set_read_(t, &t.s_hs[0]);
     t.st = T13_C_WAIT_EE_;
     return 0;
@@ -1134,7 +1134,7 @@ static int t13_on_encrypted_extensions_(&TlsStream s, &T13_ t, &T13Rd_ r) {
             int found = 0;
             while (rleft_(&ours) > 0UL) {
                 struct T13Rd_ o = rvec_(&ours, 1);
-                unsafe { if (o.n == name.n && ct_eq((const &unsigned char)o.p, (const &unsigned char)name.p, o.n)) { found = 1; } }
+                unsafe { if (o.n == name.n && ct_eq_n_((const &unsigned char)o.p, (const &unsigned char)name.p, o.n)) { found = 1; } }
             }
             if (!found || name.n >= 64UL) {
                 return t13_fail_(s, TLS_ERR_HANDSHAKE, T13_A_ILLEGAL_PARAM_, "server selected an ALPN protocol we didn't offer");
@@ -1321,7 +1321,7 @@ static int t13_parse_ch_(&TlsStream s, &T13_ t, &T13Rd_ r, &T13Ch_ ch) {
             struct T13Rd_ host = rvec_(&list, 2);
             if (!list.bad && nt == 0U && host.n < 256UL) {
                 t.name.clear();
-                unsafe { t.name.push_n((const &char)(const char*)host.p, host.n); }
+                unsafe { t.name.push_n_((const &char)(const char*)host.p, host.n); }
             }
         }
     }
@@ -1413,7 +1413,7 @@ static int t13_on_client_hello_(&TlsStream s, &T13_ t, &T13Rd_ r, const unsigned
                 struct T13Rd_ theirs = ch.alpn;
                 while (rleft_(&theirs) > 0UL) {
                     struct T13Rd_ c = rvec_(&theirs, 1);
-                    if (!theirs.bad && c.n == o.n && o.n > 0UL && ct_eq((const &unsigned char)c.p, (const &unsigned char)o.p, o.n)) {
+                    if (!theirs.bad && c.n == o.n && o.n > 0UL && ct_eq_n_((const &unsigned char)c.p, (const &unsigned char)o.p, o.n)) {
                         bput_(&chosen, o.p, o.n);
                         break;
                     }
@@ -1431,7 +1431,7 @@ static int t13_on_client_hello_(&TlsStream s, &T13_ t, &T13Rd_ r, const unsigned
         t13_queue_record_(t, (unsigned int)T13_CT_CCS_, &ccs, 1UL, 1);
     }
     t13_handshake_secrets_(t, &shared[0], sl);
-    mem_zero_secure(&shared[0], 64UL);
+    mem_zero_secure(shared[0..64UL]);
     t13_set_write_(t, &t.s_hs[0]);
     t13_set_read_(t, &t.c_hs[0]);
     // EncryptedExtensions
@@ -1547,7 +1547,7 @@ static int t13_post_hs_(&TlsStream s, &T13_ t, unsigned int type, &T13Rd_ r) {
             unsafe { t13_expand_label_(t.hash, (const unsigned char*)&t.wr_secret[0], t.hlen, "traffic upd", (const unsigned char*)0, 0UL, &next[0], t.hlen); }
             t13_set_write_(t, &next[0]);
         }
-        mem_zero_secure(&next[0], 48UL);
+        mem_zero_secure(next[0..48UL]);
         return 0;
     }
     return t13_fail_(s, TLS_ERR_PROTOCOL, T13_A_UNEXPECTED_, "unexpected post-handshake message");
@@ -1653,8 +1653,8 @@ int tls_safec_client_(&TlsStream s, const &char name, const &TlsConfig cfg) {
             if (tls_key_from_pem_(&t.key, cfg.key_pem.as_ptr(), &s.err) != TLS_OK) { return TLS_ERR_CONFIG; }
             t.has_key = 1;
         }
-        t.rng.fill(&t.random[0], 32UL);
-        t.rng.fill(&t.sid[0], 32UL);
+        t.rng.fill_n_(&t.random[0], 32UL);
+        t.rng.fill_n_(&t.sid[0], 32UL);
         t.sid_len = 32UL;
         t.group = T13_X25519_;
     }
@@ -1727,7 +1727,7 @@ int tls_safec_accept_(&TlsStream s, const &TlsAcceptor a) {
         t->st = T13_S_WAIT_CH_;
         t->acc = (struct T13Acc_*)a.impl_;
         atomic_fetch_add_int(&t->acc->refs, 1);
-        t->rng.fill(&t->random[0], 32UL);
+        t->rng.fill_n_(&t->random[0], 32UL);
     }
     return TLS_OK;
 }
@@ -1906,7 +1906,7 @@ void tls_safec_free_(&TlsStream s) {
         tls_der_list_free_(&t.peer_chain);
         t.cr_context.free();
         if (t.acc != (struct T13Acc_*)0) { t13_acc_unref_(t.acc); }
-        mem_zero_secure((void*)tp, sizeof(struct T13_));
+        mem_zero_secure_raw_((void*)tp, sizeof(struct T13_));
         dealloc_raw_((void*)tp);
     }
     s.impl_ = null;

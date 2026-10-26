@@ -87,7 +87,7 @@ struct MultipartForm MultipartForm::parse(const &char content_type, const &unsig
         nextDelim.free();
         struct MultipartPart part;
         struct String rawHead = String::new();
-        unsafe { rawHead.push_n(&b[p], (unsigned long)hend - p); }
+        unsafe { rawHead.push_n_(&b[p], (unsigned long)hend - p); }
         part.headers = HttpHeaders::parse(rawHead.as_ptr());
         rawHead.free();
         const &char cd = part.headers.get_or("Content-Disposition", "");
@@ -103,7 +103,7 @@ struct MultipartForm MultipartForm::parse(const &char content_type, const &unsig
         }
         part.content_type = String::from(part.headers.get_or("Content-Type", "text/plain"));
         part.data = String::new();
-        unsafe { part.data.push_n(&b[bodyStart], bodyEnd - bodyStart); }
+        unsafe { part.data.push_n_(&b[bodyStart], bodyEnd - bodyStart); }
         f.parts.push(part);
     }
     if (!closed) { good = 0; }
@@ -170,7 +170,7 @@ struct MultipartBuilder MultipartBuilder::new() {
     unsafe { rok = rng.init(); }
     int i = 0;
     while (i < 12) { rnd[i] = (unsigned char)(i * 37 + 11); i = i + 1; }
-    if (rok) { unsafe { rng.fill(&rnd[0], 12UL); } }
+    if (rok) { unsafe { rng.fill_n_(&rnd[0], 12UL); } }
     const &char digits = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
     i = 0;
     while (i < 12) {
@@ -207,7 +207,7 @@ void MultipartBuilder::add_field(const &char name, const &char value) {
     self.body.push("\r\n");
 }
 
-void MultipartBuilder::add_file(const &char name, const &char filename, const &char content_type,
+void MultipartBuilder::add_file_n_(const &char name, const &char filename, const &char content_type,
                                 const &unsigned char data, unsigned long len) {
     self.body.push("--");
     self.body.push_str(&self.boundary);
@@ -218,8 +218,14 @@ void MultipartBuilder::add_file(const &char name, const &char filename, const &c
     self.body.push("\r\nContent-Type: ");
     self.body.push(content_type);
     self.body.push("\r\n\r\n");
-    unsafe { self.body.push_n((const char*)data, len); }
+    unsafe { self.body.push_n_((const char*)data, len); }
     self.body.push("\r\n");
+}
+
+void MultipartBuilder::add_file(const &char name, const &char filename, const &char content_type, []const unsigned char data_s) {
+    unsigned long len = data_s.len;
+    const &unsigned char data = crypto_in_(data_s, 0UL);
+    self.add_file_n_(name, filename, content_type, data, len);
 }
 
 struct String MultipartBuilder::content_type() const {

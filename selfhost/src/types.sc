@@ -77,6 +77,7 @@ int ty_ref(int base, int rgn, int arn, int flags) { return ty_make(TY_REF, base,
 int ty_array(int base, int n) { return ty_make(TY_ARRAY, base, n, 0, 0, -1); }
 int ty_array_f(int base, int n, int flags) { return ty_make(TY_ARRAY, base, n, 0, flags, -1); }
 int ty_slice(int base) { return ty_make(TY_SLICE, base, 0, 0, 0, -1); }
+int ty_slice_f(int base, int flags) { return ty_make(TY_SLICE, base, 0, 0, flags, -1); }
 int ty_opt(int base) { return ty_make(TY_OPT, base, 0, 0, 0, -1); }
 int ty_fn(int ret, int mark, int variadic) {
     int f = 0;

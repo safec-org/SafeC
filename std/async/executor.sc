@@ -7,13 +7,11 @@ namespace std {
 
 // ── TaskHeader ─────────────────────────────────────────────────────────────
 
-void task_header_init_(&TaskHeader hdr, void* poll, void* drop) {
+void task_header_init_(&TaskHeader hdr, fn int(?&TaskHeader, &Context) poll, fn void(?&TaskHeader) drop) {
     hdr.poll_ = poll;
     hdr.drop_ = drop;
-    unsafe {
-        hdr.exec_ = (void*)0;
-        hdr.wake_ = (void*)0;
-    }
+    hdr.exec_ = null;
+    hdr.wake_ = null;
     hdr.state = 0;
     hdr.next = null;
     hdr.joiner = WakerSlot::new();
@@ -51,33 +49,27 @@ void task_header_abort_(&TaskHeader hdr) {
         if ((st & ASYNC_TASK_ABORTED) == 0) async_fetch_and_(&hdr.state, ~ASYNC_TASK_ABORTED);
         return;
     }
-    unsafe {
-        if (hdr.wake_ != (void*)0) {
-            fn void(?&TaskHeader, unsigned long) f = (fn void(?&TaskHeader, unsigned long))hdr.wake_;
-            f(hdr, 0UL);
-        }
+    match (hdr.wake_) {
+        case some(f): f(hdr, 0UL);
+        case null: { }
     }
 }
 
 int context_spawn_raw_(&Context cx, ?&TaskHeader t) {
-    unsafe {
-        if (cx.spawn_ == (void*)0 || cx.exec_ == (void*)0) {
-            panic_at("std/async: async_spawn from a context without an executor", "std/async/executor.sc", 0);
-            return 0;
-        }
-        fn int(void*, ?&TaskHeader) f = (fn int(void*, ?&TaskHeader))cx.spawn_;
-        return f(cx.exec_, t);
+    match (cx.spawn_) {
+        case some(f): if (!cx.exec_.is_null()) return f(cx.exec_, t);
+        case null: { }
     }
+    panic_at("std/async: async_spawn from a context without an executor", "std/async/executor.sc", 0);
+    return 0;
 }
 
 // ── LocalExecutor ──────────────────────────────────────────────────────────
 
 static void local_unpark_(&LocalExecutor ex) {
-    unsafe {
-        if (ex.unpark_ != (void*)0) {
-            fn void(void*) f = (fn void(void*))ex.unpark_;
-            f(ex.park_);
-        }
+    match (ex.unpark_) {
+        case some(f): f(ex.park_);
+        case null: { }
     }
 }
 
@@ -124,12 +116,8 @@ static int local_spawn_thunk_(?&LocalExecutor exq, ?&TaskHeader t) {
 struct Context local_context_(&LocalExecutor ex, struct Waker w) {
     struct Context cx = Context::from_waker(w);
     cx.timers = &ex.timers;
-    fn int(?&LocalExecutor, ?&TaskHeader) sp = local_spawn_thunk_;
-    unsafe {
-        cx.io_ = ex.io_;
-        cx.exec_ = (void*)ex;
-        cx.spawn_ = (void*)sp;
-    }
+    cx.io_ = ex.io_;
+    context_set_spawn_(&cx, local_spawn_thunk_, (?&LocalExecutor)ex);
     return cx;
 }
 
@@ -141,11 +129,9 @@ struct LocalExecutor LocalExecutor::new() {
     ex.notified = 0;
     ex.root_woken = 0;
     ex.timers = TimerQueue::new();
-    unsafe {
-        ex.io_ = (void*)0;
-        ex.unpark_ = (void*)0;
-        ex.park_ = (void*)0;
-    }
+    ex.io_ = null;
+    ex.unpark_ = null;
+    ex.park_ = null;
     ex.polls = 0LL;
     return ex;
 }
@@ -153,15 +139,12 @@ struct LocalExecutor LocalExecutor::new() {
 int LocalExecutor::spawn_raw_(?&TaskHeader tq) {
     match (tq) {
         case some(t): {
-            unsafe {
-                if (t.exec_ != (void*)0) {
-                    panic_at("std/async: task spawned twice", "std/async/executor.sc", 0);
-                    return 0;
-                }
-                t.exec_ = (void*)self;
-                fn void(?&TaskHeader, unsigned long) wk = local_task_wake_;
-                t.wake_ = (void*)wk;
+            if (!t.exec_.is_null()) {
+                panic_at("std/async: task spawned twice", "std/async/executor.sc", 0);
+                return 0;
             }
+            unsafe { t.exec_ = (?&Erased)self; }
+            t.wake_ = local_task_wake_;
             t.next = null;
             match (self.tail) {
                 case some(last): last.next = t;
@@ -184,21 +167,14 @@ static int local_step_(&LocalExecutor ex, &TaskHeader t) {
     int st = async_fetch_and_(&t.state, ~ASYNC_TASK_NOTIFIED);
     if ((st & ASYNC_TASK_DONE) != 0) return 1;
     if ((st & ASYNC_TASK_ABORTED) != 0) {
-        unsafe {
-            fn void(?&TaskHeader) df = (fn void(?&TaskHeader))t.drop_;
-            df(t);
-        }
+        t.drop_(t);
         task_header_finish_(t, 1);
         return 1;
     }
     async_fetch_or_(&t.state, ASYNC_TASK_RUNNING);
     fn void(?&TaskHeader, unsigned long) wk = local_task_wake_;
     struct Context cx = local_context_(ex, Waker::new(wk, (?&TaskHeader)t, 0UL));
-    int done;
-    unsafe {
-        fn int(?&TaskHeader, &Context) pf = (fn int(?&TaskHeader, &Context))t.poll_;
-        done = pf(t, &cx);
-    }
+    int done = t.poll_(t, &cx);
     ex.polls = ex.polls + 1LL;
     async_fetch_and_(&t.state, ~ASYNC_TASK_RUNNING);
     if (done != 0) {
@@ -258,11 +234,6 @@ int LocalExecutor::live_count() const { return self.live; }
 
 int LocalExecutor::has_ready() const {
     return async_load_(&self.notified) != 0 ? 1 : 0;
-}
-
-void LocalExecutor::install_park_(void* unpark, void* park) {
-    self.unpark_ = unpark;
-    self.park_ = park;
 }
 
 // ── Park sources ───────────────────────────────────────────────────────────

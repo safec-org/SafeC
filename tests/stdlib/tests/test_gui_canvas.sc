@@ -33,7 +33,7 @@ static double alpha_sum(&GuiImage img) {
 }
 
 static void wipe(&GuiImage img) {
-    unsafe { safe_memset((void*)img.pixels, 0, (unsigned long)(img.width * img.height * 4)); }
+    unsafe { safe_memset(((unsigned char*)img.pixels)[0..(unsigned long)(img.width * img.height * 4)], 0); }
 }
 
 void t_rects() {
@@ -119,7 +119,7 @@ void t_fill_rules() {
         pts[i * 2 + 1] = 30.0f + 25.0f * sin_f(a);
         i = i + 1;
     }
-    p.polygon(&pts[0], 5);
+    p.polygon(pts[0..(5) * 2]);
     wipe(&img);
     c.fill_path(&p);
     ASSERT_EQ(ch(&img, 30, 31, 3), 255);
@@ -187,18 +187,18 @@ void t_strokes() {
     c.set_line_width(2.0f);
     float dash[2];
     dash[0] = 10.0f; dash[1] = 10.0f;
-    c.set_dash(&dash[0], 2, 0.0f);
+    c.set_dash(dash[0..2], 0.0f);
     c.draw_line(0.0f, 10.0f, 100.0f, 10.0f);
     ASSERT_EQ(ch(&img, 5, 10, 3), 255);
     ASSERT_EQ(ch(&img, 15, 10, 3), 0);
     ASSERT_EQ(ch(&img, 25, 10, 3), 255);
     ASSERT_TRUE(near((int)(alpha_sum(&img) + 0.5), 100, 1));
-    c.set_dash(&dash[0], 2, 5.0f);                     // offset shifts the pattern
+    c.set_dash(dash[0..2], 5.0f);                     // offset shifts the pattern
     wipe(&img);
     c.draw_line(0.0f, 10.0f, 100.0f, 10.0f);
     ASSERT_EQ(ch(&img, 2, 10, 3), 255);
     ASSERT_EQ(ch(&img, 7, 10, 3), 0);
-    c.set_dash(&dash[0], 0, 0.0f);
+    c.set_dash(dash[0..0], 0.0f);
 
     // stroke_to_path gives the same outline as a path.
     struct GuiPath out = GuiPath::new();

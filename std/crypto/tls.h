@@ -11,6 +11,7 @@
 // are wire-compatible with other TLS 1.3 stacks given the same traffic keys.
 // Freestanding-safe.
 #pragma once
+#include <std/crypto/buf.h>
 #include <std/crypto/aes.h>
 #include <std/crypto/sha256.h>
 
@@ -44,8 +45,10 @@ struct TlsRecord {
 struct TlsTranscript {
     struct Sha256Ctx hash;
 
-    void  update(const &unsigned char data, unsigned long len);
-    void  finish(unsigned char out[32]);
+    void  update([]const unsigned char data);
+    // internal: the (reference, length) core of update()
+    void  update_n_(const &unsigned char data, unsigned long len);
+    void  finish([]unsigned char out);   // 32 bytes (shorter panics)
 };
 
 // Record protection is TLS_AES_256_GCM_SHA384's AEAD: AES-256-GCM.
@@ -71,7 +74,9 @@ struct TlsSession {
     // AES-256-GCM sealed (outer type application_data, 16-byte tag).
     // Returns bytes written; 0 if it doesn't fit out_cap (no sequence
     // number is consumed then) or payload_len > TLS_MAX_RECORD_LEN.
-    unsigned long encode_record(unsigned char content_type,
+    unsigned long encode_record(unsigned char content_type, []const unsigned char payload, []unsigned char out);
+    // internal: the (reference, length) core of encode_record()
+    unsigned long encode_record_n_(unsigned char content_type,
                                  const &unsigned char payload,
                                  unsigned long payload_len,
                                  &unsigned char out,
@@ -81,14 +86,18 @@ struct TlsSession {
     // *content_type_out and writes the payload into `out`. Protected
     // records are authenticated first: a forged or corrupted record, like
     // insufficient data, returns 0 without advancing read_seq.
-    unsigned long decode_record(const &unsigned char data,
+    unsigned long decode_record([]const unsigned char data, &unsigned char content_type_out, []unsigned char out);
+    // internal: the (reference, length) core of decode_record()
+    unsigned long decode_record_n_(const &unsigned char data,
                                  unsigned long data_len,
                                  &unsigned char content_type_out,
                                  &unsigned char out,
                                  unsigned long out_cap);
 
     // Build a TLS Alert record into `out`.  Returns bytes written.
-    unsigned long build_alert(unsigned char level,
+    unsigned long build_alert(unsigned char level, unsigned char desc, []unsigned char out);
+    // internal: the (reference, length) core of build_alert()
+    unsigned long build_alert_n_(unsigned char level,
                                unsigned char desc,
                                &unsigned char out,
                                unsigned long out_cap);

@@ -8,7 +8,10 @@
 namespace std {
 
 unsigned short tcp_checksum(unsigned int src_ip, unsigned int dst_ip,
-                             const &unsigned char tcp_seg, unsigned long seg_len) {
+                             []const unsigned char tcp_seg_s) {
+    unsigned long seg_len = tcp_seg_s.len;
+    const &unsigned char tcp_seg;
+    unsafe { tcp_seg = (const &unsigned char)tcp_seg_s.ptr; }
     unsigned long sum = (unsigned long)0;
     // Pseudo-header: src_ip, dst_ip, 0x00, proto=6, tcp_length
     unsafe {
@@ -221,7 +224,11 @@ int TcpConn::recv(&PacketBuf pkt, unsigned long tcp_offset) {
     return 0;
 }
 
-inline unsigned long TcpConn::send(const &unsigned char data, unsigned long len) {
+inline unsigned long TcpConn::send([]const unsigned char data_s) {
+    unsigned long len = data_s.len;
+    if (len == 0UL) { return 0UL; }
+    const &unsigned char data;
+    unsafe { data = (const &unsigned char)data_s.ptr; }
     unsigned long space = (unsigned long)TCP_TX_BUF - self.tx_len;
     if (len > space) { len = space; }
     unsafe {
@@ -291,9 +298,7 @@ int TcpConn::build_segment(&PacketBuf pkt,
             i = i + (unsigned long)1;
         }
         // Fill checksum.
-        unsigned short csum = tcp_checksum(self.local_ip, self.remote_ip,
-                                           (const unsigned char*)d,
-                                           total_tcp);
+        unsigned short csum = tcp_checksum(self.local_ip, self.remote_ip, ((const unsigned char*)d)[0..total_tcp]);
         unsigned short csum_n = (csum);
         d[16] = (unsigned char)((csum_n >> 8) & (unsigned short)0xFF);
         d[17] = (unsigned char)(csum_n & (unsigned short)0xFF);
@@ -320,7 +325,11 @@ inline int TcpConn::rx_ready() const {
     return 0;
 }
 
-inline unsigned long TcpConn::read(&unsigned char out, unsigned long len) {
+inline unsigned long TcpConn::read([]unsigned char out_s) {
+    unsigned long len = out_s.len;
+    if (len == 0UL) { return 0UL; }
+    &unsigned char out;
+    unsafe { out = (&unsigned char)out_s.ptr; }
     if (len > self.rx_len) { len = self.rx_len; }
     unsafe {
         unsigned long i = (unsigned long)0;

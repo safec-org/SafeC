@@ -48,9 +48,10 @@ namespace std {
 struct GuiAppWindow {
     &GuiWindow win;
     ?&GuiUi ui;
-    void* onEvent;  void* onEventData;    // fn int(&GuiApp, &GuiWindow, &GuiEvent, ?&T)
-    void* onDraw;   void* onDrawData;     // fn void(&GuiApp, &GuiWindow, &GuiCanvas, ?&T)
-    void* onFrame;  void* onFrameData;    // fn int(&GuiApp, &GuiWindow, double, ?&T)
+    // The callbacks with their contexts, erased (see std/erased.h).
+    ?fn int(&struct GuiApp, &GuiWindow, &GuiEvent, ?&Erased)  onEvent; ?&Erased onEventData;
+    ?fn void(&struct GuiApp, &GuiWindow, &GuiCanvas, ?&Erased) onDraw; ?&Erased onDrawData;
+    ?fn int(&struct GuiApp, &GuiWindow, double, ?&Erased)     onFrame; ?&Erased onFrameData;
     struct GuiCanvas canvas;
     int canvasReady;
     int dirty;
@@ -61,8 +62,8 @@ struct GuiTimer {
     unsigned int id;
     double due;
     double interval;      // 0: one-shot
-    void* cb;             // fn void(&GuiApp, unsigned int, ?&T)
-    void* data;
+    ?fn void(&struct GuiApp, unsigned int, ?&Erased) cb;   // erased (see std/erased.h)
+    ?&Erased data;
     int dead;
 };
 
@@ -101,14 +102,14 @@ struct GuiApp {
     generic<T> void on_draw(&GuiWindow win, fn void(&GuiApp, &GuiWindow, &GuiCanvas, ?&T) cb, ?&T data);
     // Animation: called every frame with the time in ms while it returns 1.
     generic<T> void on_frame(&GuiWindow win, fn int(&GuiApp, &GuiWindow, double, ?&T) cb, ?&T data);
-    void on_event_raw_(&GuiWindow win, void* cb, void* data);
-    void on_draw_raw_(&GuiWindow win, void* cb, void* data);
-    void on_frame_raw_(&GuiWindow win, void* cb, void* data);
+    void on_event_raw_(&GuiWindow win, fn int(&GuiApp, &GuiWindow, &GuiEvent, ?&Erased) cb, ?&Erased data);
+    void on_draw_raw_(&GuiWindow win, fn void(&GuiApp, &GuiWindow, &GuiCanvas, ?&Erased) cb, ?&Erased data);
+    void on_frame_raw_(&GuiWindow win, fn int(&GuiApp, &GuiWindow, double, ?&Erased) cb, ?&Erased data);
 
     // ── timers ───────────────────────────────────────────────────────────
     generic<T> unsigned int set_timeout(double ms, fn void(&GuiApp, unsigned int, ?&T) cb, ?&T data);
     generic<T> unsigned int set_interval(double ms, fn void(&GuiApp, unsigned int, ?&T) cb, ?&T data);
-    unsigned int add_timer_raw_(double ms, int repeat, void* cb, void* data);
+    unsigned int add_timer_raw_(double ms, int repeat, fn void(&GuiApp, unsigned int, ?&Erased) cb, ?&Erased data);
     void cancel_timer(unsigned int id);
 
     // ── the loop ─────────────────────────────────────────────────────────
@@ -131,27 +132,27 @@ struct GuiApp {
 
 generic<T>
 void GuiApp::on_event(&GuiWindow win, fn int(&GuiApp, &GuiWindow, &GuiEvent, ?&T) cb, ?&T data) {
-    unsafe { self.on_event_raw_(win, (void*)cb, (void*)data); }
+    unsafe { self.on_event_raw_(win, (fn int(&GuiApp, &GuiWindow, &GuiEvent, ?&Erased))cb, (?&Erased)data); }
 }
 
 generic<T>
 void GuiApp::on_draw(&GuiWindow win, fn void(&GuiApp, &GuiWindow, &GuiCanvas, ?&T) cb, ?&T data) {
-    unsafe { self.on_draw_raw_(win, (void*)cb, (void*)data); }
+    unsafe { self.on_draw_raw_(win, (fn void(&GuiApp, &GuiWindow, &GuiCanvas, ?&Erased))cb, (?&Erased)data); }
 }
 
 generic<T>
 void GuiApp::on_frame(&GuiWindow win, fn int(&GuiApp, &GuiWindow, double, ?&T) cb, ?&T data) {
-    unsafe { self.on_frame_raw_(win, (void*)cb, (void*)data); }
+    unsafe { self.on_frame_raw_(win, (fn int(&GuiApp, &GuiWindow, double, ?&Erased))cb, (?&Erased)data); }
 }
 
 generic<T>
 unsigned int GuiApp::set_timeout(double ms, fn void(&GuiApp, unsigned int, ?&T) cb, ?&T data) {
-    unsafe { return self.add_timer_raw_(ms, 0, (void*)cb, (void*)data); }
+    unsafe { return self.add_timer_raw_(ms, 0, (fn void(&GuiApp, unsigned int, ?&Erased))cb, (?&Erased)data); }
 }
 
 generic<T>
 unsigned int GuiApp::set_interval(double ms, fn void(&GuiApp, unsigned int, ?&T) cb, ?&T data) {
-    unsafe { return self.add_timer_raw_(ms, 1, (void*)cb, (void*)data); }
+    unsafe { return self.add_timer_raw_(ms, 1, (fn void(&GuiApp, unsigned int, ?&Erased))cb, (?&Erased)data); }
 }
 
 } // namespace std

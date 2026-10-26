@@ -44,7 +44,10 @@ inline void PoolAllocator::reset() {
     }
 }
 
-inline struct PoolAllocator PoolAllocator::over(&unsigned char buffer, unsigned long cap) {
+inline struct PoolAllocator PoolAllocator::over([]unsigned char buffer_s) {
+    unsigned long cap = buffer_s.len;
+    &unsigned char buffer;
+    unsafe { buffer = (&unsigned char)buffer_s.ptr; }
     struct PoolAllocator a;
     unsafe { a.base = (&heap void)buffer; }
     a.owned = 0;

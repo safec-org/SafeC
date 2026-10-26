@@ -48,7 +48,7 @@ struct HttpCtx {
     struct Vec<struct RouteParam> params;
     int       route_index;             // index of the matched route, -1 if none
     long long start_ns;                // when dispatch began (monotonic clock)
-    void*     router_;                 // internal
+    ?&Erased  router_;                 // internal: the Router
 
     // A captured path parameter (":name" / "*name"; "*" for a bare
     // wildcard), percent-decoded, or null.
@@ -62,8 +62,8 @@ typedef fn struct HttpResponse(&HttpRequest req, &HttpCtx ctx) RouteHandler;
 
 // The rest of the middleware chain.
 struct HttpNext {
-    void* router_;   // internal
-    int   index_;    // internal: next middleware to run
+    ?&Erased router_;   // internal: the Router
+    int      index_;    // internal: next middleware to run
 
     struct HttpResponse run(&HttpRequest req, &HttpCtx ctx);
 };
@@ -90,7 +90,7 @@ struct Router {
     struct String                 cors_headers;
     unsigned long                 body_limit;
     unsigned long                 gzip_min;
-    void*                         state;          // set_state / router_state
+    ?&Erased                      state;          // set_state / router_state (erased, see std/erased.h)
 
     static struct Router new();
 
@@ -147,7 +147,7 @@ struct Router {
 // Stores/reads the router's one application pointer (shared by every
 // request; synchronize it yourself if handlers mutate what it points at).
 generic<T>
-void router_set_state(&Router r, ?&T state) { unsafe { r.state = (void*)state; } }
+void router_set_state(&Router r, ?&T state) { unsafe { r.state = (?&Erased)state; } }
 generic<T>
 ?&T router_state(&HttpCtx ctx) {
     unsafe {

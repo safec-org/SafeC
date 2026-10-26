@@ -121,23 +121,23 @@ void t_rfc8448() {
         char h[200];
         hb("49af42ba7f7994852d713ef2784bcbcaa7911de26adc5642cb634540e7ea5005", cpriv);
         hb("c9828876112095fe66762bdbf7c672e156d6cc253b833df1dd69b1b04e751f0f", spub);
-        x25519_public(pub, cpriv);
+        x25519_public(pub[..], cpriv[..]);
         hx(pub, 32UL, h);
         ASSERT_STR_EQ(h, "99381de560e4bd43d23d8e435a7dbafeb3c06e51c13cae4d5413691e529aaf2c");
-        ASSERT_EQ(x25519(shared, cpriv, spub), 1);
+        ASSERT_EQ(x25519(shared[..], cpriv[..], spub[..]), 1);
         hx(shared, 32UL, h);
         ASSERT_STR_EQ(h, "8bd4054fb55b9d63fdfbacf9f04b9f0d35e6d63f537563efd46272900f89492d");
         unsigned char zeros[32]; unsigned char early[32]; unsigned char empty[32]; unsigned char derived[32];
         unsigned char hs[32]; unsigned char th[32]; unsigned char t[32];
         int i = 0; while (i < 32) { zeros[i] = (unsigned char)0; i = i + 1; }
-        hkdf_extract(Sha256Ctx::new(), null, 0UL, zeros, 32UL, early);
+        hkdf_extract(Sha256Ctx::new(), str_bytes(""), ((const unsigned char*)zeros)[0..32UL], early[..]);
         hx(early, 32UL, h);
         ASSERT_STR_EQ(h, "33ad0a1c607ec03b09e6cd9893680ce210adf300aa1f2660e1b22e10f170f92a");
-        sha256((const unsigned char*)"", 0UL, empty);
+        sha256(str_bytes(""), empty[..]);
         tls13_expand_label_(DIGEST_SHA256, early, 32UL, "derived", empty, 32UL, derived, 32UL);
         hx(derived, 32UL, h);
         ASSERT_STR_EQ(h, "6f2615a108c702c5678f54fc9dbab69716c076189c48250cebeac3576c3611ba");
-        hkdf_extract(Sha256Ctx::new(), derived, 32UL, shared, 32UL, hs);
+        hkdf_extract(Sha256Ctx::new(), ((const unsigned char*)derived)[0..32UL], ((const unsigned char*)shared)[0..32UL], hs[..]);
         hx(hs, 32UL, h);
         ASSERT_STR_EQ(h, "1dc826e93606aa6fdc0aadc12f741b01046aa6b99f691ed221a9f0ca043fbeac");
         // Transcript-Hash(ClientHello, ServerHello) from the trace.
@@ -150,7 +150,7 @@ void t_rfc8448() {
         ASSERT_STR_EQ(h, "b67b7d690cc16c4e75e54213cb2d37b4e9c912bcded9105d42befd59d391ad38");
         tls13_expand_label_(DIGEST_SHA256, hs, 32UL, "derived", empty, 32UL, derived, 32UL);
         unsigned char master[32];
-        hkdf_extract(Sha256Ctx::new(), derived, 32UL, zeros, 32UL, master);
+        hkdf_extract(Sha256Ctx::new(), ((const unsigned char*)derived)[0..32UL], ((const unsigned char*)zeros)[0..32UL], master[..]);
         hx(master, 32UL, h);
         ASSERT_STR_EQ(h, "18df06843d13a08bf2a449844c5f8a478001bc4d4c627984d5a41da8d0402919");
         // The server handshake traffic key and IV (AES-128-GCM).
@@ -181,10 +181,10 @@ void t_x509() {
         struct X509Parsed ica;
         &Vec<unsigned char> l = c.at(0UL);
         &Vec<unsigned char> i = c.at(1UL);
-        const &unsigned char ld = (const &unsigned char)(const unsigned char*)l.data;
-        const &unsigned char id = (const &unsigned char)(const unsigned char*)i.data;
-        ASSERT_EQ(x509_parse(ld, l.len, &leaf), 0);
-        ASSERT_EQ(x509_parse(id, i.len, &ica), 0);
+        []const unsigned char ld = ((const unsigned char*)l.data)[0..l.len];
+        []const unsigned char id = ((const unsigned char*)i.data)[0..i.len];
+        ASSERT_EQ(x509_parse(ld[0..l.len], &leaf), 0);
+        ASSERT_EQ(x509_parse(id[0..i.len], &ica), 0);
         ASSERT_EQ(leaf.key_type, X509_KEY_EC_P256);
         ASSERT_EQ(leaf.sig_type, X509_SIG_ECDSA);
         ASSERT_EQ(leaf.sig_hash, DIGEST_SHA384);
@@ -195,24 +195,24 @@ void t_x509() {
         ASSERT_TRUE(leaf.has_eku && leaf.eku_server && !leaf.eku_client);
         ASSERT_TRUE((leaf.key_usage & X509_KU_DIGITAL_SIGNATURE) != 0);
         ASSERT_TRUE(leaf.not_after > 4000000000ULL);   // ~2122: GeneralizedTime
-        ASSERT_EQ(x509_issued_by(ld, &leaf, id, &ica), 1);
-        ASSERT_EQ(x509_verify_signed_by(ld, &leaf, id, &ica), 1);
-        ASSERT_EQ(x509_verify_signed_by(id, &ica, ld, &leaf), 0);
+        ASSERT_EQ(x509_issued_by(ld[..], &leaf, id[..], &ica), 1);
+        ASSERT_EQ(x509_verify_signed_by(ld[..], &leaf, id[..], &ica), 1);
+        ASSERT_EQ(x509_verify_signed_by(id[..], &ica, ld[..], &leaf), 0);
         // host names: SAN DNS (exact, wildcard), IPv4, IPv6; no CN fallback with SANs
-        ASSERT_EQ(x509_match_host(ld, &leaf, "localhost"), 1);
-        ASSERT_EQ(x509_match_host(ld, &leaf, "LocalHost."), 1);
-        ASSERT_EQ(x509_match_host(ld, &leaf, "a.test.example"), 1);
-        ASSERT_EQ(x509_match_host(ld, &leaf, "a.b.test.example"), 0);
-        ASSERT_EQ(x509_match_host(ld, &leaf, "test.example"), 0);
-        ASSERT_EQ(x509_match_host(ld, &leaf, "127.0.0.1"), 1);
-        ASSERT_EQ(x509_match_host(ld, &leaf, "127.0.0.2"), 0);
-        ASSERT_EQ(x509_match_host(ld, &leaf, "::1"), 1);
-        ASSERT_EQ(x509_match_host(ld, &leaf, "[0:0::1]"), 1);
-        ASSERT_EQ(x509_match_host(ld, &leaf, "::2"), 0);
-        ASSERT_EQ(x509_match_host(ld, &leaf, "example.com"), 0);
+        ASSERT_EQ(x509_match_host(ld[..], &leaf, "localhost"), 1);
+        ASSERT_EQ(x509_match_host(ld[..], &leaf, "LocalHost."), 1);
+        ASSERT_EQ(x509_match_host(ld[..], &leaf, "a.test.example"), 1);
+        ASSERT_EQ(x509_match_host(ld[..], &leaf, "a.b.test.example"), 0);
+        ASSERT_EQ(x509_match_host(ld[..], &leaf, "test.example"), 0);
+        ASSERT_EQ(x509_match_host(ld[..], &leaf, "127.0.0.1"), 1);
+        ASSERT_EQ(x509_match_host(ld[..], &leaf, "127.0.0.2"), 0);
+        ASSERT_EQ(x509_match_host(ld[..], &leaf, "::1"), 1);
+        ASSERT_EQ(x509_match_host(ld[..], &leaf, "[0:0::1]"), 1);
+        ASSERT_EQ(x509_match_host(ld[..], &leaf, "::2"), 0);
+        ASSERT_EQ(x509_match_host(ld[..], &leaf, "example.com"), 0);
         // the X509Cert summary works on the same bytes
         struct X509Cert sum;
-        ASSERT_EQ(sum.init(ld, l.len), 0);
+        ASSERT_EQ(sum.init(ld[0..l.len]), 0);
         ASSERT_STR_EQ(sum.subject.cn, "localhost");
         ASSERT_STR_EQ(sum.issuer.cn, "SafeC Test Intermediate");
         // RSA-PSS signed leaf
@@ -224,22 +224,22 @@ void t_x509() {
         &Vec<unsigned char> rr = root.at(0UL);
         struct X509Parsed rp;
         struct X509Parsed rootp;
-        const &unsigned char rld = (const &unsigned char)(const unsigned char*)rl.data;
-        const &unsigned char rrd = (const &unsigned char)(const unsigned char*)rr.data;
-        ASSERT_EQ(x509_parse(rld, rl.len, &rp), 0);
-        ASSERT_EQ(x509_parse(rrd, rr.len, &rootp), 0);
+        []const unsigned char rld = ((const unsigned char*)rl.data)[0..rl.len];
+        []const unsigned char rrd = ((const unsigned char*)rr.data)[0..rr.len];
+        ASSERT_EQ(x509_parse(rld[0..rl.len], &rp), 0);
+        ASSERT_EQ(x509_parse(rrd[0..rr.len], &rootp), 0);
         ASSERT_EQ(rp.sig_type, X509_SIG_RSA_PSS);
         ASSERT_EQ(rp.sig_hash, DIGEST_SHA256);
         ASSERT_EQ(rp.pss_salt, 32);
         ASSERT_EQ(rp.key_type, X509_KEY_RSA);
-        ASSERT_EQ(x509_verify_signed_by(rld, &rp, rrd, &rootp), 1);
-        ASSERT_EQ(x509_verify_signed_by(id, &ica, rrd, &rootp), 1);
+        ASSERT_EQ(x509_verify_signed_by(rld[..], &rp, rrd[..], &rootp), 1);
+        ASSERT_EQ(x509_verify_signed_by(id[..], &ica, rrd[..], &rootp), 1);
         // corrupt the signature
         unsigned char* p = (unsigned char*)l.data;
         p[leaf.sig.off + 10UL] = p[leaf.sig.off + 10UL] ^ (unsigned char)1;
-        ASSERT_EQ(x509_verify_signed_by(ld, &leaf, id, &ica), 0);
+        ASSERT_EQ(x509_verify_signed_by(ld[..], &leaf, id[..], &ica), 0);
         // truncated DER doesn't parse
-        ASSERT_TRUE(x509_parse(ld, l.len - 5UL, &leaf) != 0);
+        ASSERT_TRUE(x509_parse(ld[0..l.len - 5UL], &leaf) != 0);
         tls_der_list_free_(&c);
         tls_der_list_free_(&r);
         tls_der_list_free_(&root);
@@ -375,13 +375,13 @@ static ?&void run_tls_server(?&void arg) {
             }
             struct TlsStream t = r.value;
             unsigned char buf[2048];
-            long long k = t.read(&buf[0], 2000UL);
+            long long k = t.read(buf[0..2000UL]);
             char out[600];
             struct X509Cert pc;
             int hasPeer = t.peer_certificate(&pc);
             sprintf(out, "HTTP/1.0 200 OK\r\n\r\nhello via %s %s alpn=%s peer=%s req=%lld\n", t.backend_name(), t.cipher(),
                     t.alpn(), hasPeer ? (const char*)&pc.subject.cn[0] : (const char*)"-", k);
-            t.write((const &unsigned char)(const unsigned char*)&out[0], str_len((const char*)&out[0]));
+            t.write(out[0..str_len((const char*)&out[0])]);
             t.close();
         }
         close(lfd);
@@ -461,11 +461,11 @@ static int client_req(int port, int backend, const &char host, const &char root,
     }
     unsafe {
         const &char req = "GET / HTTP/1.0\r\n\r\n";
-        t.write((const &unsigned char)req, str_len(req));
+        t.write(str_bytes(req));
         unsigned char buf[16384];
         long long total = 0LL;
         while (total < 16000LL) {
-            long long n = t.read(&buf[total], 16000UL - (unsigned long)total);
+            long long n = t.read(buf[(unsigned long)total..16000UL]);
             if (n <= 0LL) { if (n < 0LL && total == 0LL) { code = t.last_error().code; if (code == 0) code = TLS_ERR_IO; } break; }
             total = total + n;
         }
@@ -535,13 +535,13 @@ void t_nonblocking() {
         ASSERT_EQ(t.version(), TLS_VERSION_1_3);
         const &char req = "GET / HTTP/1.0\r\n\r\n";
         long long w = TLS_WANT_WRITE;
-        while (w == (long long)TLS_WANT_WRITE || w == (long long)TLS_WANT_READ) { w = t.write((const &unsigned char)req, str_len(req)); }
+        while (w == (long long)TLS_WANT_WRITE || w == (long long)TLS_WANT_READ) { w = t.write(str_bytes(req)); }
         ASSERT_EQ(w, (long long)str_len(req));
         unsigned char buf[2048];
         long long n = TLS_WANT_READ;
         spins = 0;
         while ((n == (long long)TLS_WANT_READ || n == (long long)TLS_WANT_WRITE) && spins < 5000) {
-            n = t.read(&buf[0], 2000UL);
+            n = t.read(buf[0..2000UL]);
             thread_sleep_ms(1UL);
             spins = spins + 1;
         }
@@ -718,7 +718,7 @@ static struct HttpResponse route_handler(&HttpRequest req, &HttpCtx ctx) {
             struct WsMessage m;
             if (c.recv_message(&m, 0UL)) {
                 match (m.data) {
-                    case some(d): { c.send_binary(d, m.len); }
+                    case some(d): { unsafe { c.send_binary(((const unsigned char*)d)[0..m.len]); } }
                     case null: { }
                 }
                 m.free();
@@ -763,7 +763,7 @@ void t_https() {
             sprintf(url, "https://localhost:%d/redirect", (int)srv.port);
             int fok = 0;
             struct String fin = String::new();
-            struct HttpResponse r = http_fetch("GET", url, null, null, 0UL, &o, &fin, &fok);
+            struct HttpResponse r = http_fetch("GET", url, null, str_bytes(""), &o, &fin, &fok);
             ASSERT_TRUE(fok);
             ASSERT_EQ(r.status, 200);
             ASSERT_STR_EQ(r.body.as_ptr(), "hello over tls");
@@ -771,13 +771,13 @@ void t_https() {
             r.free();
             fin.free();
             sprintf(url, "https://127.0.0.1:%d/echo", (int)srv.port);
-            r = http_fetch("POST", url, "Content-Type: text/plain\r\n", (const unsigned char*)"posted body", 11UL, &o, null, &fok);
+            r = http_fetch("POST", url, "Content-Type: text/plain\r\n", str_bytes("posted body"), &o, null, &fok);
             ASSERT_TRUE(fok);
             ASSERT_STR_EQ(r.body.as_ptr(), "posted body");
             r.free();
             // a name the certificate doesn't have
             sprintf(url, "https://127.0.0.2:%d/hello", (int)srv.port);
-            r = http_fetch("GET", url, null, null, 0UL, &o, null, &fok);
+            r = http_fetch("GET", url, null, str_bytes(""), &o, null, &fok);
             ASSERT_FALSE(fok);
             ASSERT_EQ(te.code, TLS_ERR_CERT_HOSTNAME);
             r.free();
@@ -794,7 +794,7 @@ void t_https() {
         sprintf(url, "http://localhost:%d/hello", (int)srv.port);
         struct HttpClientOptions o2 = HttpClientOptions::defaults();
         o2.io_timeout_ms = 3000;
-        r = http_fetch("GET", url, null, null, 0UL, &o2, null, &fok);
+        r = http_fetch("GET", url, null, str_bytes(""), &o2, null, &fok);
         ASSERT_FALSE(fok && r.status == 200);
         r.free();
         srv.stop();

@@ -38,14 +38,16 @@ struct SpirvBuf {
     void free();          // back to the cache; handle := 0
     // Copies the first 'bytes' (<= this.bytes, whole 32-bit words) into
     // 'dst' once the queued work is done (waits). 1 = done.
-    int  read(&void dst, unsigned long bytes) const;
-    // Copies 'bytes' (<= this.bytes, whole 32-bit words) from 'src' into the
+    int  read([]unsigned char dst) const;
+    // Copies src.len bytes (<= this.bytes, whole 32-bit words) from 'src' into the
     // buffer, in order with the queued work (ops queued before it read the
     // old contents). 1 = done.
-    int  write(const &void src, unsigned long bytes);
+    int  write([]const unsigned char src);
 
     static struct SpirvBuf alloc(unsigned long n, int dtype);       // n uninitialized elements
-    static struct SpirvBuf upload(const &float host, unsigned long n);          // n fp32 values
+    static struct SpirvBuf upload([]const float host);
+    // internal: the (reference, length) core of upload()
+    static struct SpirvBuf upload_n_(const &float host, unsigned long n);          // n fp32 values
 };
 
 // ── Ops on device buffers (fp32, n elements; queued, no wait) ───────────────
@@ -73,18 +75,42 @@ int spirv_sync();
 
 // ── Host arrays: upload, one op, read back (waits) ──────────────────────────
 // 1 = done on the GPU, 0 = no device (out untouched): compute on the CPU.
-int spirv_add_f32(const &float a, const &float b, &float out, unsigned long n);
-int spirv_sub_f32(const &float a, const &float b, &float out, unsigned long n);
-int spirv_mul_f32(const &float a, const &float b, &float out, unsigned long n);
-int spirv_div_f32(const &float a, const &float b, &float out, unsigned long n);
-int spirv_pow_f32(const &float a, const &float b, &float out, unsigned long n);
-int spirv_relu_f32(const &float a, &float out, unsigned long n);
-int spirv_log_f32(const &float a, &float out, unsigned long n);
-int spirv_exp_f32(const &float a, &float out, unsigned long n);
-int spirv_sqrt_f32(const &float a, &float out, unsigned long n);
-int spirv_scale_f32(const &float a, float k, &float out, unsigned long n);
-int spirv_sum_f32(const &float a, &float out, unsigned long n);   // out[0]
-int spirv_matmul_f32(const &float a, const &float b, &float out,
+int spirv_add_f32([]const float a, []const float b, []float out);
+// internal: the (reference, length) core of spirv_add_f32()
+int spirv_add_f32_n_(const &float a, const &float b, &float out, unsigned long n);
+int spirv_sub_f32([]const float a, []const float b, []float out);
+// internal: the (reference, length) core of spirv_sub_f32()
+int spirv_sub_f32_n_(const &float a, const &float b, &float out, unsigned long n);
+int spirv_mul_f32([]const float a, []const float b, []float out);
+// internal: the (reference, length) core of spirv_mul_f32()
+int spirv_mul_f32_n_(const &float a, const &float b, &float out, unsigned long n);
+int spirv_div_f32([]const float a, []const float b, []float out);
+// internal: the (reference, length) core of spirv_div_f32()
+int spirv_div_f32_n_(const &float a, const &float b, &float out, unsigned long n);
+int spirv_pow_f32([]const float a, []const float b, []float out);
+// internal: the (reference, length) core of spirv_pow_f32()
+int spirv_pow_f32_n_(const &float a, const &float b, &float out, unsigned long n);
+int spirv_relu_f32([]const float a, []float out);
+// internal: the (reference, length) core of spirv_relu_f32()
+int spirv_relu_f32_n_(const &float a, &float out, unsigned long n);
+int spirv_log_f32([]const float a, []float out);
+// internal: the (reference, length) core of spirv_log_f32()
+int spirv_log_f32_n_(const &float a, &float out, unsigned long n);
+int spirv_exp_f32([]const float a, []float out);
+// internal: the (reference, length) core of spirv_exp_f32()
+int spirv_exp_f32_n_(const &float a, &float out, unsigned long n);
+int spirv_sqrt_f32([]const float a, []float out);
+// internal: the (reference, length) core of spirv_sqrt_f32()
+int spirv_sqrt_f32_n_(const &float a, &float out, unsigned long n);
+int spirv_scale_f32([]const float a, float k, []float out);
+// internal: the (reference, length) core of spirv_scale_f32()
+int spirv_scale_f32_n_(const &float a, float k, &float out, unsigned long n);
+int spirv_sum_f32([]const float a, []float out);
+// internal: the (reference, length) core of spirv_sum_f32()
+int spirv_sum_f32_n_(const &float a, &float out, unsigned long n);   // out[0]
+int spirv_matmul_f32([]const float a, []const float b, []float out, unsigned long M, unsigned long K, unsigned long N);
+// internal: the (reference, length) core of spirv_matmul_f32()
+int spirv_matmul_f32_n_(const &float a, const &float b, &float out,
                       unsigned long M, unsigned long K, unsigned long N);
 
 // 1 if a Vulkan GPU the backend can use is present (initializes it).

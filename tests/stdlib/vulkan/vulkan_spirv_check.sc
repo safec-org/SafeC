@@ -87,19 +87,19 @@ static float ref_(int op, float x, float y) {
 
 static int host_op_(int op, &Vec<float> a, &Vec<float> b, &Vec<float> o, unsigned long n) {
     unsafe {
-        const &float pa = (const &float)a.at(0UL);
-        const &float pb = (const &float)b.at(0UL);
-        &float po = (&float)o.at(0UL);
-        if (op == OP_ADD) return spirv_add_f32(pa, pb, po, n);
-        if (op == OP_SUB) return spirv_sub_f32(pa, pb, po, n);
-        if (op == OP_MUL) return spirv_mul_f32(pa, pb, po, n);
-        if (op == OP_DIV) return spirv_div_f32(pa, pb, po, n);
-        if (op == OP_POW) return spirv_pow_f32(pa, pb, po, n);
-        if (op == OP_RELU) return spirv_relu_f32(pa, po, n);
-        if (op == OP_LOG) return spirv_log_f32(pa, po, n);
-        if (op == OP_EXP) return spirv_exp_f32(pa, po, n);
-        if (op == OP_SQRT) return spirv_sqrt_f32(pa, po, n);
-        return spirv_scale_f32(pa, (float)1.75, po, n);
+        []const float pa = a.as_slice()[0..n];
+        []const float pb = b.as_slice()[0..n];
+        []float po = o.as_slice()[0..n];
+        if (op == OP_ADD) return spirv_add_f32(pa, pb, po);
+        if (op == OP_SUB) return spirv_sub_f32(pa, pb, po);
+        if (op == OP_MUL) return spirv_mul_f32(pa, pb, po);
+        if (op == OP_DIV) return spirv_div_f32(pa, pb, po);
+        if (op == OP_POW) return spirv_pow_f32(pa, pb, po);
+        if (op == OP_RELU) return spirv_relu_f32(pa, po);
+        if (op == OP_LOG) return spirv_log_f32(pa, po);
+        if (op == OP_EXP) return spirv_exp_f32(pa, po);
+        if (op == OP_SQRT) return spirv_sqrt_f32(pa, po);
+        return spirv_scale_f32(pa, (float)1.75, po);
     }
 }
 
@@ -138,7 +138,7 @@ static void check_reductions_(unsigned long n, unsigned long M, unsigned long K,
     while (i < n) { s = s + (double)*a.at(i); i = i + 1UL; }
     float got[1];
     int ok = 0;
-    unsafe { got[0] = (float)0.0; ok = spirv_sum_f32((const &float)a.at(0UL), (&float)&got[0], n); }
+    unsafe { got[0] = (float)0.0; ok = spirv_sum_f32(a.as_slice()[0..n], got[0..1]); }
     double d = (double)got[0] - s;
     if (d < 0.0) d = -d;
     unsafe {
@@ -163,7 +163,7 @@ static void check_reductions_(unsigned long n, unsigned long M, unsigned long K,
         }
         p = p + 1UL;
     }
-    unsafe { ok = spirv_matmul_f32((const &float)x.at(0UL), (const &float)w.at(0UL), (&float)o.at(0UL), M, K, N); }
+    ok = spirv_matmul_f32(x.as_slice(), w.as_slice(), o.as_slice(), M, K, N);
     double e = relerr(&o, &r, M * N);
     unsafe { if (!ok || e > 1.0e-5) printf("    matmul %lux%lux%lu: ran %d, error %g\n", M, K, N, ok, e); }
     check(ok && e <= 1.0e-5, "matmul");
@@ -183,17 +183,17 @@ static void check_chain_() {
         *r.at(i) = (v > (float)0.0 ? v : (float)0.0) * (float)2.0;
         i = i + 1UL;
     }
-    struct SpirvBuf ba = SpirvBuf::upload((const &float)a.at(0UL), n);
-    struct SpirvBuf bb = SpirvBuf::upload((const &float)b.at(0UL), n);
+    struct SpirvBuf ba = SpirvBuf::upload(a.as_slice()[0..n]);
+    struct SpirvBuf bb = SpirvBuf::upload(b.as_slice()[0..n]);
     struct SpirvBuf t = SpirvBuf::alloc(n, 0);
     check(ba.valid() && bb.valid() && t.valid(), "buffers");
     int ok = spirv_mul(ba, bb, t, n) && spirv_add(t, ba, t, n) && spirv_relu(t, t, n) && spirv_scale(t, (float)2.0, t, n);
     // queued behind the chain: b := a; the chain read b first
     struct SpirvBuf copy = SpirvBuf::alloc(n, 0);
     ok = ok && spirv_add(bb, ba, copy, n);   // copy = a + b(old)
-    unsafe { ok = ok && bb.write((const &void)a.at(0UL), 4UL * n); }
+    unsafe { ok = ok && bb.write(((const unsigned char*)a.at(0UL))[0..4UL * n]); }
     struct Vec<float> o = zeros(n);
-    unsafe { ok = ok && t.read((&void)o.at(0UL), 4UL * n); }
+    unsafe { ok = ok && t.read(((unsigned char*)o.at(0UL))[0..4UL * n]); }
     double e = relerr(&o, &r, n);
     unsafe { if (!ok || e > 1.0e-6) printf("    chain: ran %d, error %g\n", ok, e); }
     check(ok && e <= 1.0e-6, "buffer chain");
@@ -201,10 +201,10 @@ static void check_chain_() {
     struct Vec<float> cr = zeros(n);
     i = 0UL;
     while (i < n) { *cr.at(i) = *a.at(i) + *b.at(i); i = i + 1UL; }
-    unsafe { ok = copy.read((&void)c.at(0UL), 4UL * n); }
+    unsafe { ok = copy.read(((unsigned char*)(void*)(c.at(0UL)))[0..4UL * n]); }
     check(ok && relerr(&c, &cr, n) <= 1.0e-6, "ops queued before a write read the old contents");
     struct Vec<float> nb = zeros(n);
-    unsafe { ok = bb.read((&void)nb.at(0UL), 4UL * n); }
+    unsafe { ok = bb.read(((unsigned char*)(void*)(nb.at(0UL)))[0..4UL * n]); }
     check(ok && relerr(&nb, &a, n) == 0.0, "write lands");
     ba.free(); bb.free(); t.free(); copy.free();
     check(!ba.valid() && !t.valid(), "free");
@@ -220,7 +220,7 @@ static void check_precise_() {
     unsigned long i = 0UL;
     while (i < n) { *a.at(i) = (float)-80.0 + (float)160.0 * (float)i / (float)n; i = i + 1UL; }
     int ok = 0;
-    unsafe { ok = spirv_exp_f32((const &float)a.at(0UL), (&float)o.at(0UL), n); }
+    unsafe { ok = spirv_exp_f32(a.as_slice()[0..n], o.as_slice()[0..n]); }
     double worst = 0.0;
     i = 0UL;
     while (i < n) {
@@ -246,11 +246,11 @@ static void check_ieee_() {
     struct SpirvBuf bg = SpirvBuf::alloc(4UL, 0);
     struct SpirvBuf bs = SpirvBuf::alloc(4UL, 0);
     int ok = 0;
-    unsafe { ok = bg.write((const &void)&g[0], 16UL) && bs.write((const &void)&st[0], 16UL); }
+    unsafe { ok = bg.write(((const unsigned char*)(const void*)(&g[0]))[0..16UL]) && bs.write(((const unsigned char*)(const void*)(&st[0]))[0..16UL]); }
     struct DevArgs a = dev_args_();
     unsafe { a.p[0] = bg.handle; a.p[1] = bs.handle; }
     ok = ok && device_launch_(DEVICE_VULKAN, DK_AMP_UNSCALE, 4UL, &a);
-    unsafe { ok = ok && bs.read((&void)&st[0], 16UL); }
+    unsafe { ok = ok && bs.read(((unsigned char*)(void*)(&st[0]))[0..16UL]); }
     unsafe { check(ok && st[2] == (float)1.0, "a non-finite gradient raises the overflow flag"); }
     bg.free(); bs.free();
 }
@@ -264,13 +264,13 @@ static void check_order_() {
     struct Vec<float> o = zeros(n);
     unsigned long i = 0UL;
     while (i < n) { *o.at(i) = (float)1.0; i = i + 1UL; }
-    struct SpirvBuf x = SpirvBuf::upload((const &float)z.at(0UL), n);
-    struct SpirvBuf one = SpirvBuf::upload((const &float)o.at(0UL), n);
+    struct SpirvBuf x = SpirvBuf::upload(z.as_slice()[0..n]);
+    struct SpirvBuf one = SpirvBuf::upload(o.as_slice()[0..n]);
     struct SpirvBuf y = SpirvBuf::alloc(n, 0);
     int ok = x.valid() && one.valid() && y.valid();
     int k = 0;
     while (k < 200 && ok) { ok = spirv_add(x, one, y, n) && spirv_add(y, one, x, n); k = k + 1; }
-    unsafe { ok = ok && x.read((&void)z.at(0UL), 4UL * n); }
+    unsafe { ok = ok && x.read(((unsigned char*)(void*)(z.at(0UL)))[0..4UL * n]); }
     unsigned long wrong = 0UL;
     i = 0UL;
     while (i < n) { if (*z.at(i) != (float)400.0) wrong = wrong + 1UL; i = i + 1UL; }

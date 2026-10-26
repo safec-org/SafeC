@@ -3,6 +3,7 @@
 #include <std/path.h>
 #include <std/dir.h>
 #include <std/io_file.h>
+#include <std/str.h>
 #include <std/collections/string.h>
 #include <std/collections/vec.h>
 
@@ -44,9 +45,7 @@ void t_path() {
 }
 
 static void put(const &char path, const &char text) {
-    unsigned long n = 0UL;
-    unsafe { while (text[n] != '\0') { n = n + 1UL; } }
-    ASSERT_TRUE(File::write_bytes(path, text, n));
+    ASSERT_TRUE(File::write_bytes(path, str_bytes(text)));
 }
 
 void t_dir() {

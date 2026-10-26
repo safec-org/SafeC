@@ -6,7 +6,7 @@ namespace std {
 
 // ── UTF-8 ─────────────────────────────────────────────────────────────────
 
-unsigned int gui_utf8_next(const &char s, unsigned long len, &unsigned long i) {
+unsigned int gui_utf8_next_n_(const &char s, unsigned long len, &unsigned long i) {
     unsafe {
         unsigned long p = *i;
         if (p >= len) { return 0U; }
@@ -33,6 +33,14 @@ unsigned int gui_utf8_next(const &char s, unsigned long len, &unsigned long i) {
         }
         return cp;
     }
+}
+
+unsigned int gui_utf8_next([]const char s_s, &unsigned long i) {
+    unsigned long len = (unsigned long)s_s.len;
+    char s_d_[1];
+    const &char s = &s_d_[0];
+    if (s_s.len > 0UL) { unsafe { s = (const &char)s_s.ptr; } }
+    return gui_utf8_next_n_(s, len, i);
 }
 
 int gui_utf8_encode(unsigned int cp, &char out) {

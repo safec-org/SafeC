@@ -176,7 +176,7 @@ int tls_read_file_(const &char path, &String out) {
         while (1) {
             unsigned long n = fread((void*)&chunk[0], 1UL, 4096UL, f);
             if (n == 0UL) { break; }
-            out.push_n((const &char)(const char*)&chunk[0], n);
+            out.push_n_((const &char)(const char*)&chunk[0], n);
         }
         fclose(f);
     }
@@ -203,13 +203,13 @@ static int tls_pem_next_(const char* text, &unsigned long pos, &String lab, &Str
                 while (text[j] != (char)0 && text[j] != '-') { j = j + 1UL; }
                 if (!tls_starts_(text + j, "-----")) { i = i + 1UL; continue; }
                 lab.clear();
-                lab.push_n((const &char)(text + ls), j - ls);
+                lab.push_n_((const &char)(text + ls), j - ls);
                 j = j + 5UL;
                 unsigned long bs = j;
                 while (text[j] != (char)0 && !tls_starts_(text + j, "-----END")) { j = j + 1UL; }
                 if (text[j] == (char)0) { *pos = j; return 0; }
                 body.clear();
-                body.push_n((const &char)(text + bs), j - bs);
+                body.push_n_((const &char)(text + bs), j - bs);
                 // past the END line
                 while (text[j] != (char)0 && text[j] != '\n') { j = j + 1UL; }
                 *pos = j;
@@ -268,7 +268,7 @@ int tls_pem_private_key_(const &char text, &Vec<unsigned char> der, &int kind) {
             found = 1;
         }
     }
-    mem_zero_secure(body.as_ptr(), body.length());
+    unsafe { mem_zero_secure_raw_((void*)body.as_ptr(), body.length()); }
     lab.free();
     body.free();
     return found;
@@ -313,7 +313,7 @@ struct Vec<unsigned char> tls_alpn_wire_(const &char list) {
             while (b > a && s[b - 1UL] == ' ') { b = b - 1UL; }
             if (b > a && b - a < 256UL) {
                 out.push((unsigned char)(b - a));
-                out.extend((const &unsigned char)(const unsigned char*)(s + a), b - a);
+                out.extend(((const unsigned char*)(s + a))[0..b - a]);
             }
             if (s[i] == (char)0) { break; }
             i = i + 1UL;
@@ -368,7 +368,7 @@ void TlsConfig::free() {
     self.server_name.free();
     self.alpn.free();
     self.cert_pem.free();
-    mem_zero_secure(self.key_pem.as_ptr(), self.key_pem.length());
+    unsafe { mem_zero_secure_raw_((void*)self.key_pem.as_ptr(), self.key_pem.length()); }
     self.key_pem.free();
 }
 
@@ -397,7 +397,7 @@ void TlsServerConfig::set_alpn(const &char protocols) { self.alpn.clear(); self.
 
 void TlsServerConfig::free() {
     self.cert_pem.free();
-    mem_zero_secure(self.key_pem.as_ptr(), self.key_pem.length());
+    unsafe { mem_zero_secure_raw_((void*)self.key_pem.as_ptr(), self.key_pem.length()); }
     self.key_pem.free();
     self.alpn.free();
     self.client_ca_pem.free();
@@ -593,7 +593,10 @@ int TlsStream::handshake() {
     return r;
 }
 
-long long TlsStream::read(&unsigned char buf, unsigned long n) {
+long long TlsStream::read([]unsigned char buf_s) {
+    unsigned long n = buf_s.len;
+    &unsigned char buf;
+    unsafe { buf = (&unsigned char)buf_s.ptr; }
     if (self.state == 0) {
         int h = self.handshake();
         if (h != 0) { return (long long)h; }
@@ -614,7 +617,10 @@ long long TlsStream::read(&unsigned char buf, unsigned long n) {
     return r;
 }
 
-long long TlsStream::write(const &unsigned char buf, unsigned long n) {
+long long TlsStream::write([]const unsigned char buf_s) {
+    unsigned long n = buf_s.len;
+    const &unsigned char buf;
+    unsafe { buf = (const &unsigned char)buf_s.ptr; }
     if (self.state == 0) {
         int h = self.handshake();
         if (h != 0) { return (long long)h; }
@@ -690,7 +696,7 @@ int TlsStream::peer_certificate(&X509Cert out) const {
     match (self.peer_der_.data) {
         case some(d): {
             if (self.peer_der_.len == 0UL) { return 0; }
-            return out.init(d, self.peer_der_.len) == 0;
+            return out.init_n_(d, self.peer_der_.len) == 0;
         }
         case null: { }
     }

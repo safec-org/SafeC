@@ -14,12 +14,15 @@
 //   struct BST<int, int, Less<int>> t = std::BST::new();     // natural order, inlined
 //   std::vec_sort_by(&v, std::FnOrder::of(by_name));         // runtime comparator
 
+#include <std/erased.h>
+
 namespace std {
 
 // Stands for "the element type" in trait signatures here and in
 // std/collections/traits.h: a trait fixes each method's name, static-ness
-// and parameter count; the parameter types are each implementation's own.
-typedef void* Elem_;
+// and parameter count; the parameter types are each implementation's own
+// (Erased: any type, see std/erased.h).
+typedef Erased Elem_;
 
 trait Order {
     // <0 if a sorts before b, 0 if they are equivalent, >0 if after.

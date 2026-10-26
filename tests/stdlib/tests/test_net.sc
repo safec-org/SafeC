@@ -85,7 +85,7 @@ void t_ipv4_udp() {
         ASSERT_EQ(pkt.data[ETH_HDR_LEN + 15], 10);
         ASSERT_EQ(pkt.data[ETH_HDR_LEN + 16], 10);
         // A correct IPv4 header checksums to zero.
-        ASSERT_EQ(ip_checksum((const unsigned char*)&pkt.data[ETH_HDR_LEN], (unsigned long)IPV4_HDR_LEN), 0);
+        ASSERT_EQ(ip_checksum(pkt.data[(unsigned long)ETH_HDR_LEN..(unsigned long)(ETH_HDR_LEN + IPV4_HDR_LEN)]), 0);
         struct Ipv4Hdr ih;
         ASSERT_EQ(ipv4_parse(&pkt, (unsigned long)ETH_HDR_LEN, &ih), 0);
         ASSERT_EQ(ih.src, src);
@@ -144,8 +144,8 @@ void t_ipv6() {
         init_macs();
         struct Ipv6Addr a;
         struct Ipv6Addr b;
-        safe_memset((&Ipv6Addr)&a, 0, sizeof(struct Ipv6Addr));
-        safe_memset((&Ipv6Addr)&b, 0, sizeof(struct Ipv6Addr));
+        safe_memset_obj(&a, 0);
+        safe_memset_obj(&b, 0);
         ASSERT_TRUE(ipv6_addr_is_unspecified(&a));
         a.bytes[15] = (unsigned char)1;
         ASSERT_TRUE(ipv6_addr_is_loopback(&a));
@@ -195,7 +195,7 @@ void t_dns() {
         ans[6] = (unsigned char)0; ans[7] = (unsigned char)0; ans[8] = (unsigned char)0x0E; ans[9] = (unsigned char)0x10;
         ans[10] = (unsigned char)0; ans[11] = (unsigned char)4;
         ans[12] = (unsigned char)93; ans[13] = (unsigned char)184; ans[14] = (unsigned char)216; ans[15] = (unsigned char)34;
-        safe_memcpy(&pkt.data[end], &ans[0], 16UL);
+        safe_memcpy(pkt.data[end..end + 16UL], ans[0..16]);
         pkt.len = end + 16UL;
         unsigned int got = 0u;
         ASSERT_EQ(dns_parse_reply(&pkt, q, (unsigned short)0xBEEF, &got), 1);
@@ -208,10 +208,10 @@ void t_dhcp() {
     unsafe {
         init_macs();
         struct DhcpClient c;
-        safe_memset((&DhcpClient)&c, 0, sizeof(struct DhcpClient));
+        safe_memset_obj(&c, 0);
         c.state = DHCP_STATE_IDLE;
         c.xid = 0x12345678u;
-        safe_memcpy((&unsigned char)c.mac, (&unsigned char)MAC_A, 6UL);
+        safe_memcpy(c.mac[0..6], MAC_A[0..6]);
         struct PacketBuf pkt;
         pkt.reset();
         c.discover(&pkt, MAC_B);
@@ -239,7 +239,7 @@ void t_dhcp() {
         opts[15] = (unsigned char)51; opts[16] = (unsigned char)4;
         opts[17] = (unsigned char)0; opts[18] = (unsigned char)0; opts[19] = (unsigned char)0x0E; opts[20] = (unsigned char)0x10;
         opts[21] = (unsigned char)255;
-        safe_memcpy(&pkt.data[o], &opts[0], 22UL);
+        safe_memcpy(pkt.data[o..o + 22UL], opts[0..22]);
         pkt.len = o + 22UL;
         ASSERT_EQ(c.parse_reply(&pkt, d), DHCP_ACK);
         ASSERT_TRUE(c.is_bound());
@@ -261,7 +261,7 @@ static int hop(&TcpConn from, &TcpConn to, const unsigned char fromMac[6], const
     ipv4_parse(&pkt, (unsigned long)ETH_HDR_LEN, &ih);
     unsigned long segLen = (unsigned long)ih.total_len - (unsigned long)IPV4_HDR_LEN;
     unsafe {
-        if (tcp_checksum(ih.src, ih.dst, (const unsigned char*)&pkt.data[tcpOff], segLen) != (unsigned short)0) return -1;
+        if (tcp_checksum(ih.src, ih.dst, pkt.data[tcpOff..tcpOff + segLen]) != (unsigned short)0) return -1;
     }
     to.recv(&pkt, tcpOff);
     return 1;
@@ -290,12 +290,12 @@ void t_tcp() {
         ASSERT_EQ(hop(a, b, MAC_A, MAC_B), 1);    // ACK
         ASSERT_EQ(b.state, TCP_ESTABLISHED);
         ASSERT_EQ(a.rcv_nxt, 9001);              // our ISN 9000 + SYN
-        ASSERT_EQ(a.send((const unsigned char*)"hello tcp", 9UL), 9);
+        ASSERT_EQ(a.send(str_bytes("hello tcp")), 9);
         ASSERT_EQ(hop(a, b, MAC_A, MAC_B), 1);    // data
         ASSERT_TRUE(b.rx_ready());
         unsigned char got[16];
-        safe_memset((&unsigned char)got, 0, 16UL);
-        ASSERT_EQ(b.read(got, 16UL), 9);
+        safe_memset(got[..], 0);
+        ASSERT_EQ(b.read(got[0..16]), 9);
         ASSERT_STR_EQ((const char*)got, "hello tcp");
         a.close();
         ASSERT_EQ(hop(a, b, MAC_A, MAC_B), 1);    // FIN
@@ -305,15 +305,15 @@ void t_tcp() {
     }
 }
 
-// A NetDriver: anything with transmit(frame, len).
+// A NetDriver: anything with transmit(frame).
 struct LoopDrv {
     int frames;
     unsigned long bytes;
-    int transmit(const &unsigned char frame, unsigned long len);
+    int transmit([]const unsigned char frame);
 };
-int LoopDrv::transmit(const &unsigned char frame, unsigned long len) {
+int LoopDrv::transmit([]const unsigned char frame) {
     self.frames = self.frames + 1;
-    self.bytes = self.bytes + len;
+    self.bytes = self.bytes + frame.len;
     return 0;
 }
 
@@ -371,8 +371,8 @@ void t_build_parse() {
 
         struct Ipv6Addr a;
         struct Ipv6Addr b;
-        safe_memset((&Ipv6Addr)&a, 0, sizeof(struct Ipv6Addr));
-        safe_memset((&Ipv6Addr)&b, 0, sizeof(struct Ipv6Addr));
+        safe_memset_obj(&a, 0);
+        safe_memset_obj(&b, 0);
         a.bytes[15] = (unsigned char)1;
         b.bytes[0] = (unsigned char)0x20; b.bytes[1] = (unsigned char)0x01;
         pkt.reset();

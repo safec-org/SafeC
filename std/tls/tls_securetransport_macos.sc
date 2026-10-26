@@ -216,7 +216,7 @@ int tls_st_client_(&TlsStream s, const &char name, const &TlsConfig cfg) {
             void* list = CFArrayCreateMutable((void*)0, 0L, &kCFTypeArrayCallBacks);
             struct String a = cfg.alpn.clone();
             struct String parts[16];
-            unsigned long np = a.split(",", &parts[0], 16UL);
+            unsigned long np = a.split(",", parts[0..16]);
             unsigned long k = 0UL;
             while (k < np) {
                 struct String t = parts[k].trim();
@@ -250,7 +250,7 @@ static int st_check_trust_(&TlsStream s, struct StConn_* c) {
             void* der = SecCertificateCopyData(leaf);
             if (der != (void*)0) {
                 s.peer_der_.free();
-                s.peer_der_ = Vec::from_arr((const &unsigned char)CFDataGetBytePtr(der), (unsigned long)CFDataGetLength(der));
+                s.peer_der_ = Vec::from_slice(((const unsigned char*)CFDataGetBytePtr(der))[0..(unsigned long)CFDataGetLength(der)]);
                 CFRelease((const void*)der);
             }
         }

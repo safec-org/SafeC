@@ -332,6 +332,8 @@ int check_force(int e) {
     }
     if (is_ptr == 1) { mark_lval(e); return g_ty[t].base; }
     if (is_nref == 1) {
+        // '?fn' -> 'fn': the non-null function reference itself
+        if (g_ty[g_ty[t].base].kind == TY_FN) { return ty_ref(g_ty[t].base, g_ty[t].n, g_ty[t].sid, g_ty[t].flags & ~TYF_NULL); }
         if ((g_ty[t].flags & TYF_CONST) == 0) { mark_lval(e); }
         return g_ty[t].base;
     }
@@ -470,7 +472,13 @@ int check_assign(int e) {
     else { rt = check_expr(rhs); }
     g_expect = saved;
     rt = coerce_generic_value(rhs, rt, lt);
-    if (is_lval(lhs) == 0) { err_at(e, "left side of assignment must be lvalue"); }
+    if (is_lval(lhs) == 0 && g_node[lhs].kind == E_INDEX && g_ty[g_node[g_node[lhs].a].ty].kind == TY_SLICE) {
+        msg_reset();
+        msg_lit("cannot assign through a read-only slice '");
+        msg_type(g_node[g_node[lhs].a].ty);
+        msg_lit("'");
+        error_node(e);
+    } else if (is_lval(lhs) == 0) { err_at(e, "left side of assignment must be lvalue"); }
     if (ident_is_const(lhs) == 1) {
         msg_reset();
         msg_lit("cannot assign to const variable '");
@@ -758,7 +766,7 @@ int check_member(int e) {
     }
     if (g_ty[bt].kind == TY_SLICE) {
         if (fsid == S_len) { g_node[e].d = MK_SLEN; return TY_U64; }
-        if (fsid == S_ptr) { g_node[e].d = MK_SPTR; return ty_ptr(g_ty[bt].base, 0); }
+        if (fsid == S_ptr) { g_node[e].d = MK_SPTR; return ty_ptr(g_ty[bt].base, g_ty[bt].flags & TYF_CONST); }
         msg_reset();
         msg_lit("slice has no member '");
         msg_str(fsid);
@@ -821,7 +829,11 @@ int check_index(int e) {
         mark_lval(e);
         return g_ty[bt].base;
     }
-    if (k == TY_SLICE) { mark_lval(e); return g_ty[bt].base; }
+    if (k == TY_SLICE) {
+        // an element of a '[]const T' isn't assignable
+        if ((g_ty[bt].flags & TYF_CONST) == 0) { mark_lval(e); }
+        return g_ty[bt].base;
+    }
     if (k == TY_REF) {
         int rb = g_ty[bt].base;
         int mut = (g_ty[bt].flags & TYF_CONST) == 0;
@@ -855,12 +867,17 @@ int check_slice(int e) {
     if (in_unsafe() == 1) { g_node[e].flags = g_node[e].flags | NF_INUNSAFE; }
     int k = g_ty[bt].kind;
     int el = 0;
+    int cfl = 0;
     if (k == TY_ARRAY) { el = g_ty[bt].base; mark_addr(g_node[e].a); }
     else if (k == TY_PTR) {
         if (in_unsafe() == 0) { err_at(e, "slicing a pointer requires 'unsafe' block"); }
         el = g_ty[bt].base;
-    } else if (k == TY_SLICE) { el = g_ty[bt].base; }
-    else if (k == TY_REF && g_ty[g_ty[bt].base].kind == TY_ARRAY) { el = g_ty[g_ty[bt].base].base; }
+        cfl = g_ty[bt].flags & TYF_CONST;
+    } else if (k == TY_SLICE) { el = g_ty[bt].base; cfl = g_ty[bt].flags & TYF_CONST; }
+    else if (k == TY_REF && g_ty[g_ty[bt].base].kind == TY_ARRAY) {
+        el = g_ty[g_ty[bt].base].base;
+        cfl = g_ty[bt].flags & TYF_CONST;
+    }
     else {
         if (is_err(bt) == 1) { return TY_ERROR; }
         msg_reset();
@@ -870,7 +887,7 @@ int check_slice(int e) {
         error_node(e);
         return TY_ERROR;
     }
-    return ty_slice(el);
+    return ty_slice_f(el, cfl);
 }
 
 // ── cast ─────────────────────────────────────────────────────────────────────
@@ -881,6 +898,17 @@ int check_cast(int e) {
     int st = 0;
     if (g_node[op].kind == E_INITLIST) { st = check_initlist(op, t); }
     else { st = check_expr(op); }
+    // a slice is a (pointer, length) pair, not a pointer
+    if (g_ty[st].kind == TY_SLICE && g_ty[t].kind != TY_SLICE && is_err(t) == 0) {
+        msg_reset();
+        msg_lit("cannot cast slice '");
+        msg_type(st);
+        msg_lit("' to '");
+        msg_type(t);
+        msg_lit("': use its '.ptr' (and '.len'), or slice it");
+        error_node(e);
+        return t;
+    }
     if (g_ty[st].kind == TY_REF && (g_ty[st].flags & TYF_NULL) != 0 && g_ty[t].kind == TY_REF && (g_ty[t].flags & TYF_NULL) == 0) {
         msg_reset();
         msg_lit("cannot cast nullable reference '");

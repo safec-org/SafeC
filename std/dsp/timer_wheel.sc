@@ -14,8 +14,8 @@ inline void TimerWheel::init() {
             self.timers[i].periodic = 0;
             self.timers[i].period   = 0;
             self.timers[i].expires  = 0;
-            self.timers[i].callback = (void*)0;
-            self.timers[i].ctx      = (void*)0;
+            self.timers[i].callback = null;
+            self.timers[i].ctx      = null;
         }
         i = i + 1;
     }
@@ -37,7 +37,7 @@ static int alloc_slot(&TimerWheel tw) {
 }
 
 // ── TimerWheel::add ───────────────────────────────────────────────────────────
-inline int TimerWheel::add_raw_(unsigned long tick, void* callback, void* ctx) {
+inline int TimerWheel::add_raw_(unsigned long tick, fn void(?&Erased) callback, ?&Erased ctx) {
     int idx = alloc_slot(self);
     if (idx < 0) {
         return 0;  // wheel full
@@ -55,7 +55,7 @@ inline int TimerWheel::add_raw_(unsigned long tick, void* callback, void* ctx) {
 }
 
 // ── TimerWheel::add_periodic ──────────────────────────────────────────────────
-inline int TimerWheel::add_periodic_raw_(unsigned long period, void* callback, void* ctx) {
+inline int TimerWheel::add_periodic_raw_(unsigned long period, fn void(?&Erased) callback, ?&Erased ctx) {
     if (period == 0) {
         return 0;
     }
@@ -103,16 +103,11 @@ int TimerWheel::tick() {
         }
         if (do_fire == 1) {
             // Invoke the callback.
-            void* cb;
-            void* context;
-            unsafe {
-                cb      = self.timers[i].callback;
-                context = self.timers[i].ctx;
-            }
-            // Call the callback through a void(*)(void*) function pointer.
-            unsafe {
-                fn void(void*) func = (fn void(void*))cb;
-                func(context);
+            ?fn void(?&Erased) cb = self.timers[i].callback;
+            ?&Erased context = self.timers[i].ctx;
+            match (cb) {
+                case some(func): func(context);
+                case null: { }
             }
             fired = fired + 1;
 

@@ -301,7 +301,7 @@ static void draw_canvas_window(&GuiApp app, &GuiWindow win, &GuiCanvas c, ?&Gall
     c.fill_rounded_rect(230.0f, 30.0f, 200.0f, 160.0f, 18.0f);
     float dash[2];
     dash[0] = 10.0f; dash[1] = 6.0f;
-    c.set_dash(&dash[0], 2, (float)(t * 20.0));
+    c.set_dash(dash[0..2], (float)(t * 20.0));
     c.set_stroke_color(fg);
     c.set_line_width(2.0f);
     c.stroke_rounded_rect(222.0f, 22.0f, 216.0f, 176.0f, 24.0f);

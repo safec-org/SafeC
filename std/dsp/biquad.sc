@@ -131,7 +131,12 @@ static void biquad_block_fma_(double* st, const double* c, const double* x, doub
 }
 #endif
 
-void Biquad::process_block(const &double in, &double out, unsigned long n) {
+void Biquad::process_block([]const double in_s, []double out_s) {
+    unsigned long n = in_s.len < out_s.len ? in_s.len : out_s.len;
+    if (n == 0UL) return;
+    const &double in;
+    &double out;
+    unsafe { in = (const &double)in_s.ptr; out = (&double)out_s.ptr; }
     double c[5];
     c[0] = self.b0; c[1] = self.b1; c[2] = self.b2; c[3] = self.a1; c[4] = self.a2;
     double st[2];
@@ -259,7 +264,12 @@ static void biquad32_block_fma_(float* st, const float* c, const float* x, float
 }
 #endif
 
-void Biquad32::process_block(const &float in, &float out, unsigned long n) {
+void Biquad32::process_block([]const float in_s, []float out_s) {
+    unsigned long n = in_s.len < out_s.len ? in_s.len : out_s.len;
+    if (n == 0UL) return;
+    const &float in;
+    &float out;
+    unsafe { in = (const &float)in_s.ptr; out = (&float)out_s.ptr; }
     float c[5];
     c[0] = self.b0; c[1] = self.b1; c[2] = self.b2; c[3] = self.a1; c[4] = self.a2;
     float st[2];
@@ -470,8 +480,13 @@ inline void FBiquad::reset() {
     self.z2 = (Fixed)0;
 }
 
-void FBiquad::process_block(const &Fixed in, &Fixed out, unsigned long n) {
-    filter_process_each(self, in, out, n);
+void FBiquad::process_block([]const Fixed in_s, []Fixed out_s) {
+    unsigned long n = in_s.len < out_s.len ? in_s.len : out_s.len;
+    if (n == 0UL) return;
+    const &Fixed in;
+    &Fixed out;
+    unsafe { in = (const &Fixed)in_s.ptr; out = (&Fixed)out_s.ptr; }
+    filter_process_each_n_(self, in, out, n);
 }
 
 struct FBiquad FBiquad::from(struct Biquad bq) {

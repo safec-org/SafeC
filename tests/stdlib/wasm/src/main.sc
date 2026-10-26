@@ -14,7 +14,7 @@ static void check_(int cond, int line) {
     if (cond) return;
     g_fails = g_fails + 1;
     char buf[24];
-    std::wasm_itoa((long long)line, &buf[0], 24UL);
+    std::wasm_itoa((long long)line, buf[..]);
     struct String m = std::String::from("CHECK FAILED at main.sc:");
     m.push(&buf[0]);
     std::dom_console(DOM_LOG_ERROR, m.as_ptr());
@@ -40,7 +40,7 @@ __attribute__((export_name("t_elements"))) int t_elements() {
         int li = std::dom_create_element("li");
         std::dom_class_add(li, "item");
         char buf[24];
-        std::wasm_itoa((long long)i, &buf[0], 24UL);
+        std::wasm_itoa((long long)i, buf[..]);
         std::dom_set_text(li, &buf[0]);
         std::dom_append(list, li);
         std::dom_release(li);
@@ -120,9 +120,9 @@ __attribute__((export_name("t_elements"))) int t_elements() {
     std::dom_set_prop_num(input, "tabIndex", 3.0);
     check_((std::dom_get_prop_num(input, "tabIndex") == 3.0) != 0, __LINE__);
     char small[4];
-    check_((std::dom_get_prop_buf(input, "value", &small[0], 4) == 3) != 0, __LINE__);
+    check_((std::dom_get_prop_buf(input, "value", small[0..4]) == 3) != 0, __LINE__);
     check_((small[0] == 'A' && small[2] == 'a' && small[3] == (char)0) != 0, __LINE__);
-    check_((std::dom_get_prop_buf(input, "missingProp", &small[0], 4) == -1) != 0, __LINE__);
+    check_((std::dom_get_prop_buf(input, "missingProp", small[0..4]) == -1) != 0, __LINE__);
     std::dom_focus(input);
     std::dom_set_prop(DOM_DOCUMENT, "title", "SafeC");
     check_((str_is(std::dom_get_prop(DOM_DOCUMENT, "title"), "SafeC")) != 0, __LINE__);

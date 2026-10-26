@@ -27,12 +27,12 @@ static void lora_drop_(&FloatTensor t) {
 }
 
 static unsigned long lora_rows_(const &FloatTensor t) {
-    unsafe { tensor_host_((void*)t); }
+    unsafe { tensor_host_raw_((void*)t); }
     unsafe { return t->shape[0]; }
 }
 
 static unsigned long lora_cols_(const &FloatTensor t) {
-    unsafe { tensor_host_((void*)t); }
+    unsafe { tensor_host_raw_((void*)t); }
     unsafe { return t->shape[t->ndim - 1UL]; }
 }
 
@@ -126,11 +126,11 @@ void LoraMlp::merge() {
     unsigned long k = 0UL;
     while (k < self.base.nLayers) {
         &FloatTensor W = *self.base.params.at(2UL * k);
-        unsafe { tensor_host_write_((void*)W); }
+        unsafe { tensor_host_write_raw_((void*)W); }
         &FloatTensor A = *self.A.at(k);
-        unsafe { tensor_host_((void*)A); }
+        unsafe { tensor_host_raw_((void*)A); }
         &FloatTensor B = *self.B.at(k);
-        unsafe { tensor_host_((void*)B); }
+        unsafe { tensor_host_raw_((void*)B); }
         unsigned long in = lora_rows_(W);
         unsigned long out = lora_cols_(W);
         unsigned long r = self.cfg.rank;

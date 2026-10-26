@@ -12,17 +12,17 @@ namespace std {
 struct PoolBlock {
     unsigned long size;       // usable size (excluding header)
     int           is_free;    // 1 = free, 0 = allocated
-    void*         next;       // next PoolBlock* in the list (raw — unsafe only)
+    ?&PoolBlock   next;       // next block in the list (walked inside unsafe)
 };
 
 struct PoolAllocator {
     &heap void    base;       // heap-backed managed memory
     int           owned;   // 1 if PoolAllocator::new allocated base (destroy() frees it)
     unsigned long cap;        // total buffer size
-    void*         head;       // first PoolBlock* in the list (raw — unsafe only)
+    ?&PoolBlock   head;       // first block in the list (walked inside unsafe)
 
     // A pool over a user-provided heap buffer (8-aligned) of `cap` bytes.
-    static struct PoolAllocator over(&unsigned char buffer, unsigned long cap);
+    static struct PoolAllocator over([]unsigned char buffer);
 
     // A heap-backed pool of `cap` bytes.
     static struct PoolAllocator new(unsigned long cap);

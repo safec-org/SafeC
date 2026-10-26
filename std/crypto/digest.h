@@ -6,6 +6,7 @@
 // algorithm an id names; DigestCtx streams. For code that knows its hash
 // at compile time, hash.h's Hasher generics remain the direct route.
 #pragma once
+#include <std/crypto/buf.h>
 #include <std/crypto/sha1.h>
 #include <std/crypto/sha256.h>
 #include <std/crypto/sha512.h>
@@ -25,7 +26,9 @@ unsigned long digest_size(int alg);
 
 // Hash data[0..len) with 'alg' into 'out' (digest_size(alg) bytes).
 // Returns the digest length, 0 for an unknown id.
-unsigned long digest(int alg, const ?&unsigned char data, unsigned long len, &unsigned char out);
+unsigned long digest(int alg, []const unsigned char data, []unsigned char out);
+// internal: the (reference, length) core of digest()
+unsigned long digest_n_(int alg, const ?&unsigned char data, unsigned long len, &unsigned char out);
 
 // A streaming hash of any DIGEST_* algorithm.
 struct DigestCtx {
@@ -36,14 +39,20 @@ struct DigestCtx {
 
     // 'alg' must be a known id (else alg is DIGEST_NONE and finish writes 0 bytes).
     static struct DigestCtx new(int alg);
-    void update(const &unsigned char data, unsigned long len);
+    void update([]const unsigned char data);
+    // internal: the (reference, length) core of update()
+    void update_n_(const &unsigned char data, unsigned long len);
     // Writes the digest; returns its length.
-    unsigned long finish(&unsigned char out);
+    unsigned long finish([]unsigned char out);
+    // internal: the (reference, length) core of finish()
+    unsigned long finish_n_(&unsigned char out);
 };
 
 // MGF1 (RFC 8017 §B.2.1) with 'alg': XORs the mask generated from
 // seed[0..seed_len) into data[0..len).
-void mgf1_xor(int alg, const &unsigned char seed, unsigned long seed_len,
+void mgf1_xor(int alg, []const unsigned char seed, []unsigned char data);
+// internal: the (reference, length) core of mgf1_xor()
+void mgf1_xor_n_(int alg, const &unsigned char seed, unsigned long seed_len,
               &unsigned char data, unsigned long len);
 
 } // namespace std

@@ -16,12 +16,12 @@ static unsigned long ringbuf_floor_pow2_(unsigned long n) {
     return p;
 }
 
-inline struct RingBuffer RingBuffer::over(&static unsigned char buf, unsigned long cap) {
+inline struct RingBuffer RingBuffer::over([]unsigned char buf) {
     struct RingBuffer rb;
-    unsigned long roundedCap = ringbuf_floor_pow2_(cap);
+    unsigned long roundedCap = buf.len == 0UL ? 0UL : ringbuf_floor_pow2_(buf.len);
     rb.buf  = buf;
     rb.cap  = roundedCap;
-    rb.mask = roundedCap - (unsigned long)1;
+    rb.mask = roundedCap == 0UL ? 0UL : roundedCap - (unsigned long)1;
     rb.head = (unsigned long)0;
     rb.tail = (unsigned long)0;
     return rb;
@@ -55,7 +55,8 @@ inline int RingBuffer::is_full() const {
 // auto-vectorizer can turn into real SIMD loads/stores; the masked version
 // couldn't be vectorized as well with a data-dependent wraparound computed
 // fresh every byte.
-inline unsigned long RingBuffer::write(const &unsigned char data, unsigned long len) {
+inline unsigned long RingBuffer::write([]const unsigned char data) {
+    unsigned long len = data.len;
     unsigned long space = self.writable();
     if (len > space) { len = space; }
     unsigned long head = self.head;
@@ -81,7 +82,8 @@ inline unsigned long RingBuffer::write(const &unsigned char data, unsigned long 
     return len;
 }
 
-inline unsigned long RingBuffer::read(&unsigned char out, unsigned long len) {
+inline unsigned long RingBuffer::read([]unsigned char out) {
+    unsigned long len = out.len;
     unsigned long avail = self.length();
     if (len > avail) { len = avail; }
     unsigned long tail = self.tail;
@@ -106,7 +108,8 @@ inline unsigned long RingBuffer::read(&unsigned char out, unsigned long len) {
     return len;
 }
 
-inline unsigned long RingBuffer::peek(&unsigned char out, unsigned long len) const {
+inline unsigned long RingBuffer::peek([]unsigned char out) const {
+    unsigned long len = out.len;
     unsigned long avail = self.length();
     if (len > avail) { len = avail; }
     unsigned long tail = self.tail;
@@ -139,13 +142,13 @@ inline unsigned long RingBuffer::discard(unsigned long len) {
 inline int RingBuffer::enqueue(unsigned char b) {
     unsigned char one[1];
     one[0] = b;
-    return self.write(one, (unsigned long)1) == (unsigned long)1 ? 1 : 0;
+    return self.write(one[0..1]) == (unsigned long)1 ? 1 : 0;
 }
 
 inline ?unsigned char RingBuffer::dequeue() {
     unsigned char one[1];
     one[0] = (unsigned char)0;
-    if (self.read(one, (unsigned long)1) == (unsigned long)0) { return null; }
+    if (self.read(one[0..1]) == (unsigned long)0) { return null; }
     return one[0];
 }
 

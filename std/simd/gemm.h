@@ -31,25 +31,39 @@ namespace std {
 
 // C = alpha * op(A) * op(B) + beta * C, where op(A) is m x k and op(B) is
 // k x n, and op(X) = X, or X transposed when its trans flag is SGEMM_TRANS
-// (then X is stored k x m / n x k). beta == 0 overwrites C without reading
-// it, so C may start uninitialized.
-void sgemm(int transA, int transB, unsigned long m, unsigned long n, unsigned long k,
-           float alpha, const &float a, unsigned long lda,
-           const &float b, unsigned long ldb,
-           float beta, &float c, unsigned long ldc);
+// (then X is stored k x m / n x k). Matrices are row-major with leading
+// dimensions lda / ldb / ldc (the stride between rows). beta == 0
+// overwrites C without reading it, so C may start uninitialized.
+// Returns 1, or 0 (nothing computed) when a slice is too short for its
+// dimensions or a leading dimension is smaller than its row.
+int sgemm(int transA, int transB, unsigned long m, unsigned long n, unsigned long k,
+          float alpha, []const float a, unsigned long lda,
+          []const float b, unsigned long ldb,
+          float beta, []float c, unsigned long ldc);
 
 // sgemm, but always on the calling thread (no pool, no wake-ups; a vendor
 // library, if linked, runs single-threaded): for code that is already
 // parallel, or that must not block on other threads.
-void sgemm_serial(int transA, int transB, unsigned long m, unsigned long n, unsigned long k,
-                  float alpha, const &float a, unsigned long lda,
-                  const &float b, unsigned long ldb,
-                  float beta, &float c, unsigned long ldc);
+int sgemm_serial(int transA, int transB, unsigned long m, unsigned long n, unsigned long k,
+                 float alpha, []const float a, unsigned long lda,
+                 []const float b, unsigned long ldb,
+                 float beta, []float c, unsigned long ldc);
 
 // 1 if sgemm is using a linked vendor BLAS, and which one: "AOCL-BLAS
 // (BLIS)", "oneMKL", "Accelerate", "OpenBLAS", "CBLAS" (another library) or
 // "built-in".
 int sgemm_vendor();
 const &char sgemm_backend();
+
+// Internal: the unchecked (reference, leading dimension) forms the slice
+// API above wraps (std/ml's kernels call these; not API).
+void sgemm_n_(int transA, int transB, unsigned long m, unsigned long n, unsigned long k,
+              float alpha, const &float a, unsigned long lda,
+              const &float b, unsigned long ldb,
+              float beta, &float c, unsigned long ldc);
+void sgemm_serial_n_(int transA, int transB, unsigned long m, unsigned long n, unsigned long k,
+                     float alpha, const &float a, unsigned long lda,
+                     const &float b, unsigned long ldb,
+                     float beta, &float c, unsigned long ldc);
 
 } // namespace std

@@ -1,7 +1,8 @@
 // SafeC Standard Library — File I/O (C11 <stdio.h> wrappers)
 // Handles are '&File' references to an opaque type (the C FILE underneath is
 // never exposed); File::open returns '?&File', null on failure.
-// Operations are methods on the handle: f.read(buf, n), f.write(buf, n),
+// Operations are methods on the handle: f.read(buf), f.write(buf) (byte
+// slices),
 // f.seek(off, whence), f.close(), ...
 // File conforms to io_traits.h's SeekableStream (Reader, Writer, Seekable)
 // and Flusher, so read_exact, write_all, copy_stream, stream_size and
@@ -27,21 +28,22 @@ struct File {
 
     // ── Read ──────────────────────────────────────────────────────────────────
 
-    // Read at most n bytes into buf.  Returns bytes actually read (0 = EOF),
+    // Read at most buf.len bytes into buf.  Returns bytes actually read (0 = EOF),
     // or -1 when an error stopped it before any byte was read.
-    long long read(&unsigned char buf, unsigned long n);
+    long long read([]unsigned char buf);
 
     // Read a single character.  Returns -1 on EOF/error.
     int  getc();
 
-    // Read up to n-1 characters into buf, NUL-terminate.  Returns buf or NULL.
-    ?&char gets(&char buf, int n);
+    // Read a line (up to buf.len-1 characters) into buf, NUL-terminated.
+    // Returns buf, or null at EOF/error (or when buf is empty).
+    ?&char gets([]char buf);
 
     // ── Write ─────────────────────────────────────────────────────────────────
 
-    // Write n bytes from buf.  Returns bytes actually written (fewer than n
+    // Write buf.  Returns bytes actually written (fewer than buf.len
     // on an error part-way), or -1 when an error stopped it before any byte.
-    long long write(const &unsigned char buf, unsigned long n);
+    long long write([]const unsigned char buf);
 
     // Write a single character.  Returns c on success, -1 on error.
     int  putc(int c);
@@ -84,9 +86,9 @@ struct File {
     // or a read fails ('out' then holds whatever was read).
     static int read_to_string(const &char path, &String out);
 
-    // Creates or truncates the file at 'path' and writes 'n' bytes from
-    // 'data'. 1 when every byte was written and the file closed cleanly.
-    static int write_bytes(const &char path, const &char data, unsigned long n);
+    // Creates or truncates the file at 'path' and writes 'data' to it.
+    // 1 when every byte was written and the file closed cleanly.
+    static int write_bytes(const &char path, []const unsigned char data);
 };
 
 // Kept for std/ml until its refactor moves to the methods above; forward to
@@ -95,8 +97,8 @@ struct File {
 // error reads as 0 bytes).
 ?&File        file_open(const &char path, const &char mode);
 int           file_close(&File f);
-unsigned long file_read(&File f, &unsigned char buf, unsigned long n);
-unsigned long file_write(&File f, const &unsigned char buf, unsigned long n);
+unsigned long file_read(&File f, []unsigned char buf);
+unsigned long file_write(&File f, []const unsigned char buf);
 int           file_seek(&File f, long long offset, int whence);
 long long     file_tell(&File f);
 long long     file_size(&File f);

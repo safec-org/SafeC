@@ -31,15 +31,21 @@ namespace std {
 // z^0 term, bOut[order]/aOut[order] is the z^-order term), normalized so
 // aOut[0] = 1 — the same normalization Biquad::bilinear's a0-divide-out
 // already uses, and what IirFilter expects.
-void bilinear_nth_order(const &double B, const &double A, unsigned long order,
-                         double fs, &double bOut, &double aOut);
+int bilinear_nth_order([]const double B, []const double A, double fs, []double bOut, []double aOut);
 
 // Z-domain frequency response of an order-'order' digital filter
 // (b[]/a[] in the negative-power-of-z convention above) at 'freqHz' —
 // the general-order counterpart of Biquad::response_mag/phase.
-double ztransform_response_mag(const &double b, const &double a, unsigned long order,
+double ztransform_response_mag([]const double b, []const double a, double fs, double freqHz);
+double ztransform_response_phase([]const double b, []const double a, double fs, double freqHz);
+
+// Internal: the (reference, length) forms the slice API above wraps
+// (std/dsp's own code calls these; not API).
+void bilinear_nth_order_n_(const &double B, const &double A, unsigned long order,
+                         double fs, &double bOut, &double aOut);
+double ztransform_response_mag_n_(const &double b, const &double a, unsigned long order,
                                 double fs, double freqHz);
-double ztransform_response_phase(const &double b, const &double a, unsigned long order,
+double ztransform_response_phase_n_(const &double b, const &double a, unsigned long order,
                                   double fs, double freqHz);
 
 } // namespace std

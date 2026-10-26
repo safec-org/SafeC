@@ -69,7 +69,7 @@ static void yaml_append_scalar_string_(&String out, const char* s) {
         unsafe { c = s[i]; }
         if (c == (char)0) { break; }
         if (c == '\'') {
-            if (i > run_start) { unsafe { out.push_n(s + run_start, i - run_start); } }
+            if (i > run_start) { unsafe { out.push_n_(s + run_start, i - run_start); } }
             unsafe { out.push("''"); }
             i = i + 1UL;
             run_start = i;
@@ -77,7 +77,7 @@ static void yaml_append_scalar_string_(&String out, const char* s) {
             i = i + 1UL;
         }
     }
-    if (i > run_start) { unsafe { out.push_n(s + run_start, i - run_start); } }
+    if (i > run_start) { unsafe { out.push_n_(s + run_start, i - run_start); } }
     unsafe { out.push_char('\''); }
 }
 
@@ -279,7 +279,7 @@ static struct Vec<struct YamlLine_> yaml_split_lines_(const char* text) {
             p = p + 1UL;
         }
         struct String rawLine;
-        unsafe { rawLine = String::from_n(text + p, lineEnd - p); }
+        unsafe { rawLine = String::from_n_(text + p, lineEnd - p); }
         struct String content = yaml_strip_comment_(rawLine.as_ptr());
         rawLine.free();
         if (!content.is_empty()) {
@@ -445,7 +445,7 @@ static struct Value yaml_parse_flow_scalar_(const char* s, unsigned long* i, int
             end = k;
         }
         *i = end;
-        struct String piece = String::from_n(s + start, end - start);
+        struct String piece = String::from_n_(s + start, end - start);
         struct Value v = yaml_parse_scalar_(piece.as_ptr());
         piece.free();
         return v;
@@ -583,7 +583,7 @@ static struct Value yaml_block_scalar_(&Vec<struct YamlLine_> lines, unsigned lo
                 out.push_str(&pendingBreaks);
             }
             pendingBreaks.clear();
-            out.push_n(doc + from, ce - from);
+            out.push_n_(doc + from, ce - from);
             any = 1;
         }
     }
@@ -662,7 +662,7 @@ static struct Value yaml_parse_mapping_(&Vec<struct YamlLine_> lines, unsigned l
         long long colonPos = yaml_find_colon_(content);
         if (colonPos < 0) { unsafe { *ok = 0; } break; }
         struct String keyRaw;
-        unsafe { keyRaw = String::from_n(content, (unsigned long)colonPos); }
+        unsafe { keyRaw = String::from_n_(content, (unsigned long)colonPos); }
         struct Value keyVal = yaml_parse_scalar_(keyRaw.as_ptr());
         keyRaw.free();
         // Only string-shaped keys make sense as object keys here (a

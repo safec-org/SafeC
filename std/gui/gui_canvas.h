@@ -257,7 +257,9 @@ struct GuiCanvas {
     void set_miter_limit(float limit);
     // Alternating on/off lengths (n <= GUI_DASH_MAX; an odd count repeats
     // once more, as in SVG); n = 0 turns dashing off.
-    void set_dash(const &float lengths, int n, float offset);
+    void set_dash([]const float lengths, float offset);
+    // internal: the (reference, length) core of set_dash()
+    void set_dash_n_(const &float lengths, int n, float offset);
     void set_global_alpha(float a);
     void set_blend_mode(int mode);
     void set_fill_rule(int rule);
@@ -322,7 +324,9 @@ struct GuiCanvas {
     // Draws one line of UTF-8 text with the fill paint at (x, y) (see
     // set_text_baseline/set_text_align). Returns its advance width.
     float fill_text(const &char text, float x, float y);
-    float fill_text_n(const &char text, unsigned long len, float x, float y);
+    float fill_text_n([]const char text, float x, float y);
+    // internal: the (reference, length) core of fill_text_n()
+    float fill_text_n_n_(const &char text, unsigned long len, float x, float y);
     float measure_text(const &char text) const;
     // Draws a built layout with its top-left at (x, y).
     void fill_text_layout(const &GuiTextLayout layout, float x, float y);

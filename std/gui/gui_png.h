@@ -46,10 +46,12 @@ struct GuiImage {
     void set_pixel(int x, int y, unsigned int rgba);
 
     // Decodes a PNG file's bytes (already read into memory) into this
-    // image in place ('struct GuiImage img; img.load_png(data, size)').
+    // image in place ('struct GuiImage img; img.load_png(data)').
     // Returns 1 on success, 0 on failure (unsupported feature or malformed
     // input) — the image is left zeroed on failure.
-    int  load_png(const &unsigned char data, unsigned long size);
+    int  load_png([]const unsigned char data);
+    // internal: the (reference, length) core of load_png()
+    int  load_png_n_(const &unsigned char data, unsigned long size);
 
     // Draws this image with its top-left at (x, y) into 'win' (straight
     // copy through GuiWindow::set_pixel(), no blending) — works with any

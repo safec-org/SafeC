@@ -206,7 +206,7 @@ static void inv_mix_columns_(unsigned char* s) {
 
 // ── Core encrypt / decrypt ────────────────────────────────────────────────────
 
-void AesCtx::encrypt_block(&unsigned char block) {
+void AesCtx::encrypt_block_n_(&unsigned char block) {
     // Copy input into the column-major state (byte order is already column-major)
     unsigned char state[16];
     int i = 0;
@@ -245,7 +245,12 @@ void AesCtx::encrypt_block(&unsigned char block) {
     }
 }
 
-void AesCtx::decrypt_block(&unsigned char block) {
+void AesCtx::encrypt_block([]unsigned char block_s) {
+    &unsigned char block = crypto_out_(block_s, 16UL);
+    self.encrypt_block_n_(block);
+}
+
+void AesCtx::decrypt_block_n_(&unsigned char block) {
     unsigned char state[16];
     int i = 0;
     while (i < 4) {
@@ -282,8 +287,18 @@ void AesCtx::decrypt_block(&unsigned char block) {
     }
 }
 
-inline void AesCtx::set_iv(const &unsigned char iv) {
+void AesCtx::decrypt_block([]unsigned char block_s) {
+    &unsigned char block = crypto_out_(block_s, 16UL);
+    self.decrypt_block_n_(block);
+}
+
+inline void AesCtx::set_iv_n_(const &unsigned char iv) {
     unsafe { memcpy((void*)self.iv, (const void*)iv, (unsigned long)AES_BLOCK_SIZE); }
+}
+
+inline void AesCtx::set_iv([]const unsigned char iv_s) {
+    const &unsigned char iv = crypto_in_(iv_s, 16UL);
+    self.set_iv_n_(iv);
 }
 
 inline void AesCtx::destroy() {
@@ -294,7 +309,7 @@ inline void AesCtx::destroy() {
     self.rounds = 0;
 }
 
-inline void AesCtx::cbc_encrypt(&unsigned char data, unsigned long len) {
+inline void AesCtx::cbc_encrypt_n_(&unsigned char data, unsigned long len) {
     unsigned long blocks = len / (unsigned long)AES_BLOCK_SIZE;
     unsigned long b = (unsigned long)0;
     while (b < blocks) {
@@ -305,14 +320,20 @@ inline void AesCtx::cbc_encrypt(&unsigned char data, unsigned long len) {
                 blk[k] = blk[k] ^ self.iv[k];
                 k = k + 1;
             }
-            self.encrypt_block((&unsigned char)blk);
+            self.encrypt_block_n_((&unsigned char)blk);
             memcpy((void*)self.iv, (const void*)blk, (unsigned long)AES_BLOCK_SIZE);
         }
         b = b + (unsigned long)1;
     }
 }
 
-inline void AesCtx::cbc_decrypt(&unsigned char data, unsigned long len) {
+inline void AesCtx::cbc_encrypt([]unsigned char data_s) {
+    unsigned long len = data_s.len;
+    &unsigned char data = crypto_out_(data_s, 0UL);
+    self.cbc_encrypt_n_(data, len);
+}
+
+inline void AesCtx::cbc_decrypt_n_(&unsigned char data, unsigned long len) {
     unsigned long blocks = len / (unsigned long)AES_BLOCK_SIZE;
     unsigned long b = (unsigned long)0;
     while (b < blocks) {
@@ -320,7 +341,7 @@ inline void AesCtx::cbc_decrypt(&unsigned char data, unsigned long len) {
             unsigned char* blk = (unsigned char*)data + b * (unsigned long)AES_BLOCK_SIZE;
             unsigned char prev[16];
             memcpy((void*)prev, (const void*)blk, (unsigned long)AES_BLOCK_SIZE);
-            self.decrypt_block((&unsigned char)blk);
+            self.decrypt_block_n_((&unsigned char)blk);
             int k = 0;
             while (k < AES_BLOCK_SIZE) {
                 blk[k] = blk[k] ^ self.iv[k];
@@ -330,6 +351,12 @@ inline void AesCtx::cbc_decrypt(&unsigned char data, unsigned long len) {
         }
         b = b + (unsigned long)1;
     }
+}
+
+inline void AesCtx::cbc_decrypt([]unsigned char data_s) {
+    unsigned long len = data_s.len;
+    &unsigned char data = crypto_out_(data_s, 0UL);
+    self.cbc_decrypt_n_(data, len);
 }
 
 
@@ -408,7 +435,7 @@ static void gcm_ctr_(&AesCtx ctx, const unsigned char* j0, unsigned char* data, 
             ctr[14] = (unsigned char)(c >> 8);  ctr[15] = (unsigned char)c;
             unsigned char ks[16];
             memcpy((void*)ks, (const void*)ctr, 16UL);
-            ctx.encrypt_block((&unsigned char)&ks[0]);
+            ctx.encrypt_block_n_((&unsigned char)&ks[0]);
             unsigned long k = 0UL;
             while (k < 16UL && off + k < len) { data[off + k] = data[off + k] ^ ks[k]; k = k + 1UL; }
             off = off + 16UL;
@@ -430,7 +457,7 @@ static void gcm_tag_(&AesCtx ctx, const unsigned char* iv, const unsigned char* 
         unsigned char h[16];
         int i = 0;
         while (i < 16) { h[i] = (unsigned char)0; i = i + 1; }
-        ctx.encrypt_block((&unsigned char)&h[0]);
+        ctx.encrypt_block_n_((&unsigned char)&h[0]);
         unsigned long long hh = gcm_load64_((const unsigned char*)&h[0]);
         unsigned long long hl = gcm_load64_((const unsigned char*)&h[8]);
         unsigned long long y[2];
@@ -443,7 +470,7 @@ static void gcm_tag_(&AesCtx ctx, const unsigned char* iv, const unsigned char* 
         gcm_mul_((unsigned long long*)y, hh, hl);
         unsigned char j0[16];
         gcm_j0_(iv, (unsigned char*)j0);
-        ctx.encrypt_block((&unsigned char)&j0[0]);
+        ctx.encrypt_block_n_((&unsigned char)&j0[0]);
         gcm_store64_(tag, y[0]);
         gcm_store64_(tag + 8, y[1]);
         i = 0;
@@ -452,7 +479,7 @@ static void gcm_tag_(&AesCtx ctx, const unsigned char* iv, const unsigned char* 
     }
 }
 
-void AesCtx::gcm_encrypt(const &unsigned char iv, const ?&unsigned char aad, unsigned long aad_len,
+void AesCtx::gcm_encrypt_n_(const &unsigned char iv, const ?&unsigned char aad, unsigned long aad_len,
                          &unsigned char data, unsigned long len, &unsigned char tag) {
     unsafe {
         unsigned char j0[16];
@@ -463,7 +490,17 @@ void AesCtx::gcm_encrypt(const &unsigned char iv, const ?&unsigned char aad, uns
     }
 }
 
-int AesCtx::gcm_decrypt(const &unsigned char iv, const ?&unsigned char aad, unsigned long aad_len,
+void AesCtx::gcm_encrypt([]const unsigned char iv_s, []const unsigned char aad_s, []unsigned char data_s, []unsigned char tag_s) {
+    const &unsigned char iv = crypto_in_(iv_s, 12UL);
+    unsigned long aad_len = aad_s.len;
+    const ?&unsigned char aad = crypto_opt_(aad_s);
+    unsigned long len = data_s.len;
+    &unsigned char data = crypto_out_(data_s, 0UL);
+    &unsigned char tag = crypto_out_(tag_s, 16UL);
+    self.gcm_encrypt_n_(iv, aad, aad_len, data, len, tag);
+}
+
+int AesCtx::gcm_decrypt_n_(const &unsigned char iv, const ?&unsigned char aad, unsigned long aad_len,
                         &unsigned char data, unsigned long len, const &unsigned char tag) {
     unsigned char want[16];
     unsigned int diff = 0u;
@@ -482,9 +519,19 @@ int AesCtx::gcm_decrypt(const &unsigned char iv, const ?&unsigned char aad, unsi
     return 1;
 }
 
+int AesCtx::gcm_decrypt([]const unsigned char iv_s, []const unsigned char aad_s, []unsigned char data_s, []const unsigned char tag_s) {
+    const &unsigned char iv = crypto_in_(iv_s, 12UL);
+    unsigned long aad_len = aad_s.len;
+    const ?&unsigned char aad = crypto_opt_(aad_s);
+    unsigned long len = data_s.len;
+    &unsigned char data = crypto_out_(data_s, 0UL);
+    const &unsigned char tag = crypto_in_(tag_s, 16UL);
+    return self.gcm_decrypt_n_(iv, aad, aad_len, data, len, tag);
+}
+
 // ── Constructors ──────────────────────────────────────────────────────────────
 
-inline struct AesCtx AesCtx::new_128(const &unsigned char key) {
+inline struct AesCtx AesCtx::new_128_n_(const &unsigned char key) {
     struct AesCtx ctx;
     ctx.rounds = AES128_ROUNDS;
     unsafe { expand_key_((const unsigned char*)key, 4, AES128_ROUNDS, ctx.ks); }
@@ -492,12 +539,22 @@ inline struct AesCtx AesCtx::new_128(const &unsigned char key) {
     return ctx;
 }
 
-inline struct AesCtx AesCtx::new_256(const &unsigned char key) {
+inline struct AesCtx AesCtx::new_128([]const unsigned char key_s) {
+    const &unsigned char key = crypto_in_(key_s, 16UL);
+    return AesCtx::new_128_n_(key);
+}
+
+inline struct AesCtx AesCtx::new_256_n_(const &unsigned char key) {
     struct AesCtx ctx;
     ctx.rounds = AES256_ROUNDS;
     unsafe { expand_key_((const unsigned char*)key, 8, AES256_ROUNDS, ctx.ks); }
     unsafe { memset_byte_((unsigned char*)ctx.iv, 0, AES_BLOCK_SIZE); }
     return ctx;
+}
+
+inline struct AesCtx AesCtx::new_256([]const unsigned char key_s) {
+    const &unsigned char key = crypto_in_(key_s, 32UL);
+    return AesCtx::new_256_n_(key);
 }
 
 // Simple zero-init helper for IV

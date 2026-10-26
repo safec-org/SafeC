@@ -1,4 +1,5 @@
 #pragma once
+#include <std/erased.h>
 // SafeC Standard Library — Markdown.
 //
 // Unlike json.h/xml.h/html.h, Markdown doesn't map onto the generic
@@ -147,9 +148,10 @@ void md_slugify(const &char text, &String out);
 // E.g. a link hook rewrites the href on entry and returns 2; a code-block
 // hook highlights node.text and returns 1.
 
+// The hook and its context, erased (see std/erased.h).
 struct MdHookRaw_ {
-    void* fn_;
-    void* ctx;
+    ?fn int(?&Erased, const &MdNode, int, &String) fn_;
+    ?&Erased ctx;
 };
 struct String md_render_html_raw_(const &MdNode node, const &MdHookRaw_ hook);
 
@@ -157,8 +159,8 @@ generic<C>
 struct String md_render_html_with(const &MdNode node, fn int(?&C, const &MdNode, int, &String) hook, ?&C ctx) {
     struct MdHookRaw_ h;
     unsafe {
-        h.fn_ = (void*)hook;
-        h.ctx = (void*)ctx;
+        h.fn_ = (?fn int(?&Erased, const &MdNode, int, &String))hook;
+        h.ctx = (?&Erased)ctx;
     }
     return md_render_html_raw_(node, &h);
 }

@@ -34,11 +34,11 @@ struct FirFilter {
     void   reset();
 
     // Processes 'n' samples, writing to 'out' (may alias 'in').
-    void   process_block(const &double in, &double out, unsigned long n);
+    void   process_block([]const double in, []double out);
 
     // coeffs/history as above — 'history' must have numTaps elements
     // (caller-allocated, typically zero-initialized).
-    static struct FirFilter new(const &double coeffs, unsigned long numTaps, &double history);
+    static struct FirFilter new([]const double coeffs, []double history);   // numTaps = min(coeffs.len, history.len)
 };
 
 // Single-precision FIR, same contract as FirFilter (float taps and history).
@@ -50,9 +50,9 @@ struct FirFilter32 {
 
     float process(float x);
     void  reset();
-    void  process_block(const &float in, &float out, unsigned long n);
+    void  process_block([]const float in, []float out);
 
-    static struct FirFilter32 new(const &float coeffs, unsigned long numTaps, &float history);
+    static struct FirFilter32 new([]const float coeffs, []float history);   // numTaps = min(coeffs.len, history.len)
 };
 
 struct FFirFilter {
@@ -63,9 +63,9 @@ struct FFirFilter {
 
     Fixed process(Fixed x);
     void  reset();
-    void  process_block(const &Fixed in, &Fixed out, unsigned long n);
+    void  process_block([]const Fixed in, []Fixed out);
 
-    static struct FFirFilter new(const &Fixed coeffs, unsigned long numTaps, &Fixed history);
+    static struct FFirFilter new([]const Fixed coeffs, []Fixed history);   // numTaps = min(coeffs.len, history.len)
 };
 
 // ── IIR (general order, direct form I) ────────────────────────────────────────
@@ -82,11 +82,10 @@ struct IirFilter {
 
     double process(double x);
     void   reset();
-    void   process_block(const &double in, &double out, unsigned long n);
+    void   process_block([]const double in, []double out);
 
-    static struct IirFilter new(const &double b, unsigned long numB,
-                                const &double a, unsigned long numA,
-                                &double xHistory, &double yHistory);
+    static struct IirFilter new([]const double b, []const double a,
+                                []double xHistory, []double yHistory);
 };
 
 // Single-precision IIR, same contract as IirFilter. Float rounding grows
@@ -103,11 +102,10 @@ struct IirFilter32 {
 
     float process(float x);
     void  reset();
-    void  process_block(const &float in, &float out, unsigned long n);
+    void  process_block([]const float in, []float out);
 
-    static struct IirFilter32 new(const &float b, unsigned long numB,
-                                  const &float a, unsigned long numA,
-                                  &float xHistory, &float yHistory);
+    static struct IirFilter32 new([]const float b, []const float a,
+                                  []float xHistory, []float yHistory);
 };
 
 struct FIirFilter {
@@ -122,11 +120,10 @@ struct FIirFilter {
 
     Fixed process(Fixed x);
     void  reset();
-    void  process_block(const &Fixed in, &Fixed out, unsigned long n);
+    void  process_block([]const Fixed in, []Fixed out);
 
-    static struct FIirFilter new(const &Fixed b, unsigned long numB,
-                                 const &Fixed a, unsigned long numA,
-                                 &Fixed xHistory, &Fixed yHistory);
+    static struct FIirFilter new([]const Fixed b, []const Fixed a,
+                                 []Fixed xHistory, []Fixed yHistory);
 };
 
 } // namespace std

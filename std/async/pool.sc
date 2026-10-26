@@ -90,22 +90,14 @@ static void pool_run_one_(&ThreadPool p, &TaskHeader t) {
     int done = 0;
     int aborted = 0;
     if ((st & ASYNC_TASK_ABORTED) != 0) {
-        unsafe {
-            fn void(?&TaskHeader) df = (fn void(?&TaskHeader))t.drop_;
-            df(t);
-        }
+        t.drop_(t);
         done = 1;
         aborted = 1;
     } else {
         struct Context cx = Context::from_waker(Waker::new(pool_task_wake_, (?&TaskHeader)t, 0UL));
         cx.timers = &p.timers;
-        fn int(?&ThreadPool, ?&TaskHeader) sp = pool_spawn_thunk_;
-        unsafe {
-            cx.exec_ = (void*)p;
-            cx.spawn_ = (void*)sp;
-            fn int(?&TaskHeader, &Context) pf = (fn int(?&TaskHeader, &Context))t.poll_;
-            done = pf(t, &cx);
-        }
+        context_set_spawn_(&cx, pool_spawn_thunk_, (?&ThreadPool)p);
+        done = t.poll_(t, &cx);
     }
     if (done != 0) {
         task_header_finish_(t, aborted);
@@ -191,21 +183,16 @@ int ThreadPool::start(int n) {
 int ThreadPool::spawn_raw_(?&TaskHeader tq) {
     match (tq) {
         case some(t): {
-            unsafe {
-                if (t.exec_ != (void*)0) {
-                    panic_at("std/async: task spawned twice", "std/async/pool.sc", 0);
-                    return 0;
-                }
+            if (!t.exec_.is_null()) {
+                panic_at("std/async: task spawned twice", "std/async/pool.sc", 0);
+                return 0;
             }
             // The timers count from the pool's start; keep the clock current
             // for the new task's first Sleep.
             self.timers.advance(async_mono_ms());
             mutex_lock(&self.mu);
-            fn void(?&TaskHeader, unsigned long) wk = pool_task_wake_;
-            unsafe {
-                t.exec_ = (void*)self;
-                t.wake_ = (void*)wk;
-            }
+            unsafe { t.exec_ = (?&Erased)self; }
+            t.wake_ = pool_task_wake_;
             self.live = self.live + 1;
             async_fetch_or_(&t.state, ASYNC_TASK_QUEUED);
             pool_push_(self, t);

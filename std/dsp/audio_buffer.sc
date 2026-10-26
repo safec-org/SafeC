@@ -37,7 +37,9 @@ inline int AudioBuffer::is_full() const {
     return 0;
 }
 
-inline unsigned long AudioBuffer::write_frames(&Fixed src, unsigned long n) {
+inline unsigned long AudioBuffer::write_frames([]const Fixed src) {
+    if (self.channels == 0UL) return 0UL;
+    unsigned long n = src.len / self.channels;
     unsigned long space = self.writable_frames();
     if (n > space) { n = space; }
     unsigned long mask = self.cap_frames - (unsigned long)1;
@@ -46,10 +48,8 @@ inline unsigned long AudioBuffer::write_frames(&Fixed src, unsigned long n) {
         unsigned long slot = ((self.head + i) & mask) * self.channels;
         unsigned long ch = (unsigned long)0;
         while (ch < self.channels) {
-            unsafe {
-                Fixed* ps = (Fixed*)src;
-                self.data[slot + ch] = ps[i * self.channels + ch];
-            }
+            Fixed v = src[i * self.channels + ch];
+            unsafe { self.data[slot + ch] = v; }
             ch = ch + (unsigned long)1;
         }
         i = i + (unsigned long)1;
@@ -59,7 +59,9 @@ inline unsigned long AudioBuffer::write_frames(&Fixed src, unsigned long n) {
     return n;
 }
 
-inline unsigned long AudioBuffer::read_frames(&Fixed dst, unsigned long n) {
+inline unsigned long AudioBuffer::read_frames([]Fixed dst) {
+    if (self.channels == 0UL) return 0UL;
+    unsigned long n = dst.len / self.channels;
     unsigned long avail = self.readable_frames();
     if (n > avail) { n = avail; }
     unsigned long mask = self.cap_frames - (unsigned long)1;
@@ -68,10 +70,9 @@ inline unsigned long AudioBuffer::read_frames(&Fixed dst, unsigned long n) {
         unsigned long slot = ((self.tail + i) & mask) * self.channels;
         unsigned long ch = (unsigned long)0;
         while (ch < self.channels) {
-            unsafe {
-                Fixed* pd = (Fixed*)dst;
-                pd[i * self.channels + ch] = self.data[slot + ch];
-            }
+            Fixed v;
+            unsafe { v = self.data[slot + ch]; }
+            dst[i * self.channels + ch] = v;
             ch = ch + (unsigned long)1;
         }
         i = i + (unsigned long)1;
@@ -81,7 +82,9 @@ inline unsigned long AudioBuffer::read_frames(&Fixed dst, unsigned long n) {
     return n;
 }
 
-inline unsigned long AudioBuffer::peek_frames(&Fixed dst, unsigned long n) const {
+inline unsigned long AudioBuffer::peek_frames([]Fixed dst) const {
+    if (self.channels == 0UL) return 0UL;
+    unsigned long n = dst.len / self.channels;
     unsigned long avail = self.readable_frames();
     if (n > avail) { n = avail; }
     unsigned long mask = self.cap_frames - (unsigned long)1;
@@ -90,10 +93,9 @@ inline unsigned long AudioBuffer::peek_frames(&Fixed dst, unsigned long n) const
         unsigned long slot = ((self.tail + i) & mask) * self.channels;
         unsigned long ch = (unsigned long)0;
         while (ch < self.channels) {
-            unsafe {
-                Fixed* pd = (Fixed*)dst;
-                pd[i * self.channels + ch] = self.data[slot + ch];
-            }
+            Fixed v;
+            unsafe { v = self.data[slot + ch]; }
+            dst[i * self.channels + ch] = v;
             ch = ch + (unsigned long)1;
         }
         i = i + (unsigned long)1;
@@ -101,7 +103,9 @@ inline unsigned long AudioBuffer::peek_frames(&Fixed dst, unsigned long n) const
     return n;
 }
 
-inline void AudioBuffer::mix_frames(&Fixed src, unsigned long n) {
+inline unsigned long AudioBuffer::mix_frames([]const Fixed src) {
+    if (self.channels == 0UL) return 0UL;
+    unsigned long n = src.len / self.channels;
     unsigned long space = self.writable_frames();
     if (n > space) { n = space; }
     unsigned long mask = self.cap_frames - (unsigned long)1;
@@ -110,15 +114,13 @@ inline void AudioBuffer::mix_frames(&Fixed src, unsigned long n) {
         unsigned long slot = ((self.head + i) & mask) * self.channels;
         unsigned long ch = (unsigned long)0;
         while (ch < self.channels) {
-            unsafe {
-                Fixed* ps = (Fixed*)src;
-                self.data[slot + ch] = fixed_add(self.data[slot + ch],
-                                                  ps[i * self.channels + ch]);
-            }
+            Fixed v = src[i * self.channels + ch];
+            unsafe { self.data[slot + ch] = fixed_add(self.data[slot + ch], v); }
             ch = ch + (unsigned long)1;
         }
         i = i + (unsigned long)1;
     }
+    return n;
 }
 
 inline void AudioBuffer::clear() {

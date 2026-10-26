@@ -45,16 +45,24 @@ void  sys_qsort_raw_(void* base, unsigned long n, unsigned long elem_size, void*
 void* sys_bsearch_raw_(const void* key, const void* base,
                        unsigned long n, unsigned long elem_size, void* cmp);
 
-// Sort the n elements starting at `first`; cmp(a, b) returns <0 / 0 / >0.
+// Sorts items in place; cmp(a, b) returns <0 / 0 / >0.
 generic<T>
-void sys_qsort(&T first, unsigned long n, fn int(const &T, const &T) cmp) {
-    unsafe { sys_qsort_raw_((void*)first, n, sizeof(T), (void*)cmp); }
+void sys_qsort([]T items, fn int(const &T, const &T) cmp) {
+    if (items.len < 2UL) { return; }
+    unsafe { sys_qsort_raw_((void*)items.ptr, items.len, sizeof(T), (void*)cmp); }
 }
 
-// Binary search of a sorted array; the matching element, or null.
+// Binary search of sorted items; the index of an element equal to key, or
+// null.
 generic<T>
-?&T sys_bsearch(const &T key, const &T first, unsigned long n, fn int(const &T, const &T) cmp) {
-    unsafe { return (?&T)sys_bsearch_raw_((const void*)key, (const void*)first, n, sizeof(T), (void*)cmp); }
+?unsigned long sys_bsearch(const &T key, []const T items, fn int(const &T, const &T) cmp) {
+    if (items.len == 0UL) { return null; }
+    void* hit;
+    unsafe { hit = sys_bsearch_raw_((const void*)key, (const void*)items.ptr, items.len, sizeof(T), (void*)cmp); }
+    if (hit == (void*)0) { return null; }
+    unsigned long off;
+    unsafe { off = ((unsigned long)hit - (unsigned long)items.ptr) / sizeof(T); }
+    return off;
 }
 
 // ── Clocks ────────────────────────────────────────────────────────────────────

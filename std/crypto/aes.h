@@ -2,6 +2,7 @@
 // AES-128 and AES-256 in ECB, CBC and GCM modes.  Pure software; no SIMD.
 // Freestanding-safe.
 #pragma once
+#include <std/crypto/buf.h>
 
 #define AES_BLOCK_SIZE  16   // bytes
 #define AES128_KEY_SIZE 16   // bytes
@@ -20,38 +21,56 @@ struct AesCtx {
     unsigned char iv[AES_BLOCK_SIZE]; // CBC initialisation vector
 
     // An AES-128 context from a 16-byte key (IV zeroed).
-    static struct AesCtx new_128(const &unsigned char key);
+    static struct AesCtx new_128([]const unsigned char key);
+    // internal: the (reference, length) core of new_128()
+    static struct AesCtx new_128_n_(const &unsigned char key);
 
     // An AES-256 context from a 32-byte key (IV zeroed).
-    static struct AesCtx new_256(const &unsigned char key);
+    static struct AesCtx new_256([]const unsigned char key);
+    // internal: the (reference, length) core of new_256()
+    static struct AesCtx new_256_n_(const &unsigned char key);
 
     // Encrypt one 16-byte block in-place (ECB).
-    void encrypt_block(&unsigned char block);
+    void encrypt_block([]unsigned char block);
+    // internal: the (reference, length) core of encrypt_block()
+    void encrypt_block_n_(&unsigned char block);
 
     // Decrypt one 16-byte block in-place (ECB).
-    void decrypt_block(&unsigned char block);
+    void decrypt_block([]unsigned char block);
+    // internal: the (reference, length) core of decrypt_block()
+    void decrypt_block_n_(&unsigned char block);
 
     // Encrypt `len` bytes (must be multiple of 16) in CBC mode.
     // Uses and updates self.iv.
-    void cbc_encrypt(&unsigned char data, unsigned long len);
+    void cbc_encrypt([]unsigned char data);
+    // internal: the (reference, length) core of cbc_encrypt()
+    void cbc_encrypt_n_(&unsigned char data, unsigned long len);
 
     // Decrypt `len` bytes in CBC mode.  Uses and updates self.iv.
-    void cbc_decrypt(&unsigned char data, unsigned long len);
+    void cbc_decrypt([]unsigned char data);
+    // internal: the (reference, length) core of cbc_decrypt()
+    void cbc_decrypt_n_(&unsigned char data, unsigned long len);
 
     // Set the CBC initialisation vector.
-    void set_iv(const &unsigned char iv);
+    void set_iv([]const unsigned char iv);
+    // internal: the (reference, length) core of set_iv()
+    void set_iv_n_(const &unsigned char iv);
 
     // AES-GCM (NIST SP 800-38D) with a 12-byte IV and a 16-byte tag:
     // encrypts data[0..len) in place and writes the tag over the
     // additional data aad[0..aad_len) (aad may be null when aad_len is 0)
     // and the ciphertext. Never reuse an IV with the same key.
-    void gcm_encrypt(const &unsigned char iv, const ?&unsigned char aad, unsigned long aad_len,
+    void gcm_encrypt([]const unsigned char iv, []const unsigned char aad, []unsigned char data, []unsigned char tag);
+    // internal: the (reference, length) core of gcm_encrypt()
+    void gcm_encrypt_n_(const &unsigned char iv, const ?&unsigned char aad, unsigned long aad_len,
                      &unsigned char data, unsigned long len, &unsigned char tag);
 
     // Checks the tag (in constant time) and, only if it matches, decrypts
     // data[0..len) in place. Returns 1 if authentic, 0 if not (data is then
     // left as the unauthenticated ciphertext).
-    int  gcm_decrypt(const &unsigned char iv, const ?&unsigned char aad, unsigned long aad_len,
+    int  gcm_decrypt([]const unsigned char iv, []const unsigned char aad, []unsigned char data, []const unsigned char tag);
+    // internal: the (reference, length) core of gcm_decrypt()
+    int  gcm_decrypt_n_(const &unsigned char iv, const ?&unsigned char aad, unsigned long aad_len,
                      &unsigned char data, unsigned long len, const &unsigned char tag);
 
     // Securely wipe the expanded key schedule and IV (via

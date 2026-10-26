@@ -22,10 +22,17 @@ unsigned long checked_mul_size(unsigned long a, unsigned long b);
 // fields' sizes into one combined allocation) -- abort instead of silently
 // wrapping if the sum overflows unsigned long.
 unsigned long checked_add_size(unsigned long a, unsigned long b);
-generic<T> void safe_memcpy(&T dst, const &T src, unsigned long n);
-generic<T> void safe_memmove(&T dst, const &T src, unsigned long n);
-generic<T> void safe_memset(&T ptr, int val, unsigned long n);
-generic<T> int  safe_memcmp(const &T a, const &T b, unsigned long n);
+// Element-wise copies between slices: min(dst.len, src.len) elements, the
+// count returned. safe_memmove allows dst and src to overlap.
+generic<T> unsigned long safe_memcpy([]T dst, []const T src);
+generic<T> unsigned long safe_memmove([]T dst, []const T src);
+// Sets every byte of s's elements to val (memset).
+generic<T> void safe_memset([]T s, int val);
+// The same, for one object: safe_memset_obj(&ev, 0) clears a struct.
+generic<T> void safe_memset_obj(&T v, int val);
+// Byte-wise comparison (memcmp) of a and b over their common length; when
+// that prefix is equal, the shorter slice compares less.
+generic<T> int  safe_memcmp([]const T a, []const T b);
 
 // ── Cache-line helpers ────────────────────────────────────────────────────────
 #define MEM_CACHE_LINE_SIZE  64   // bytes (typical x86/ARM/RISC-V L1)
@@ -43,8 +50,10 @@ int           mem_is_aligned(unsigned long addr, unsigned long align);
 // locality: 0=no temporal, 1=low, 2=moderate, 3=high
 generic<T> void mem_prefetch(const &T addr, int write, int locality);
 
-// Zero `n` bytes with volatile stores the optimizer can't remove (for secrets).
-generic<T> void mem_zero_secure(&T ptr, unsigned long n);
+// Zero s (all its elements' bytes) with volatile stores the optimizer can't
+// remove (for secrets); mem_zero_secure_obj zeroes one object the same way.
+generic<T> void mem_zero_secure([]T s);
+generic<T> void mem_zero_secure_obj(&T v);
 
 // Write back and invalidate the cache line containing `addr` (x86 CLFLUSH,
 // AArch64 DC CIVAC; a no-op on other targets).
@@ -85,14 +94,36 @@ generic<T> void dealloc(?&heap T ptr) { dealloc_raw_(ptr); }
 generic<T> ?&heap T realloc_buf(?&heap T ptr, unsigned long new_size) {
     return realloc_buf_raw_(ptr, new_size);
 }
-generic<T> void safe_memcpy(&T dst, const &T src, unsigned long n) { safe_memcpy_raw_(dst, src, n); }
-generic<T> void safe_memmove(&T dst, const &T src, unsigned long n) { safe_memmove_raw_(dst, src, n); }
-generic<T> void safe_memset(&T ptr, int val, unsigned long n) { safe_memset_raw_(ptr, val, n); }
-generic<T> int safe_memcmp(const &T a, const &T b, unsigned long n) { return safe_memcmp_raw_(a, b, n); }
+generic<T> unsigned long safe_memcpy([]T dst, []const T src) {
+    unsigned long n = dst.len < src.len ? dst.len : src.len;
+    if (n > 0UL) { unsafe { safe_memcpy_raw_((void*)dst.ptr, (const void*)src.ptr, n * sizeof(T)); } }
+    return n;
+}
+generic<T> unsigned long safe_memmove([]T dst, []const T src) {
+    unsigned long n = dst.len < src.len ? dst.len : src.len;
+    if (n > 0UL) { unsafe { safe_memmove_raw_((void*)dst.ptr, (const void*)src.ptr, n * sizeof(T)); } }
+    return n;
+}
+generic<T> void safe_memset([]T s, int val) {
+    if (s.len > 0UL) { unsafe { safe_memset_raw_((void*)s.ptr, val, s.len * sizeof(T)); } }
+}
+generic<T> void safe_memset_obj(&T v, int val) { safe_memset_raw_(v, val, sizeof(T)); }
+generic<T> int safe_memcmp([]const T a, []const T b) {
+    unsigned long n = a.len < b.len ? a.len : b.len;
+    int c = 0;
+    if (n > 0UL) { unsafe { c = safe_memcmp_raw_((const void*)a.ptr, (const void*)b.ptr, n * sizeof(T)); } }
+    if (c != 0) { return c; }
+    if (a.len < b.len) { return -1; }
+    if (a.len > b.len) { return 1; }
+    return 0;
+}
 generic<T> void mem_prefetch(const &T addr, int write, int locality) {
     mem_prefetch_raw_(addr, write, locality);
 }
-generic<T> void mem_zero_secure(&T ptr, unsigned long n) { mem_zero_secure_raw_(ptr, n); }
+generic<T> void mem_zero_secure([]T s) {
+    if (s.len > 0UL) { unsafe { mem_zero_secure_raw_((void*)s.ptr, s.len * sizeof(T)); } }
+}
+generic<T> void mem_zero_secure_obj(&T v) { mem_zero_secure_raw_(v, sizeof(T)); }
 generic<T> void mem_clflush(const &T addr) { mem_clflush_raw_(addr); }
 generic<T> ?&T mem_align_ptr(&T ptr, unsigned long align) { return mem_align_ptr_raw_(ptr, align); }
 

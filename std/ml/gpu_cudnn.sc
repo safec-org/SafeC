@@ -1000,8 +1000,8 @@ struct CudaHalfConv2D CudaHalfConv2D::upload(const &Conv2D layer, int dtype) {
     d.stride = layer.stride;
     d.padding = layer.padding;
     unsigned long wn = layer.outChannels * layer.inChannels * layer.kH * layer.kW;
-    d.weight = CudaHalfBuf::upload(layer.weight, wn, dtype);
-    d.bias = CudaHalfBuf::upload(layer.bias, layer.outChannels, dtype);
+    d.weight = CudaHalfBuf::upload_n_(layer.weight, wn, dtype);
+    d.bias = CudaHalfBuf::upload_n_(layer.bias, layer.outChannels, dtype);
     if (d.weight.dev == 0UL || d.bias.dev == 0UL) {
         d.weight.free();
         d.bias.free();
@@ -1025,8 +1025,8 @@ struct CudaConv2D CudaConv2D::upload(const &Conv2D layer) {
     d.stride = layer.stride;
     d.padding = layer.padding;
     unsigned long wn = layer.outChannels * layer.inChannels * layer.kH * layer.kW;
-    d.weight = CudaBuf::upload(layer.weight, wn);
-    d.bias = CudaBuf::upload(layer.bias, layer.outChannels);
+    d.weight = CudaBuf::upload_n_(layer.weight, wn);
+    d.bias = CudaBuf::upload_n_(layer.bias, layer.outChannels);
     if (d.weight.dev == 0UL || d.bias.dev == 0UL) {
         d.weight.free();
         d.bias.free();
@@ -1124,11 +1124,11 @@ struct FeatureMap conv2d_forward_cuda(const &Conv2D layer, const &FeatureMap inp
     unsigned long outW = cuda_conv_out_dim(w, layer.kW, layer.stride, layer.padding);
     if (inC == layer.inChannels && outH > 0UL && outW > 0UL && cudnn_ensure_()) {
         struct CudaConv2D d = CudaConv2D::upload(layer);
-        struct CudaBuf x = CudaBuf::upload(input.data, inC * h * w);
+        struct CudaBuf x = CudaBuf::upload_n_(input.data, inC * h * w);
         struct CudaBuf y = CudaBuf::alloc(layer.outChannels * outH * outW);
         struct FeatureMap out = FeatureMap::new(layer.outChannels, outH, outW);
         int ok = d.weight.dev != 0UL && x.dev != 0UL && y.dev != 0UL &&
-                 d.forward(x, y, 1UL, h, w) && cuda_read(y, out.data, y.len);
+                 d.forward(x, y, 1UL, h, w) && cuda_read_n_(y, out.data, y.len);
         d.free();
         x.free();
         y.free();
@@ -1144,11 +1144,11 @@ struct FeatureMap unet_forward_cuda(&UNet net, const &FeatureMap input) {
     if (input.channels == net.encConv1.inChannels && cudnn_ensure_()) {
         struct CudaUNet g = CudaUNet::new(net, 1UL, h, w);
         unsigned long outC = net.decConv2.outChannels;
-        struct CudaBuf x = CudaBuf::upload(input.data, input.channels * h * w);
+        struct CudaBuf x = CudaBuf::upload_n_(input.data, input.channels * h * w);
         struct CudaBuf y = CudaBuf::alloc(outC * h * w);
         struct FeatureMap out = FeatureMap::new(outC, h, w);
         int ok = g.ok && x.dev != 0UL && y.dev != 0UL &&
-                 g.forward(x, y) && cuda_read(y, out.data, y.len);
+                 g.forward(x, y) && cuda_read_n_(y, out.data, y.len);
         g.free();
         x.free();
         y.free();

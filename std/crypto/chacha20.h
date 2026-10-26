@@ -15,6 +15,7 @@
 //
 // Never reuse a nonce with the same key. Freestanding-safe.
 #pragma once
+#include <std/crypto/buf.h>
 
 #define CHACHA20_KEY_SIZE    32
 #define CHACHA20_NONCE_SIZE  12
@@ -25,11 +26,15 @@ namespace std {
 
 // XORs the ChaCha20 keystream for (key, nonce), starting at block
 // 'counter', into data[0..len) — encryption and decryption are the same.
-void chacha20_xor(const &unsigned char key, const &unsigned char nonce, unsigned int counter,
+void chacha20_xor([]const unsigned char key, []const unsigned char nonce, unsigned int counter, []unsigned char data);
+// internal: the (reference, length) core of chacha20_xor()
+void chacha20_xor_n_(const &unsigned char key, const &unsigned char nonce, unsigned int counter,
                   &unsigned char data, unsigned long len);
 
 // Writes the 64-byte ChaCha20 block 'counter' for (key, nonce).
-void chacha20_block(const &unsigned char key, const &unsigned char nonce, unsigned int counter,
+void chacha20_block([]const unsigned char key, []const unsigned char nonce, unsigned int counter, []unsigned char out);
+// internal: the (reference, length) core of chacha20_block()
+void chacha20_block_n_(const &unsigned char key, const &unsigned char nonce, unsigned int counter,
                     &unsigned char out);
 
 // Streaming Poly1305 with a one-time 32-byte key (r || s).
@@ -40,29 +45,41 @@ struct Poly1305 {
     unsigned char buf[16];  // a partial block
     unsigned long buf_len;
 
-    static struct Poly1305 new(const &unsigned char key);
-    void update(const &unsigned char data, unsigned long len);
+    static struct Poly1305 new([]const unsigned char key);
+    // internal: the (reference, length) core of new()
+    static struct Poly1305 new_n_(const &unsigned char key);
+    void update([]const unsigned char data);
+    // internal: the (reference, length) core of update()
+    void update_n_(const &unsigned char data, unsigned long len);
     // Pads the input so far to a multiple of 16 bytes with zeros (the
     // AEAD's pad16 between the additional data and the ciphertext).
     void pad16();
     // Writes the 16-byte tag and wipes the state.
-    void finish(&unsigned char tag);
+    void finish([]unsigned char tag);
+    // internal: the (reference, length) core of finish()
+    void finish_n_(&unsigned char tag);
 };
 
 // One-shot Poly1305: the 16-byte tag of msg[0..len) under 'key'.
-void poly1305(const &unsigned char key, const ?&unsigned char msg, unsigned long len, &unsigned char tag);
+void poly1305([]const unsigned char key, []const unsigned char msg, []unsigned char tag);
+// internal: the (reference, length) core of poly1305()
+void poly1305_n_(const &unsigned char key, const ?&unsigned char msg, unsigned long len, &unsigned char tag);
 
 // AEAD_CHACHA20_POLY1305 (RFC 8439 §2.8): encrypts data[0..len) in place
 // and writes the 16-byte tag over aad[0..aad_len) (aad may be null when
 // aad_len is 0) and the ciphertext.
-void chacha20_poly1305_seal(const &unsigned char key, const &unsigned char nonce,
+void chacha20_poly1305_seal([]const unsigned char key, []const unsigned char nonce, []const unsigned char aad, []unsigned char data, []unsigned char tag);
+// internal: the (reference, length) core of chacha20_poly1305_seal()
+void chacha20_poly1305_seal_n_(const &unsigned char key, const &unsigned char nonce,
                             const ?&unsigned char aad, unsigned long aad_len,
                             &unsigned char data, unsigned long len, &unsigned char tag);
 
 // Checks the tag in constant time and, only if it is authentic, decrypts
 // data[0..len) in place. 1 if authentic, 0 if not (data is then left as
 // the unauthenticated ciphertext).
-int  chacha20_poly1305_open(const &unsigned char key, const &unsigned char nonce,
+int  chacha20_poly1305_open([]const unsigned char key, []const unsigned char nonce, []const unsigned char aad, []unsigned char data, []const unsigned char tag);
+// internal: the (reference, length) core of chacha20_poly1305_open()
+int  chacha20_poly1305_open_n_(const &unsigned char key, const &unsigned char nonce,
                             const ?&unsigned char aad, unsigned long aad_len,
                             &unsigned char data, unsigned long len, const &unsigned char tag);
 

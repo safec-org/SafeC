@@ -223,7 +223,7 @@ struct String http_header_get(const &char raw_headers, const &char name) {
     while (1) {
         unsigned long next = http_next_header_(raw_headers, len, pos, &ks, &ke, &vs, &ve);
         if (ke > ks && http_key_is_(raw_headers, ks, ke, name)) {
-            unsafe { return String::from_n(&raw_headers[vs], ve - vs); }
+            unsafe { return String::from_n_(&raw_headers[vs], ve - vs); }
         }
         if (next == 0UL) { break; }
         pos = next;
@@ -322,7 +322,7 @@ static unsigned long http_headers_rewrite_(&String raw, const &char name, const 
                 }
             } else if (contentEnd > pos) {
                 if (!out.is_empty()) { out.push("\r\n"); }
-                out.push_n(&h[pos], contentEnd - pos);
+                out.push_n_(&h[pos], contentEnd - pos);
             }
             if (next == 0UL) { break; }
             pos = next;
@@ -383,12 +383,18 @@ struct HttpResponse HttpResponse::new(int status) {
     return r;
 }
 
-struct HttpResponse HttpResponse::bytes(int status, const &char content_type,
+struct HttpResponse HttpResponse::bytes_n_(int status, const &char content_type,
                                         const ?&unsigned char data, unsigned long len) {
     struct HttpResponse r = HttpResponse::new(status);
     http_headers_add(&r.headers, "Content-Type", content_type);
-    if (len > 0UL) { unsafe { r.body.push_n((const char*)data, len); } }
+    if (len > 0UL) { unsafe { r.body.push_n_((const char*)data, len); } }
     return r;
+}
+
+struct HttpResponse HttpResponse::bytes(int status, const &char content_type, []const unsigned char data_s) {
+    unsigned long len = data_s.len;
+    const ?&unsigned char data = crypto_opt_(data_s);
+    return HttpResponse::bytes_n_(status, content_type, data, len);
 }
 
 struct HttpResponse HttpResponse::text(int status, const &char body) {
@@ -462,9 +468,15 @@ void HttpResponse::set_body(const &char body) {
     self.body.push(body);
 }
 
-void HttpResponse::set_body_bytes(const &unsigned char data, unsigned long len) {
+void HttpResponse::set_body_bytes_n_(const &unsigned char data, unsigned long len) {
     self.body.clear();
-    unsafe { self.body.push_n((const char*)data, len); }
+    unsafe { self.body.push_n_((const char*)data, len); }
+}
+
+void HttpResponse::set_body_bytes([]const unsigned char data_s) {
+    unsigned long len = data_s.len;
+    const &unsigned char data = crypto_in_(data_s, 0UL);
+    self.set_body_bytes_n_(data, len);
 }
 
 struct HttpRequest HttpRequest::new(const &char method, const &char path) {
@@ -500,13 +512,13 @@ struct String HttpRequest::query_string() const {
 
 struct QueryParams HttpRequest::query() const {
     struct String qs = self.query_string();
-    struct QueryParams q = QueryParams::parse_n(qs.as_ptr(), qs.length());
+    struct QueryParams q = QueryParams::parse_bytes(qs.as_bytes());
     qs.free();
     return q;
 }
 
 struct QueryParams HttpRequest::form() const {
-    return QueryParams::parse_n(self.body.as_ptr(), self.body.length());
+    return QueryParams::parse_bytes(self.body.as_bytes());
 }
 
 int HttpRequest::content_type_is(const &char mime) const {
@@ -553,7 +565,7 @@ struct String HttpRequest::cookie(const &char name) const {
                             while (va < b && h[va] == ' ') { va = va + 1UL; }
                             unsigned long vb = b;
                             if (vb - va >= 2UL && h[va] == '"' && h[vb - 1UL] == '"') { va = va + 1UL; vb = vb - 1UL; }
-                            out.push_n(&h[va], vb - va);
+                            out.push_n_(&h[va], vb - va);
                             return out;
                         }
                     }
@@ -669,10 +681,13 @@ struct TcpStream TcpStream::over_tls(&heap TlsStream t) {
 
 int TcpStream::is_tls() const { return !self.tls.is_null(); }
 
-long long TcpStream::read(&unsigned char buf, unsigned long n) {
+long long TcpStream::read([]unsigned char buf_s) {
+    unsigned long n = buf_s.len;
+    &unsigned char buf;
+    unsafe { buf = (&unsigned char)buf_s.ptr; }
     match (self.tls) {
         case some(t): {
-            long long r = t.read(buf, n);
+            long long r = t.read(buf_s);
             return r < 0LL ? -1LL : r;
         }
         case null: { }
@@ -680,10 +695,13 @@ long long TcpStream::read(&unsigned char buf, unsigned long n) {
     unsafe { return (long long)sock_read_(self.fd, (void*)buf, n); }
 }
 
-long long TcpStream::write(const &unsigned char buf, unsigned long n) {
+long long TcpStream::write([]const unsigned char buf_s) {
+    unsigned long n = buf_s.len;
+    const &unsigned char buf;
+    unsafe { buf = (const &unsigned char)buf_s.ptr; }
     match (self.tls) {
         case some(t): {
-            long long r = t.write(buf, n);
+            long long r = t.write(buf_s);
             return r < 0LL ? -1LL : r;
         }
         case null: { }
@@ -707,11 +725,11 @@ int TcpStream::close() {
 
 // The whole of 'text' to the stream; 1 on success.
 static int write_text_(&TcpStream s, const &String text) {
-    unsafe { return write_all(s, (const &unsigned char)text.as_ptr(), text.length()); }
+    unsafe { return write_all(s, text.as_bytes()); }
 }
 
 static int write_cstr_(&TcpStream s, const &char text) {
-    unsafe { return write_all(s, (const &unsigned char)text, str_len(text)); }
+    unsafe { return write_all(s, str_bytes(text)); }
 }
 
 struct TcpStream http_open_stream(const &char host, unsigned short port, int tls,
@@ -845,7 +863,7 @@ static int http_status_has_body_(int status) {
     return !(status < 200 || status == 204 || status == 304);
 }
 
-struct String http_build_response(int status, const &char content_type,
+struct String http_build_response_n_(int status, const &char content_type,
                                    const ?&unsigned char body, unsigned long body_len) {
     const char* ctype;
     if (content_type) { ctype = content_type; } else { ctype = "text/plain"; }
@@ -860,9 +878,15 @@ struct String http_build_response(int status, const &char content_type,
         out.push("\r\nContent-Length: ");
         out.push_uint((unsigned long long)body_len);
         out.push("\r\nConnection: close\r\n\r\n");
-        if (body_len > 0UL) { out.push_n((const char*)body, body_len); }
+        if (body_len > 0UL) { out.push_n_((const char*)body, body_len); }
     }
     return out;
+}
+
+struct String http_build_response(int status, const &char content_type, []const unsigned char body_s) {
+    unsigned long body_len = body_s.len;
+    const ?&unsigned char body = crypto_opt_(body_s);
+    return http_build_response_n_(status, content_type, body, body_len);
 }
 
 // Serializes a handler's HttpResponse: status line, every header the
@@ -901,9 +925,9 @@ static struct String http_render_response_(&HttpResponse resp, int head, int kee
                 !http_key_is_(h, ks, ke, "transfer-encoding")) {
                 if (http_key_is_(h, ks, ke, "content-type")) { hasType = 1; }
                 if (http_key_is_(h, ks, ke, "date")) { hasDate = 1; }
-                out.push_n(&h[ks], ke - ks);
+                out.push_n_(&h[ks], ke - ks);
                 out.push(": ");
-                out.push_n(&h[vs], ve - vs);
+                out.push_n_(&h[vs], ve - vs);
                 out.push("\r\n");
             }
             if (next == 0UL) { break; }
@@ -928,7 +952,7 @@ static struct String http_render_response_(&HttpResponse resp, int head, int kee
             out.push("\r\n");
         }
         out.push(keep ? "Connection: keep-alive\r\n\r\n" : "Connection: close\r\n\r\n");
-        if (!head && bodyAllowed) { out.push_n(resp.body.as_ptr(), resp.body.length()); }
+        if (!head && bodyAllowed) { out.push_n_(resp.body.as_ptr(), resp.body.length()); }
     }
     return out;
 }
@@ -955,12 +979,18 @@ static void http_push_hex_(&String out, unsigned long v) {
     }
 }
 
-void http_chunked_encode(&String out, const ?&unsigned char data, unsigned long len) {
+void http_chunked_encode_n_(&String out, const ?&unsigned char data, unsigned long len) {
     if (len == 0UL) { return; }
     http_push_hex_(out, len);
     out.push("\r\n");
-    unsafe { out.push_n((const char*)data, len); }
+    unsafe { out.push_n_((const char*)data, len); }
     out.push("\r\n");
+}
+
+void http_chunked_encode(&String out, []const unsigned char data_s) {
+    unsigned long len = data_s.len;
+    const ?&unsigned char data = crypto_opt_(data_s);
+    http_chunked_encode_n_(out, data, len);
 }
 
 void http_chunked_end(&String out) { out.push("0\r\n\r\n"); }
@@ -994,7 +1024,7 @@ static long long http_parse_chunk_size_(const char* s, unsigned long n) {
     return v;
 }
 
-int http_chunked_decode(const &unsigned char data, unsigned long len, &String out,
+int http_chunked_decode_n_(const &unsigned char data, unsigned long len, &String out,
                         ?&unsigned long consumed) {
     const char* s;
     unsafe { s = (const char*)data; }
@@ -1025,7 +1055,7 @@ int http_chunked_decode(const &unsigned char data, unsigned long len, &String ou
             return 1;
         }
         if ((unsigned long)size > len - pos) { return 0; }
-        unsafe { out.push_n(&s[pos], (unsigned long)size); }
+        unsafe { out.push_n_(&s[pos], (unsigned long)size); }
         pos = pos + (unsigned long)size;
         unsafe {
             if (pos + 1UL < len && s[pos] == '\r' && s[pos + 1UL] == '\n') { pos = pos + 2UL; }
@@ -1034,6 +1064,12 @@ int http_chunked_decode(const &unsigned char data, unsigned long len, &String ou
         }
     }
     return 0;
+}
+
+int http_chunked_decode([]const unsigned char data_s, &String out, ?&unsigned long consumed) {
+    unsigned long len = data_s.len;
+    const &unsigned char data = crypto_in_(data_s, 0UL);
+    return http_chunked_decode_n_(data, len, out, consumed);
 }
 
 // ── Reading heads and bodies from a connection ────────────────────────────
@@ -1046,7 +1082,7 @@ static int http_read_head_(&BufReader<TcpStream> in, &String out, unsigned long 
     *any = 0;
     while (1) {
         if (in.pos == in.len) {
-            long long k = in.inner.read(&in.buf[0], (unsigned long)IO_BUF_SIZE);
+            long long k = in.inner.read(in.buf[0..(unsigned long)IO_BUF_SIZE]);
             if (k <= 0LL) { return 0; }
             in.pos = 0UL;
             in.len = (unsigned long)k;
@@ -1063,7 +1099,7 @@ static int http_read_head_(&BufReader<TcpStream> in, &String out, unsigned long 
             *any = 1;
             if (c == (unsigned char)'\n') {
                 if (state == 1 || state == 2) {
-                    unsafe { out.push_n((const &char)(const char*)&in.buf[in.pos], i - in.pos); }
+                    unsafe { out.push_n_((const &char)(const char*)&in.buf[in.pos], i - in.pos); }
                     in.pos = i;
                     return 1;
                 }
@@ -1075,7 +1111,7 @@ static int http_read_head_(&BufReader<TcpStream> in, &String out, unsigned long 
             }
             if (out.length() + (i - in.pos) > max) { return -1; }
         }
-        unsafe { out.push_n((const &char)(const char*)&in.buf[in.pos], in.len - in.pos); }
+        unsafe { out.push_n_((const &char)(const char*)&in.buf[in.pos], in.len - in.pos); }
         in.pos = in.len;
     }
     return 0;
@@ -1086,7 +1122,7 @@ static int http_read_head_(&BufReader<TcpStream> in, &String out, unsigned long 
 static int http_read_line_(&BufReader<TcpStream> in, &String out, unsigned long max) {
     while (1) {
         if (in.pos == in.len) {
-            long long k = in.inner.read(&in.buf[0], (unsigned long)IO_BUF_SIZE);
+            long long k = in.inner.read(in.buf[0..(unsigned long)IO_BUF_SIZE]);
             if (k <= 0LL) { return 0; }
             in.pos = 0UL;
             in.len = (unsigned long)k;
@@ -1094,7 +1130,7 @@ static int http_read_line_(&BufReader<TcpStream> in, &String out, unsigned long 
         unsigned long i = in.pos;
         while (i < in.len) {
             if (in.buf[i] == (unsigned char)'\n') {
-                unsafe { out.push_n((const &char)(const char*)&in.buf[in.pos], i - in.pos); }
+                unsafe { out.push_n_((const &char)(const char*)&in.buf[in.pos], i - in.pos); }
                 in.pos = i + 1UL;
                 if (out.length() > 0UL) {
                     unsafe { if (out.as_ptr()[out.length() - 1UL] == '\r') { out.truncate(out.length() - 1UL); } }
@@ -1104,7 +1140,7 @@ static int http_read_line_(&BufReader<TcpStream> in, &String out, unsigned long 
             i = i + 1UL;
             if (out.length() + (i - in.pos) > max) { return 0; }
         }
-        unsafe { out.push_n((const &char)(const char*)&in.buf[in.pos], in.len - in.pos); }
+        unsafe { out.push_n_((const &char)(const char*)&in.buf[in.pos], in.len - in.pos); }
         in.pos = in.len;
     }
     return 0;
@@ -1117,9 +1153,9 @@ static int http_read_n_(&BufReader<TcpStream> in, &String out, unsigned long wan
     if (!out.reserve(want)) { return 0; }
     while (remaining > 0UL) {
         unsigned long ask = (remaining < 4096UL) ? remaining : 4096UL;
-        long long n = in.read(&chunk[0], ask);
+        long long n = in.read(chunk[0..ask]);
         if (n <= 0LL) { return 0; }
-        unsafe { out.push_n((const char*)&chunk[0], (unsigned long)n); }
+        unsafe { out.push_n_((const char*)&chunk[0], (unsigned long)n); }
         remaining = remaining - (unsigned long)n;
     }
     return 1;
@@ -1129,11 +1165,11 @@ static int http_read_n_(&BufReader<TcpStream> in, &String out, unsigned long wan
 static int http_read_to_eof_(&BufReader<TcpStream> in, &String out, unsigned long max) {
     unsigned char chunk[4096];
     while (1) {
-        long long n = in.read(&chunk[0], 4096UL);
+        long long n = in.read(chunk[0..4096UL]);
         if (n < 0LL) { return 0; }
         if (n == 0LL) { return 1; }
         if (max != 0UL && out.length() + (unsigned long)n > max) { return 0; }
-        unsafe { out.push_n((const char*)&chunk[0], (unsigned long)n); }
+        unsafe { out.push_n_((const char*)&chunk[0], (unsigned long)n); }
     }
     return 0;
 }
@@ -1266,7 +1302,7 @@ static struct HttpResponse http_exchange_(const &char host, unsigned short port,
                 req.push("\r\n");
             }
             req.push("\r\n");
-            if (body_len > 0UL) { req.push_n((const char*)body, body_len); }
+            if (body_len > 0UL) { req.push_n_((const char*)body, body_len); }
         }
         if (!write_text_(&s, &req)) { good = 0; }
         req.free();
@@ -1339,16 +1375,22 @@ static struct HttpResponse http_exchange_(const &char host, unsigned short port,
     return resp;
 }
 
-struct HttpResponse http_request(const &char host, unsigned short port,
+struct HttpResponse http_request_n_(const &char host, unsigned short port,
                                   const &char method, const &char path,
                                   const ?&char extra_headers,
                                   const ?&unsigned char body, unsigned long body_len,
                                   ?&int ok) {
-    return http_request_timeout(host, port, method, path, extra_headers, body, body_len,
+    return http_request_timeout_n_(host, port, method, path, extra_headers, body, body_len,
                                 HTTP_DEFAULT_CONNECT_TIMEOUT_MS, 0, ok);
 }
 
-struct HttpResponse http_request_timeout(const &char host, unsigned short port,
+struct HttpResponse http_request(const &char host, unsigned short port, const &char method, const &char path, const ?&char extra_headers, []const unsigned char body_s, ?&int ok) {
+    unsigned long body_len = body_s.len;
+    const ?&unsigned char body = crypto_opt_(body_s);
+    return http_request_n_(host, port, method, path, extra_headers, body, body_len, ok);
+}
+
+struct HttpResponse http_request_timeout_n_(const &char host, unsigned short port,
                                           const &char method, const &char path,
                                           const ?&char extra_headers,
                                           const ?&unsigned char body, unsigned long body_len,
@@ -1365,13 +1407,19 @@ struct HttpResponse http_request_timeout(const &char host, unsigned short port,
     return r;
 }
 
+struct HttpResponse http_request_timeout(const &char host, unsigned short port, const &char method, const &char path, const ?&char extra_headers, []const unsigned char body_s, int connect_timeout_ms, int io_timeout_ms, ?&int ok) {
+    unsigned long body_len = body_s.len;
+    const ?&unsigned char body = crypto_opt_(body_s);
+    return http_request_timeout_n_(host, port, method, path, extra_headers, body, body_len, connect_timeout_ms, io_timeout_ms, ok);
+}
+
 struct HttpResponse http_get(const &char host, unsigned short port,
                               const &char path, ?&int ok) {
-    return http_request(host, port, "GET", path, null,
+    return http_request_n_(host, port, "GET", path, null,
                          null, 0UL, ok);
 }
 
-struct HttpResponse http_post(const &char host, unsigned short port, const &char path,
+struct HttpResponse http_post_n_(const &char host, unsigned short port, const &char path,
                                const &char content_type,
                                const ?&unsigned char body, unsigned long body_len,
                                ?&int ok) {
@@ -1383,10 +1431,16 @@ struct HttpResponse http_post(const &char host, unsigned short port, const &char
         hdr.push(ctype);
         hdr.push("\r\n");
     }
-    struct HttpResponse r = http_request(host, port, "POST", path, hdr.as_ptr(),
+    struct HttpResponse r = http_request_n_(host, port, "POST", path, hdr.as_ptr(),
                                           body, body_len, ok);
     hdr.free();
     return r;
+}
+
+struct HttpResponse http_post(const &char host, unsigned short port, const &char path, const &char content_type, []const unsigned char body_s, ?&int ok) {
+    unsigned long body_len = body_s.len;
+    const ?&unsigned char body = crypto_opt_(body_s);
+    return http_post_n_(host, port, path, content_type, body, body_len, ok);
 }
 
 struct HttpClientOptions HttpClientOptions::defaults() {
@@ -1413,23 +1467,23 @@ int http_decode_body(&HttpResponse resp, unsigned long max_out) {
     struct Vec<unsigned char> out = Vec::new();
     int ok = 0;
     unsafe {
-        const &unsigned char data = (const &unsigned char)resp.body.as_ptr();
+        []const unsigned char data = resp.body.as_bytes();
         if (e.eq_cstr_ignore_case("gzip") || e.eq_cstr_ignore_case("x-gzip")) {
-            out = gzip_decompress(data, resp.body.length(), max_out, &ok);
+            out = gzip_decompress(data, max_out, &ok);
         } else if (e.eq_cstr_ignore_case("deflate")) {
             // "deflate" is meant to be zlib-wrapped, but some servers send
             // raw DEFLATE; accept both.
-            out = zlib_decompress(data, resp.body.length(), max_out, &ok);
+            out = zlib_decompress(data, max_out, &ok);
             if (!ok) {
                 out.free();
-                out = inflate_raw(data, resp.body.length(), max_out, null, &ok);
+                out = inflate_raw(data, max_out, null, &ok);
             }
         }
     }
     if (ok) {
         resp.body.clear();
         match (out.data) {
-            case some(d): { unsafe { resp.body.push_n((const char*)d, out.len); } }
+            case some(d): { unsafe { resp.body.push_n_((const char*)d, out.len); } }
             case null: { }
         }
         http_headers_remove(&resp.headers, "Content-Encoding");
@@ -1442,7 +1496,7 @@ int http_decode_body(&HttpResponse resp, unsigned long max_out) {
     return result;
 }
 
-struct HttpResponse http_fetch(const &char method, const &char url,
+struct HttpResponse http_fetch_n_(const &char method, const &char url,
                                const ?&char extra_headers,
                                const ?&unsigned char body, unsigned long body_len,
                                const ?&HttpClientOptions optsIn, ?&String final_url,
@@ -1533,18 +1587,30 @@ struct HttpResponse http_fetch(const &char method, const &char url,
     return resp;
 }
 
-struct HttpResponse http_get_url(const &char url, ?&int ok) {
-    return http_fetch("GET", url, null, null, 0UL, null, null, ok);
+struct HttpResponse http_fetch(const &char method, const &char url, const ?&char extra_headers, []const unsigned char body_s, const ?&HttpClientOptions opts, ?&String final_url, ?&int ok) {
+    unsigned long body_len = body_s.len;
+    const ?&unsigned char body = crypto_opt_(body_s);
+    return http_fetch_n_(method, url, extra_headers, body, body_len, opts, final_url, ok);
 }
 
-struct HttpResponse http_post_url(const &char url, const &char content_type,
+struct HttpResponse http_get_url(const &char url, ?&int ok) {
+    return http_fetch_n_("GET", url, null, null, 0UL, null, null, ok);
+}
+
+struct HttpResponse http_post_url_n_(const &char url, const &char content_type,
                                   const ?&unsigned char body, unsigned long body_len, ?&int ok) {
     struct String hdr = String::from("Content-Type: ");
     hdr.push(content_type);
     hdr.push("\r\n");
-    struct HttpResponse r = http_fetch("POST", url, hdr.as_ptr(), body, body_len, null, null, ok);
+    struct HttpResponse r = http_fetch_n_("POST", url, hdr.as_ptr(), body, body_len, null, null, ok);
     hdr.free();
     return r;
+}
+
+struct HttpResponse http_post_url(const &char url, const &char content_type, []const unsigned char body_s, ?&int ok) {
+    unsigned long body_len = body_s.len;
+    const ?&unsigned char body = crypto_opt_(body_s);
+    return http_post_url_n_(url, content_type, body, body_len, ok);
 }
 
 // ── Server: request parsing ───────────────────────────────────────────────
@@ -1604,7 +1670,7 @@ static int http_read_request_(&BufReader<TcpStream> in, const &HttpServerConfig 
     }
     // "METHOD SP request-target SP HTTP-version"
     struct String parts[4];
-    unsigned long np = requestLine.split(" ", &parts[0], 4UL);
+    unsigned long np = requestLine.split(" ", parts[0..4]);
     int good = np == 3UL;
     if (good) {
         if (parts[2].eq_cstr("HTTP/1.1")) { info.versionMinor = 1; }
@@ -1675,7 +1741,7 @@ struct TcpStream HttpConn::detach(?&String early) {
             unsafe {
                 struct BufReader<TcpStream>* r = (struct BufReader<TcpStream>*)self.reader_;
                 if (r != (struct BufReader<TcpStream>*)0 && r->pos < r->len) {
-                    e.push_n((const char*)&r->buf[r->pos], r->len - r->pos);
+                    e.push_n_((const char*)&r->buf[r->pos], r->len - r->pos);
                     r->pos = r->len;
                 }
             }
@@ -1775,7 +1841,7 @@ static void http_serve_conn_(struct HttpServerShared_* sh, int fd) {
         if (cfg.io_timeout_ms <= 0) { sock_set_io_timeout(fd, 0); }
     }
     struct BufReader<TcpStream> in = BufReader::over(&s);
-    unsafe { conn.reader_ = (void*)&in; }
+    unsafe { conn.reader_ = (?&Erased)&in; }
     while (1) {
         if (conn.request_index > 0UL && in.buffered() == 0UL) {
             // Between requests: the idle limit applies.
@@ -1875,7 +1941,7 @@ static ?&HttpWorkerArg_ http_server_worker_(?&HttpWorkerArg_ argPtr) {
 struct HttpServer HttpServer::bind(const &HttpServerConfig cfg, ?&int ok) {
     struct HttpServer srv;
     srv.port = (unsigned short)0;
-    unsafe { srv.shared_ = (void*)0; }
+    srv.shared_ = null;
     int good = 1;
     if (cfg.threads < 1) { good = 0; }
     int fd = -1;
@@ -1907,7 +1973,7 @@ struct HttpServer HttpServer::bind(const &HttpServerConfig cfg, ?&int ok) {
                 int i = 0;
                 while (i < cfg.threads) { sh->activeFds[i] = -1; i = i + 1; }
                 sh->has_tls = 0;
-                srv.shared_ = (void*)sh;
+                srv.shared_ = (?&Erased)sh;
                 match (cfg.tls) {
                     case some(tc): {
                         struct Result<TlsAcceptor, TlsError> ar = TlsAcceptor::new(tc);
@@ -1919,7 +1985,7 @@ struct HttpServer HttpServer::bind(const &HttpServerConfig cfg, ?&int ok) {
                             dealloc_raw_((void*)sh->activeFds);
                             dealloc_raw_((void*)sh->tids);
                             dealloc_raw_((void*)sh);
-                            srv.shared_ = (void*)0;
+                            srv.shared_ = null;
                         }
                     }
                     case null: { }
@@ -1932,9 +1998,9 @@ struct HttpServer HttpServer::bind(const &HttpServerConfig cfg, ?&int ok) {
     return srv;
 }
 
-static struct HttpResponse http_plain_dispatch_(void* ctx, &HttpRequest req, &HttpConn conn) {
+static struct HttpResponse http_plain_dispatch_(?&Erased ctx, &HttpRequest req, &HttpConn conn) {
     HttpHandler h;
-    unsafe { h = (HttpHandler)ctx; }
+    unsafe { h = (HttpHandler)(void*)ctx; }
     return h(req);
 }
 
@@ -1981,7 +2047,7 @@ static int http_server_run_(struct HttpServerShared_* sh) {
     return failed ? -1 : 0;
 }
 
-int HttpServer::serve_raw_(HttpDispatchFn_ dispatch, void* ctx) {
+int HttpServer::serve_raw_(HttpDispatchFn_ dispatch, ?&Erased ctx) {
     struct HttpServerShared_* sh;
     unsafe { sh = (struct HttpServerShared_*)self.shared_; }
     if (sh == (struct HttpServerShared_*)0) { return -1; }
@@ -1997,8 +2063,8 @@ int HttpServer::serve_raw_(HttpDispatchFn_ dispatch, void* ctx) {
 }
 
 int HttpServer::serve(HttpHandler handler) {
-    void* ctx;
-    unsafe { ctx = (void*)handler; }
+    ?&Erased ctx;
+    unsafe { ctx = (?&Erased)handler; }
     return self.serve_raw_(http_plain_dispatch_, ctx);
 }
 
@@ -2009,7 +2075,7 @@ static ?&HttpServerShared_ http_server_bg_(?&HttpServerShared_ arg) {
     return null;
 }
 
-int HttpServer::start_raw_(HttpDispatchFn_ dispatch, void* ctx) {
+int HttpServer::start_raw_(HttpDispatchFn_ dispatch, ?&Erased ctx) {
     struct HttpServerShared_* sh;
     unsafe { sh = (struct HttpServerShared_*)self.shared_; }
     if (sh == (struct HttpServerShared_*)0) { return -1; }
@@ -2033,8 +2099,8 @@ int HttpServer::start_raw_(HttpDispatchFn_ dispatch, void* ctx) {
 }
 
 int HttpServer::start(HttpHandler handler) {
-    void* ctx;
-    unsafe { ctx = (void*)handler; }
+    ?&Erased ctx;
+    unsafe { ctx = (?&Erased)handler; }
     return self.start_raw_(http_plain_dispatch_, ctx);
 }
 
@@ -2141,29 +2207,33 @@ struct HttpChunkedWriter HttpChunkedWriter::begin(&HttpConn conn, int status, co
         text.push("\r\n");
     }
     text.push("Transfer-Encoding: chunked\r\nConnection: close\r\n\r\n");
-    unsafe { w.ok = write_all(&w.s, (const &unsigned char)text.as_ptr(), text.length()); }
+    unsafe { w.ok = write_all(&w.s, text.as_bytes()); }
     text.free();
     r.free();
     return w;
 }
 
-int HttpChunkedWriter::write(const &unsigned char data, unsigned long len) {
+int HttpChunkedWriter::write([]const unsigned char data_s) {
+    unsigned long len = data_s.len;
+    if (len == 0UL) { return 1; }
+    const &unsigned char data;
+    unsafe { data = (const &unsigned char)data_s.ptr; }
     if (!self.ok) { return 0; }
     if (len == 0UL) { return 1; }
     struct String t = String::new();
-    http_chunked_encode(&t, data, len);
-    unsafe { self.ok = write_all(&self.s, (const &unsigned char)t.as_ptr(), t.length()); }
+    http_chunked_encode_n_(&t, data, len);
+    unsafe { self.ok = write_all(&self.s, t.as_bytes()); }
     t.free();
     return self.ok;
 }
 
 int HttpChunkedWriter::write_str(const &char text) {
-    unsafe { return self.write((const &unsigned char)text, str_len(text)); }
+    unsafe { return self.write(str_bytes(text)); }
 }
 
 int HttpChunkedWriter::finish() {
     if (self.ok) {
-        unsafe { self.ok = write_all(&self.s, (const &unsigned char)"0\r\n\r\n", 5UL); }
+        unsafe { self.ok = write_all(&self.s, str_bytes("0\r\n\r\n")); }
     }
     self.s.close();
     return self.ok;
@@ -2209,7 +2279,7 @@ static struct HttpRequest http_parse_request_from_buf_(struct String* buf, long 
         headerBlock.free();
 
         struct String parts[8];
-        unsigned long np = requestLine.split(" ", parts, 8UL);
+        unsigned long np = requestLine.split(" ", parts[0..8]);
         if (np >= 2UL) {
             req.method.free();
             req.method = parts[0].clone();
@@ -2294,7 +2364,7 @@ static int http_conn_task_(?&HttpConnState_ argPtr, int resume_point) {
             while (1) {
                 long n = sock_read_(st->fd, (void*)chunk, 4096UL);
                 if (n > 0L) {
-                    st->readBuf.push_n(chunk, (unsigned long)n);
+                    st->readBuf.push_n_(chunk, (unsigned long)n);
                     long idx = st->readBuf.index_of("\r\n\r\n");
                     if (idx >= 0L) {
                         st->headerEnd = idx + 4L;
@@ -2333,7 +2403,7 @@ static int http_conn_task_(?&HttpConnState_ argPtr, int resume_point) {
                 unsigned long ask = want < 4096UL ? want : 4096UL;
                 long n = sock_read_(st->fd, (void*)chunk, ask);
                 if (n > 0L) {
-                    st->readBuf.push_n(chunk, (unsigned long)n);
+                    st->readBuf.push_n_(chunk, (unsigned long)n);
                     continue;
                 }
                 if (n == 0L) { http_conn_cleanup_(st); return 0; }
@@ -2358,7 +2428,7 @@ static int http_conn_task_(?&HttpConnState_ argPtr, int resume_point) {
                 st->respText = http_render_response_(&resp, req.method.eq_cstr("HEAD"), 0);
                 resp.free();
             } else {
-                st->respText = http_build_response(400, "text/plain", (const unsigned char*)"", 0UL);
+                st->respText = http_build_response_n_(400, "text/plain", (const unsigned char*)"", 0UL);
             }
             req.free();
             st->sent = 0UL;

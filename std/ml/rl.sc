@@ -50,7 +50,7 @@ static unsigned long rl_argmax_(const float* v, unsigned long n, &Rng rng) {
 
 // obs (any shape, obsDim values) as a [1, obsDim] row.
 static &FloatTensor rl_row_(const &FloatTensor obs, unsigned long dim) {
-    unsafe { tensor_host_((void*)obs); }
+    unsafe { tensor_host_raw_((void*)obs); }
     &FloatTensor r = FloatTensor::new_2d(1UL, dim, 0);
     unsafe {
         unsigned long i = 0UL;
@@ -168,7 +168,7 @@ struct EnvStep GridWorld::step(unsigned long action, &unsigned long next) {
 }
 
 void GridWorld::one_hot(unsigned long state, &FloatTensor obs) const {
-    unsafe { tensor_host_write_((void*)obs); }
+    unsafe { tensor_host_write_raw_((void*)obs); }
     unsafe {
         unsigned long n = self.width * self.height;
         unsigned long i = 0UL;
@@ -181,7 +181,7 @@ void GridWorld::free() { rl_drop_(self.cells); }
 // ══ CartPole ═════════════════════════════════════════════════════════════════
 
 static void cartpole_obs_(const &CartPole env, &FloatTensor obs) {
-    unsafe { tensor_host_write_((void*)obs); }
+    unsafe { tensor_host_write_raw_((void*)obs); }
     unsafe {
         obs->data[0] = env.x;
         obs->data[1] = env.xDot;
@@ -426,7 +426,7 @@ struct ReplayBuffer ReplayBuffer::new(unsigned long slots, unsigned long obsDim)
 }
 
 void ReplayBuffer::push(const &FloatTensor obs, unsigned long action, float reward, const &FloatTensor next, int terminal) {
-    unsafe { tensor_host_((void*)obs); tensor_host_((void*)next); }
+    unsafe { tensor_host_raw_((void*)obs); tensor_host_raw_((void*)next); }
     unsigned long p = self.pos;
     unsigned long d = self.obsDim;
     unsafe {
@@ -501,7 +501,7 @@ unsigned long Dqn::act(const &FloatTensor obs, int explore) {
     struct GradGuard noGrad = Autograd::get().no_grad();
     self.stepArena.begin();
     &FloatTensor q = self.q.forward(rl_row_(obs, self.obsDim));
-    unsafe { tensor_host_((void*)q); }
+    unsafe { tensor_host_raw_((void*)q); }
     unsigned long a;
     unsafe { a = rl_argmax_((const float*)q->data, self.actions, &self.rng); }
     tensor_arena_end();
@@ -539,9 +539,9 @@ static float dqn_train_(&Dqn d) {
     // targets without gradient: r + gamma * (1 - terminal) * Q_target(s', a*)
     Autograd::get().set_enabled(0);
     &FloatTensor qt = d.target.forward(nx);
-    unsafe { tensor_host_((void*)qt); }
+    unsafe { tensor_host_raw_((void*)qt); }
     &FloatTensor qo = d.cfg.doubleDqn ? d.q.forward(nx) : qt;
-    unsafe { tensor_host_((void*)qo); }
+    unsafe { tensor_host_raw_((void*)qo); }
     unsafe {
         unsigned long r = 0UL;
         while (r < B) {
@@ -566,7 +566,7 @@ static float dqn_train_(&Dqn d) {
     } else {
         model_soft_update(&d.target, &d.q, d.cfg.tau);
     }
-    unsafe { tensor_host_((void*)loss); return loss->data[0]; }
+    unsafe { tensor_host_raw_((void*)loss); return loss->data[0]; }
 }
 
 float Dqn::observe(const &FloatTensor obs, unsigned long action, float reward, const &FloatTensor next, int terminal) {
@@ -646,7 +646,7 @@ unsigned long PolicyAgent::act(const &FloatTensor obs, int sample) {
     struct GradGuard noGrad = Autograd::get().no_grad();
     self.stepArena.begin();
     &FloatTensor logits = self.policy.forward(rl_row_(obs, self.obsDim));
-    unsafe { tensor_host_((void*)logits); }
+    unsafe { tensor_host_raw_((void*)logits); }
     unsigned long choice = 0UL;
     unsafe {
         const float* l = (const float*)logits->data;
@@ -676,7 +676,7 @@ unsigned long PolicyAgent::act(const &FloatTensor obs, int sample) {
 
 void PolicyAgent::record(const &FloatTensor obs, unsigned long action, float reward, const &FloatTensor next, int terminated,
                          int truncated) {
-    unsafe { tensor_host_((void*)obs); tensor_host_((void*)next); }
+    unsafe { tensor_host_raw_((void*)obs); tensor_host_raw_((void*)next); }
     unsafe {
         unsigned long i = 0UL;
         while (i < self.obsDim) { self.rObs.push(obs->data[i]); self.rNext.push(next->data[i]); i = i + 1UL; }
@@ -735,8 +735,8 @@ static float pg_step_(&PolicyAgent a, const float* obs, const float* act, const 
     if (a.cfg.clipNorm > (float)0.0) a.opt.clip_grad_norm(a.cfg.clipNorm);
     a.opt.step();
     unsafe {
-        tensor_host_((void*)ent);
-        tensor_host_((void*)loss);
+        tensor_host_raw_((void*)ent);
+        tensor_host_raw_((void*)loss);
         a.lastEntropy = ent->data[0];
         return loss->data[0];
     }
@@ -772,11 +772,11 @@ float PolicyAgent::update() {
         &FloatTensor Nx = pg_rows_(nxt, D, (const unsigned long*)idx, N);
         &FloatTensor Ac = pg_rows_(act, 1UL, (const unsigned long*)idx, N);
         &FloatTensor Vt = self.value.forward(O);
-    unsafe { tensor_host_((void*)Vt); }
+    unsafe { tensor_host_raw_((void*)Vt); }
         &FloatTensor Vn = self.value.forward(Nx);
-    unsafe { tensor_host_((void*)Vn); }
+    unsafe { tensor_host_raw_((void*)Vn); }
         &FloatTensor Lp = tensor_mul(self.policy.forward(O).log_softmax(), Ac.one_hot(self.actions)).sum_rows();
-    unsafe { tensor_host_((void*)Lp); }
+    unsafe { tensor_host_raw_((void*)Lp); }
         i = 0UL;
         while (i < N) { v[i] = Vt->data[i]; vn[i] = Vn->data[i]; logpOld[i] = Lp->data[i]; i = i + 1UL; }
         self.stepArena.reset();

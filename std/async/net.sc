@@ -91,7 +91,7 @@ long long async_sock_read(int fd, []unsigned char buf) {
     unsafe { return async_raw_read_(fd, (void*)&buf[0], buf.len); }
 }
 
-long long async_sock_write(int fd, []unsigned char buf) {
+long long async_sock_write(int fd, []const unsigned char buf) {
     if (buf.len == 0UL) return 0LL;
     unsafe { return async_raw_write_(fd, (const void*)&buf[0], buf.len); }
 }
@@ -342,7 +342,7 @@ void IoDriver::unpark() {
 }
 
 ?&IoDriver io_driver(&Context cx) {
-    unsafe { return (?&IoDriver)cx.io_; }
+    return cx.io_;
 }
 
 static &IoDriver io_need_driver_(&Context cx) {
@@ -367,13 +367,13 @@ struct Runtime Runtime::new() {
 
 int Runtime::init() {
     if (self.io.init() != 0) return -1;
-    unsafe { self.ex.io_ = (void*)&self.io; }
+    self.ex.io_ = &self.io;
     return 0;
 }
 
 void Runtime::close_() {
     self.io.close_();
-    unsafe { self.ex.io_ = (void*)0; }
+    self.ex.io_ = null;
 }
 
 void Runtime::run() {
@@ -417,7 +417,7 @@ struct ReadFut AsyncTcpStream::read([]unsigned char buf) {
     return r;
 }
 
-struct WriteFut AsyncTcpStream::write([]unsigned char buf) {
+struct WriteFut AsyncTcpStream::write([]const unsigned char buf) {
     struct WriteFut w;
     w.fd = self.fd;
     w.buf = buf;
@@ -426,7 +426,7 @@ struct WriteFut AsyncTcpStream::write([]unsigned char buf) {
     return w;
 }
 
-struct WriteAllFut AsyncTcpStream::write_all([]unsigned char buf) {
+struct WriteAllFut AsyncTcpStream::write_all([]const unsigned char buf) {
     struct WriteAllFut w;
     w.fd = self.fd;
     w.buf = buf;

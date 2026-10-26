@@ -335,9 +335,10 @@ struct OptionalType : Type {
 // Lowers to { T*, i64 }  (parse-only for now; codegen to be added)
 struct SliceType : Type {
     TypePtr element;
-    explicit SliceType(TypePtr elem)
-        : Type(TypeKind::Slice), element(std::move(elem)) {}
-    std::string str() const override { return "[]" + element->str(); }
+    bool    constElem = false;   // '[]const T': elements read-only through this slice
+    explicit SliceType(TypePtr elem, bool c = false)
+        : Type(TypeKind::Slice), element(std::move(elem)), constElem(c) {}
+    std::string str() const override { return (constElem ? "[]const " : "[]") + element->str(); }
     bool equals(const Type &o) const override;
 };
 
@@ -389,7 +390,7 @@ bool dropsVolatile(const TypePtr &from, const TypePtr &to);
 TypePtr makeArray(TypePtr elem, int64_t sz = -1, void *sizeExpr = nullptr);
 TypePtr makeFunction(TypePtr ret, std::vector<TypePtr> params, bool va = false);
 TypePtr makeOptional(TypePtr inner);
-TypePtr makeSlice(TypePtr element);
+TypePtr makeSlice(TypePtr element, bool constElem = false);
 
 // Is 'src' implicitly convertible to 'dst' under SafeC rules?
 // (Very strict — only same-type or numeric widening in explicit cast context)

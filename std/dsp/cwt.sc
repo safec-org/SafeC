@@ -39,8 +39,8 @@ static void cwt_rows_(&CwtJob j, unsigned long lo, unsigned long hi) {
             if (nEnd >= j.signalLen) { nEnd = j.signalLen - 1UL; }
             unsigned long len = nEnd - nStart + 1UL;
             unsigned long t0 = nStart + hw - b;      // tap index of n = nStart
-            double re = dsp_dot_f64(&j.signal[nStart], (const double*)&j.kRe[si][t0], len);
-            double im = dsp_dot_f64(&j.signal[nStart], (const double*)&j.kIm[si][t0], len);
+            double re = dsp_dot_f64_n_(&j.signal[nStart], (const double*)&j.kRe[si][t0], len);
+            double im = dsp_dot_f64_n_(&j.signal[nStart], (const double*)&j.kIm[si][t0], len);
             j.out[2UL * r] = re;
             j.out[2UL * r + 1UL] = im;
             r = r + 1UL;
@@ -48,7 +48,7 @@ static void cwt_rows_(&CwtJob j, unsigned long lo, unsigned long hi) {
     }
 }
 
-void cwt_morlet(const &double signal, unsigned long signalLen,
+void cwt_morlet_n_(const &double signal, unsigned long signalLen,
                  const &double scales, unsigned long numScales,
                  double w0, &Complex out) {
     if (signalLen == 0UL || numScales == 0UL) return;
@@ -91,6 +91,15 @@ void cwt_morlet(const &double signal, unsigned long signalLen,
         dealloc_raw_((void*)kRe);
         dealloc_raw_((void*)kIm);
     }
+}
+
+// ── Slice API (the public signatures; the (reference, length) cores above
+// are the *_n_ functions) ─────────────────────────────────────────────────────
+
+int cwt_morlet([]const double signal, []const double scales, double w0, []Complex out) {
+    if (signal.len == 0UL || scales.len == 0UL || out.len / signal.len < scales.len) return 0;
+    unsafe { cwt_morlet_n_((const &double)signal.ptr, signal.len, (const &double)scales.ptr, scales.len, w0, (&Complex)out.ptr); }
+    return 1;
 }
 
 } // namespace std

@@ -354,7 +354,7 @@ static int parse_san_(const unsigned char* buf, unsigned long buf_len,
 
 // ── Main DER parser ───────────────────────────────────────────────────────────
 
-int X509Cert::init(const &unsigned char der_ref, unsigned long len) {
+int X509Cert::init_n_(const &unsigned char der_ref, unsigned long len) {
     const unsigned char* der = der_ref;
     unsafe {
         memset((void*)self, 0, (unsigned long)sizeof(struct X509Cert));   // the struct, not the reference
@@ -576,6 +576,12 @@ int X509Cert::init(const &unsigned char der_ref, unsigned long len) {
     }
 
     return 0;
+}
+
+int X509Cert::init([]const unsigned char der_ref_s) {
+    unsigned long len = der_ref_s.len;
+    const &unsigned char der_ref = crypto_in_(der_ref_s, 0UL);
+    return self.init_n_(der_ref, len);
 }
 
 // ── X509Cert methods ──────────────────────────────────────────────────────────

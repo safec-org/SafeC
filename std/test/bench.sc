@@ -28,10 +28,10 @@ struct BenchSuite BenchSuite::new() {
     return s;
 }
 
-void BenchSuite::add_raw_(const char* name, void* func, void* arg, unsigned long iters) {
+void BenchSuite::add_raw_(const &char name, fn void(?&Erased) func, ?&Erased arg, unsigned long iters) {
     if (self.count >= BENCH_MAX) { return; }
     int idx = self.count;
-    bench_copy_(self.cases[idx].name, name, (unsigned long)BENCH_NAME_MAX);
+    unsafe { bench_copy_(self.cases[idx].name, name, (unsigned long)BENCH_NAME_MAX); }
     self.cases[idx].func        = func;
     self.cases[idx].arg       = arg;
     self.cases[idx].iters     = iters;
@@ -49,10 +49,7 @@ void BenchSuite::run() {
             long t0 = clock();
             unsigned long j = (unsigned long)0;
             while (j < n) {
-                {
-                    fn void(void*) bench_fn = (fn void(void*))self.cases[i].func;
-                    bench_fn(self.cases[i].arg);
-                }
+                self.cases[i].func(self.cases[i].arg);
                 j = j + (unsigned long)1;
             }
             long t1 = clock();

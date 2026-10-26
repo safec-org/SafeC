@@ -6,3 +6,4 @@ compiler/build/
 *.bc
 *.ll
 *.o
+__pycache__/

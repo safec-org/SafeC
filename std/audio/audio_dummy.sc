@@ -17,6 +17,7 @@
 // one period on the caller's thread — the deterministic way to test a
 // callback, and the only mode on targets without threads (wasm32).
 #pragma once
+#include <std/mem.h>
 #include <std/audio/audio_backend.h>
 #include <std/audio/audio_sys.h>
 

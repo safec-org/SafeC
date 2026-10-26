@@ -38,7 +38,7 @@ int Ext2Ctx::init(&BlockDevice dev) {
 
     // Read two sectors starting at LBA 2 to get the 1024-byte superblock.
     unsigned char sb_buf[1024];
-    if (dev.read((unsigned long)2, (&unsigned char)sb_buf, (unsigned long)2) != 0) {
+    if (dev.read((unsigned long)2, sb_buf[0..1024]) != 0) {
         return -1;
     }
 
@@ -97,10 +97,11 @@ int Ext2Ctx::init(&BlockDevice dev) {
 // ── Ext2Ctx::read_block ───────────────────────────────────────────────────────
 // Convert block number to LBA (512-byte sectors) and read block_size bytes.
 
-inline int Ext2Ctx::read_block(unsigned long block_no, &unsigned char buf) {
+inline int Ext2Ctx::read_block(unsigned long block_no, []unsigned char buf) {
+    if (buf.len < self.block_size) { return -1; }
     unsigned long sectors_per_block = self.block_size / (unsigned long)512;
     unsigned long lba = block_no * sectors_per_block;
-    return self.dev.read(lba, buf, sectors_per_block);
+    return self.dev.read(lba, buf[0..self.block_size]);
 }
 
 // ── Ext2Ctx::read_inode ───────────────────────────────────────────────────────
@@ -116,7 +117,7 @@ int Ext2Ctx::read_inode(unsigned long ino, &Ext2Inode inode_out) {
     // BGDT is always in the block immediately after the superblock.
     unsigned long bgdt_block = (unsigned long)self.super.first_data_block + (unsigned long)1;
     unsigned char block_buf[EXT2_MAX_BLOCK_SIZE];
-    if (self.read_block(bgdt_block, block_buf) != 0) { return -1; }
+    if (self.read_block(bgdt_block, block_buf[0..EXT2_MAX_BLOCK_SIZE]) != 0) { return -1; }
 
     // Each group descriptor is 32 bytes.
     unsigned long gd_off = group * (unsigned long)32;
@@ -133,7 +134,7 @@ int Ext2Ctx::read_inode(unsigned long ino, &Ext2Inode inode_out) {
     unsigned long inode_off    = (local % inodes_per_blk) * inode_size;
 
     unsigned char ibuf[EXT2_MAX_BLOCK_SIZE];
-    if (self.read_block(inode_blk, ibuf) != 0) { return -1; }
+    if (self.read_block(inode_blk, ibuf[0..EXT2_MAX_BLOCK_SIZE]) != 0) { return -1; }
 
     unsafe {
         unsigned char* p = (unsigned char*)ibuf + inode_off;
@@ -168,8 +169,8 @@ static unsigned long ctx_super_first_data_block_(struct Ext2Ctx ctx) {
 // Reads up to `len` bytes from file inode `ino` at byte `offset`.
 // Only handles the 12 direct blocks (block[0..11]).
 
-unsigned long Ext2Ctx::read_file(unsigned long ino, unsigned long offset,
-                                  &unsigned char buf, unsigned long len) {
+unsigned long Ext2Ctx::read_file(unsigned long ino, unsigned long offset, []unsigned char buf) {
+    unsigned long len = buf.len;
     struct Ext2Inode inode;
     if (self.read_inode(ino, &inode) != 0) { return (unsigned long)0; }
 
@@ -194,7 +195,7 @@ unsigned long Ext2Ctx::read_file(unsigned long ino, unsigned long offset,
         unsafe { blk_no = (unsigned long)inode.block[blk_idx]; }
         if (blk_no == (unsigned long)0) { break; }
 
-        if (self.read_block(blk_no, blk_buf) != 0) { break; }
+        if (self.read_block(blk_no, blk_buf[0..EXT2_MAX_BLOCK_SIZE]) != 0) { break; }
 
         unsigned long chunk = bs - blk_off;
         unsigned long remain = len - total_read;
@@ -236,7 +237,7 @@ static unsigned long ext2_dir_find_(struct Ext2Ctx* ctx, unsigned long dir_ino,
         unsigned long blk_no;
         unsafe { blk_no = (unsigned long)dir_inode.block[blk_idx]; }
         if (blk_no == (unsigned long)0) { break; }
-        if (ctx->read_block(blk_no, blk_buf) != 0) { break; }
+        if (ctx->read_block(blk_no, blk_buf[0..EXT2_MAX_BLOCK_SIZE]) != 0) { break; }
 
         unsigned long blk_limit = bs;
         if (read_pos + bs > dir_size) { blk_limit = dir_size - read_pos; }
@@ -361,16 +362,11 @@ int Ext2Ctx::open(const &char path_ref, int flags, &VfsNode node_out) {
     return 0;
 }
 
-unsigned long Ext2Ctx::read(unsigned long inode, unsigned long offset, &unsigned char buf_ref, unsigned long len) {
-    void* ctx;
-    unsafe { ctx = (void*)self; }
-    unsigned char* buf = buf_ref;
-    struct Ext2Ctx* ec;
-    unsafe { ec = (struct Ext2Ctx*)ctx; }
-    unsafe { return ec->read_file(inode, offset, buf, len); }
+unsigned long Ext2Ctx::read(unsigned long inode, unsigned long offset, []unsigned char buf) {
+    return self.read_file(inode, offset, buf);
 }
 
-int Ext2Ctx::readdir(unsigned long dir_ino, fn void(&VfsNode, ?&void) cb, ?&void user) {
+int Ext2Ctx::readdir_raw_(unsigned long dir_ino, fn void(&VfsNode, ?&Erased) cb, ?&Erased user) {
     void* ctx;
     unsafe { ctx = (void*)self; }
     struct Ext2Ctx* ec;
@@ -391,7 +387,7 @@ int Ext2Ctx::readdir(unsigned long dir_ino, fn void(&VfsNode, ?&void) cb, ?&void
         unsigned long blk_no;
         unsafe { blk_no = (unsigned long)dir_inode.block[blk_idx]; }
         if (blk_no == (unsigned long)0) { break; }
-        if (ec->read_block(blk_no, blk_buf) != 0) { break; }
+        if (ec->read_block(blk_no, blk_buf[0..EXT2_MAX_BLOCK_SIZE]) != 0) { break; }
 
         unsigned long blk_limit = bs;
         if (read_pos + bs > dir_size) { blk_limit = dir_size - read_pos; }

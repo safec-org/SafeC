@@ -49,7 +49,7 @@ void gui_window_use_cpu(&GuiWindow win);
 // 1 while 'win' presents through a GPU presenter.
 int gui_window_uses_gpu(const &GuiWindow win);
 // The presenter's name ("gl", "metal", "d3d11"), or "cpu".
-const char* gui_window_presenter_name(const &GuiWindow win);
+const &char gui_window_presenter_name(const &GuiWindow win);
 
 // For GuiWindow::create_with: whether a window with this
 // GuiWindowOptions.present should get the GPU presenter

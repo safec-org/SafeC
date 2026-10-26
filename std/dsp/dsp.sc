@@ -8,7 +8,7 @@
 // Accumulate fixed-point dot product.
 namespace std {
 
-Fixed dsp_dot(const &Fixed a, const &Fixed b, unsigned long n) {
+Fixed dsp_dot_n_(const &Fixed a, const &Fixed b, unsigned long n) {
     Fixed acc = (Fixed)0;
     unsigned long i = 0UL;
     while (i < n) {
@@ -24,7 +24,7 @@ Fixed dsp_dot(const &Fixed a, const &Fixed b, unsigned long n) {
 
 // ── dsp_scale ─────────────────────────────────────────────────────────────────
 // Multiply every element by scale in-place.
-void dsp_scale(&Fixed a, Fixed scale, unsigned long n) {
+void dsp_scale_n_(&Fixed a, Fixed scale, unsigned long n) {
     unsigned long i = 0UL;
     while (i < n) {
         unsafe {
@@ -37,7 +37,7 @@ void dsp_scale(&Fixed a, Fixed scale, unsigned long n) {
 
 // ── dsp_add ───────────────────────────────────────────────────────────────────
 // Element-wise addition: out[i] = a[i] + b[i].
-void dsp_add(const &Fixed a, const &Fixed b, &Fixed out, unsigned long n) {
+void dsp_add_n_(const &Fixed a, const &Fixed b, &Fixed out, unsigned long n) {
     unsigned long i = 0UL;
     while (i < n) {
         unsafe {
@@ -52,7 +52,7 @@ void dsp_add(const &Fixed a, const &Fixed b, &Fixed out, unsigned long n) {
 
 // ── dsp_clip ──────────────────────────────────────────────────────────────────
 // Clamp every element to [lo, hi].
-void dsp_clip(&Fixed a, Fixed lo, Fixed hi, unsigned long n) {
+void dsp_clip_n_(&Fixed a, Fixed lo, Fixed hi, unsigned long n) {
     unsigned long i = 0UL;
     while (i < n) {
         Fixed v;
@@ -75,7 +75,7 @@ void dsp_clip(&Fixed a, Fixed lo, Fixed hi, unsigned long n) {
 
 // ── dsp_peak ──────────────────────────────────────────────────────────────────
 // Return maximum absolute value in array.
-Fixed dsp_peak(const &Fixed a, unsigned long n) {
+Fixed dsp_peak_n_(const &Fixed a, unsigned long n) {
     Fixed peak = (Fixed)0;
     unsigned long i = 0UL;
     while (i < n) {
@@ -95,7 +95,7 @@ Fixed dsp_peak(const &Fixed a, unsigned long n) {
 
 // ── dsp_rms ───────────────────────────────────────────────────────────────────
 // Root mean square: sqrt( sum(x[i]^2) / n ).
-Fixed dsp_rms(&Fixed a, unsigned long n) {
+Fixed dsp_rms_n_(&Fixed a, unsigned long n) {
     if (n == 0UL) {
         return (Fixed)0;
     }
@@ -152,7 +152,7 @@ static double dsp_dot_avx2_(const double* a, const double* b, unsigned long n)
     __attribute__((target("avx2,fma"))) { return dsp_dot_body_(a, b, n); }
 #endif
 
-double dsp_dot_f64(const &double a_ref, const &double b_ref, unsigned long n) {
+double dsp_dot_f64_n_(const &double a_ref, const &double b_ref, unsigned long n) {
     unsafe {
         const double* a = (const double*)a_ref;
         const double* b = (const double*)b_ref;
@@ -199,7 +199,7 @@ static float dsp_dot32_avx2_(const float* a, const float* b, unsigned long n)
     __attribute__((target("avx2,fma"))) { return dsp_dot32_body_(a, b, n); }
 #endif
 
-float dsp_dot_f32(const &float a_ref, const &float b_ref, unsigned long n) {
+float dsp_dot_f32_n_(const &float a_ref, const &float b_ref, unsigned long n) {
     unsafe {
         const float* a = (const float*)a_ref;
         const float* b = (const float*)b_ref;
@@ -331,7 +331,7 @@ static unsigned long dsp_sdot32_avx512_(const float* a, const float* x, float* o
     __attribute__((target("avx512f,avx512vl,avx2,fma"))) { return dsp_sdot32_body_(a, x, out, nOut, n); }
 #endif
 
-void dsp_sliding_dot_f64(const &double a_ref, const &double x_ref, &double out_ref, unsigned long nOut, unsigned long n) {
+void dsp_sliding_dot_f64_n_(const &double a_ref, const &double x_ref, &double out_ref, unsigned long nOut, unsigned long n) {
     unsafe {
         const double* a = (const double*)a_ref;
         const double* x = (const double*)x_ref;
@@ -351,11 +351,11 @@ void dsp_sliding_dot_f64(const &double a_ref, const &double x_ref, &double out_r
         else
 #endif
         q = dsp_sdot64_base_(a, x, out, nOut, n);
-        while (q < nOut) { out[q] = dsp_dot_f64(a, &x[q], n); q = q + 1UL; }
+        while (q < nOut) { out[q] = dsp_dot_f64_n_(a, &x[q], n); q = q + 1UL; }
     }
 }
 
-void dsp_sliding_dot_f32(const &float a_ref, const &float x_ref, &float out_ref, unsigned long nOut, unsigned long n) {
+void dsp_sliding_dot_f32_n_(const &float a_ref, const &float x_ref, &float out_ref, unsigned long nOut, unsigned long n) {
     unsafe {
         const float* a = (const float*)a_ref;
         const float* x = (const float*)x_ref;
@@ -374,8 +374,69 @@ void dsp_sliding_dot_f32(const &float a_ref, const &float x_ref, &float out_ref,
         else
 #endif
         q = dsp_sdot32_base_(a, x, out, nOut, n);
-        while (q < nOut) { out[q] = dsp_dot_f32(a, &x[q], n); q = q + 1UL; }
+        while (q < nOut) { out[q] = dsp_dot_f32_n_(a, &x[q], n); q = q + 1UL; }
     }
+}
+
+// ── Slice API (the public signatures; the (reference, length) cores above
+// are the *_n_ functions) ─────────────────────────────────────────────────────
+
+Fixed dsp_dot([]const Fixed a, []const Fixed b) {
+    unsigned long n = a.len < b.len ? a.len : b.len;
+    if (n == 0UL) return (Fixed)0;
+    unsafe { return dsp_dot_n_((const &Fixed)a.ptr, (const &Fixed)b.ptr, n); }
+}
+
+void  dsp_scale([]Fixed a, Fixed scale) {
+    if (a.len == 0UL) return;
+    unsafe { dsp_scale_n_((&Fixed)a.ptr, scale, a.len); }
+}
+
+unsigned long dsp_add([]const Fixed a, []const Fixed b, []Fixed out) {
+    unsigned long n = a.len < b.len ? a.len : b.len;
+    if (out.len < n) n = out.len;
+    if (n == 0UL) return 0UL;
+    unsafe { dsp_add_n_((const &Fixed)a.ptr, (const &Fixed)b.ptr, (&Fixed)out.ptr, n); }
+    return n;
+}
+
+void  dsp_clip([]Fixed a, Fixed lo, Fixed hi) {
+    if (a.len == 0UL) return;
+    unsafe { dsp_clip_n_((&Fixed)a.ptr, lo, hi, a.len); }
+}
+
+Fixed dsp_peak([]const Fixed a) {
+    if (a.len == 0UL) return (Fixed)0;
+    unsafe { return dsp_peak_n_((const &Fixed)a.ptr, a.len); }
+}
+
+Fixed dsp_rms([]const Fixed a) {
+    if (a.len == 0UL) return (Fixed)0;
+    unsafe { return dsp_rms_n_((&Fixed)(const Fixed*)a.ptr, a.len); }
+}
+
+double dsp_dot_f64([]const double a, []const double b) {
+    unsigned long n = a.len < b.len ? a.len : b.len;
+    if (n == 0UL) return (double)0;
+    unsafe { return dsp_dot_f64_n_((const &double)a.ptr, (const &double)b.ptr, n); }
+}
+
+float dsp_dot_f32([]const float a, []const float b) {
+    unsigned long n = a.len < b.len ? a.len : b.len;
+    if (n == 0UL) return (float)0;
+    unsafe { return dsp_dot_f32_n_((const &float)a.ptr, (const &float)b.ptr, n); }
+}
+
+int dsp_sliding_dot_f64([]const double a, []const double x, []double out) {
+    if (a.len == 0UL || out.len == 0UL || x.len < out.len + a.len - 1UL) return 0;
+    unsafe { dsp_sliding_dot_f64_n_((const &double)a.ptr, (const &double)x.ptr, (&double)out.ptr, out.len, a.len); }
+    return 1;
+}
+
+int dsp_sliding_dot_f32([]const float a, []const float x, []float out) {
+    if (a.len == 0UL || out.len == 0UL || x.len < out.len + a.len - 1UL) return 0;
+    unsafe { dsp_sliding_dot_f32_n_((const &float)a.ptr, (const &float)x.ptr, (&float)out.ptr, out.len, a.len); }
+    return 1;
 }
 
 } // namespace std

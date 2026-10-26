@@ -120,11 +120,15 @@ inline void PacketBuf::reset() {
 // ── NetIf ─────────────────────────────────────────────────────────────────────
 
 inline int NetIf::tx(&PacketBuf pkt) {
-    if (self.tx_fn == (void*)0) { return -1; }
-    unsafe {
-        fn int(void*, unsigned char*, unsigned long) func =
-            (fn int(void*, unsigned char*, unsigned long))self.tx_fn;
-        return func(self.iface_ctx, (unsigned char*)pkt.data, pkt.len);
+    unsigned long n = pkt.len < (unsigned long)NET_MTU ? pkt.len : (unsigned long)NET_MTU;
+    match (self.tx_fn) {
+        case some(func): {
+            match (self.iface_ctx) {
+                case some(ctx): return func(ctx, pkt.data[0..n]);
+                case null: { }
+            }
+        }
+        case null: { }
     }
     return -1;
 }

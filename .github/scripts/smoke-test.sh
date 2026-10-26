@@ -724,6 +724,22 @@ else
     echo "  [SKIP] python3 not available"
 fi
 
+# ── 5c'. std public API: no raw pointers ─────────────────────────────────────
+# Public std declarations take and return references, slices ([]T), fn
+# types and optionals, never void* / ?&void / raw T* (tests/std_modules/
+# api_lint.py: FFI externs, *_raw_ entry points and internal headers excepted).
+section "std public API lint"
+if command -v python3 >/dev/null 2>&1; then
+    if python3 "$SAFEC_HOME/tests/std_modules/api_lint.py" "$SAFEC_HOME" >/tmp/std_api_lint.txt 2>&1; then
+        pass "$(tail -1 /tmp/std_api_lint.txt)"
+    else
+        fail "std public API lint"
+        cat /tmp/std_api_lint.txt
+    fi
+else
+    echo "  [SKIP] python3 not available"
+fi
+
 # ── 5d. prebuilt std sections ────────────────────────────────────────────────
 # A native build with the packaged safec links the prebuilt sections holding
 # its units (core and collections for io.h + vec.h — io_file.h's whole-file

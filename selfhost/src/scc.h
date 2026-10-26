@@ -688,6 +688,7 @@ int ty_ref(int base, int rgn, int arn, int flags);
 int ty_array(int base, int n);
 int ty_array_f(int base, int n, int flags);
 int ty_slice(int base);
+int ty_slice_f(int base, int flags);
 int ty_opt(int base);
 int ty_fn(int ret, int mark, int variadic);
 int ty_tuple(int mark);

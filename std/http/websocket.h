@@ -87,7 +87,9 @@ struct WsConn {
 
     // ── Framing ───────────────────────────────────────────────────────────
     int send_text(const &char text);
-    int send_binary(const &unsigned char data, unsigned long len);
+    int send_binary([]const unsigned char data);
+    // internal: the (reference, length) core of send_binary()
+    int send_binary_n_(const &unsigned char data, unsigned long len);
     int send_ping();
     int send_pong();
     // Sends a close frame. Does not close the underlying socket — call

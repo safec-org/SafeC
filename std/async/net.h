@@ -122,9 +122,9 @@ struct AsyncTcpStream {
     // Up to buf.len bytes: the count, 0 once the peer closed, -1 on error.
     struct ReadFut read([]unsigned char buf);
     // Some of buf: the count written, -1 on error.
-    struct WriteFut write([]unsigned char buf);
+    struct WriteFut write([]const unsigned char buf);
     // All of buf: 1 when written, 0 on error.
-    struct WriteAllFut write_all([]unsigned char buf);
+    struct WriteAllFut write_all([]const unsigned char buf);
     int close();
     int is_open() const;
 };
@@ -185,7 +185,7 @@ struct ReadFut {
 
 struct WriteFut {
     int               fd;
-    []unsigned char   buf;
+    []const unsigned char buf;
     int               wait_id;
     ?&IoDriver        drv;
     struct Poll<long long> poll(&Context cx);
@@ -194,7 +194,7 @@ struct WriteFut {
 
 struct WriteAllFut {
     int               fd;
-    []unsigned char   buf;
+    []const unsigned char buf;
     unsigned long     sent;
     int               wait_id;
     ?&IoDriver        drv;
@@ -207,7 +207,7 @@ unsigned short async_sock_local_port(int fd);
 // Socket read/write/close that work on every platform (recv/send/
 // closesocket on Windows; no SIGPIPE).
 long long async_sock_read(int fd, []unsigned char buf);
-long long async_sock_write(int fd, []unsigned char buf);
+long long async_sock_write(int fd, []const unsigned char buf);
 int       async_sock_close(int fd);
 
 generic<F, T>

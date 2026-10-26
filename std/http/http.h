@@ -30,6 +30,8 @@
 // original one-request-per-connection behavior; HttpServer is the
 // configurable server, and http_serve_reactor the non-blocking one.
 #pragma once
+#include <std/erased.h>
+#include <std/crypto/buf.h>
 #include <std/collections/string.h>
 #include <std/encoding/url.h>
 #include <std/http/headers.h>
@@ -52,7 +54,9 @@ struct HttpResponse {
     static struct HttpResponse html(int status, const &char body);
     static struct HttpResponse json(int status, const &char body);
     // 'len' raw bytes (may be null/0) with the given Content-Type.
-    static struct HttpResponse bytes(int status, const &char content_type,
+    static struct HttpResponse bytes(int status, const &char content_type, []const unsigned char data);
+    // internal: the (reference, length) core of bytes()
+    static struct HttpResponse bytes_n_(int status, const &char content_type,
                                      const ?&unsigned char data, unsigned long len);
     // A redirect (301, 302, 303, 307 or 308; anything else becomes 302)
     // to 'location', with a short HTML body linking to it.
@@ -72,7 +76,9 @@ struct HttpResponse {
     struct HttpHeaders header_map() const;
     // Replaces the body (Content-Type untouched).
     void          set_body(const &char body);
-    void          set_body_bytes(const &unsigned char data, unsigned long len);
+    void          set_body_bytes([]const unsigned char data);
+    // internal: the (reference, length) core of set_body_bytes()
+    void          set_body_bytes_n_(const &unsigned char data, unsigned long len);
 
     void free();
 };
@@ -133,9 +139,9 @@ struct TcpStream {
     int is_tls() const;
 
     // At most n bytes; the count read, 0 once the peer closed, -1 on error.
-    long long read(&unsigned char buf, unsigned long n);
+    long long read([]unsigned char buf);
     // At most n bytes; the count written, -1 on error.
-    long long write(const &unsigned char buf, unsigned long n);
+    long long write([]const unsigned char buf);
     // Closes the socket. 0 on success.
     int close();
 };
@@ -189,7 +195,9 @@ int           http_header_has_token(const &char raw_headers, const &char name, c
 // parse as HTTP), '*ok' (if non-NULL) is set to 0. The TCP connect gives
 // up after HTTP_DEFAULT_CONNECT_TIMEOUT_MS; reading the response has no
 // time limit (use http_request_timeout to bound it).
-struct HttpResponse http_request(const &char host, unsigned short port,
+struct HttpResponse http_request(const &char host, unsigned short port, const &char method, const &char path, const ?&char extra_headers, []const unsigned char body, ?&int ok);
+// internal: the (reference, length) core of http_request()
+struct HttpResponse http_request_n_(const &char host, unsigned short port,
                                   const &char method, const &char path,
                                   const ?&char extra_headers,
                                   const ?&unsigned char body, unsigned long body_len,
@@ -205,7 +213,9 @@ struct HttpResponse http_request(const &char host, unsigned short port,
 // value <= 0 means no limit. DNS resolution (getaddrinfo) is not
 // covered by either: it is bounded only by the system resolver's own
 // timeout/attempts settings.
-struct HttpResponse http_request_timeout(const &char host, unsigned short port,
+struct HttpResponse http_request_timeout(const &char host, unsigned short port, const &char method, const &char path, const ?&char extra_headers, []const unsigned char body, int connect_timeout_ms, int io_timeout_ms, ?&int ok);
+// internal: the (reference, length) core of http_request_timeout()
+struct HttpResponse http_request_timeout_n_(const &char host, unsigned short port,
                                           const &char method, const &char path,
                                           const ?&char extra_headers,
                                           const ?&unsigned char body, unsigned long body_len,
@@ -215,7 +225,9 @@ struct HttpResponse http_request_timeout(const &char host, unsigned short port,
 // Convenience wrappers over http_request.
 struct HttpResponse http_get(const &char host, unsigned short port,
                               const &char path, ?&int ok);
-struct HttpResponse http_post(const &char host, unsigned short port, const &char path,
+struct HttpResponse http_post(const &char host, unsigned short port, const &char path, const &char content_type, []const unsigned char body, ?&int ok);
+// internal: the (reference, length) core of http_post()
+struct HttpResponse http_post_n_(const &char host, unsigned short port, const &char path,
                                const &char content_type,
                                const ?&unsigned char body, unsigned long body_len,
                                ?&int ok);
@@ -265,7 +277,9 @@ int http_serve_reactor(unsigned short port, HttpHandler handler, int numThreads)
 // block ready to send to a client. 'status' must be one of the codes
 // http_reason_phrase (below) recognizes (100–599 range; unrecognized
 // codes get the reason phrase "Unknown").
-struct String http_build_response(int status, const &char content_type,
+struct String http_build_response(int status, const &char content_type, []const unsigned char body);
+// internal: the (reference, length) core of http_build_response()
+struct String http_build_response_n_(int status, const &char content_type,
                                    const ?&unsigned char body, unsigned long body_len);
 
 // Standard reason phrase for a status code (e.g. 404 -> "Not Found"),
@@ -284,13 +298,17 @@ int http_status_is_server_error(int status);
 
 // Appends 'len' bytes as one chunk ("<hex len>\r\n<data>\r\n") to 'out';
 // len 0 appends nothing (the terminator is http_chunked_end's job).
-void http_chunked_encode(&String out, const ?&unsigned char data, unsigned long len);
+void http_chunked_encode(&String out, []const unsigned char data);
+// internal: the (reference, length) core of http_chunked_encode()
+void http_chunked_encode_n_(&String out, const ?&unsigned char data, unsigned long len);
 // Appends the last-chunk + empty trailer ("0\r\n\r\n").
 void http_chunked_end(&String out);
 // Decodes a complete chunked body held in memory (chunk extensions and
 // trailer fields are skipped) into 'out'. *consumed (if non-null) gets the
 // number of input bytes used. 0 on a malformed or truncated encoding.
-int  http_chunked_decode(const &unsigned char data, unsigned long len, &String out,
+int  http_chunked_decode([]const unsigned char data, &String out, ?&unsigned long consumed);
+// internal: the (reference, length) core of http_chunked_decode()
+int  http_chunked_decode_n_(const &unsigned char data, unsigned long len, &String out,
                          ?&unsigned long consumed);
 
 // ── Client: URLs, redirects, decompression ────────────────────────────────
@@ -325,14 +343,18 @@ struct HttpClientOptions {
 // response, too many redirects or a body over the limit; the status of a
 // completed exchange is reported even when it is 4xx/5xx (ok = 1).
 // 'final_url', if non-null, receives the URL the response came from.
-struct HttpResponse http_fetch(const &char method, const &char url,
+struct HttpResponse http_fetch(const &char method, const &char url, const ?&char extra_headers, []const unsigned char body, const ?&HttpClientOptions opts, ?&String final_url, ?&int ok);
+// internal: the (reference, length) core of http_fetch()
+struct HttpResponse http_fetch_n_(const &char method, const &char url,
                                const ?&char extra_headers,
                                const ?&unsigned char body, unsigned long body_len,
                                const ?&HttpClientOptions opts, ?&String final_url,
                                ?&int ok);
 // http_fetch conveniences with default options.
 struct HttpResponse http_get_url(const &char url, ?&int ok);
-struct HttpResponse http_post_url(const &char url, const &char content_type,
+struct HttpResponse http_post_url(const &char url, const &char content_type, []const unsigned char body, ?&int ok);
+// internal: the (reference, length) core of http_post_url()
+struct HttpResponse http_post_url_n_(const &char url, const &char content_type,
                                   const ?&unsigned char body, unsigned long body_len, ?&int ok);
 
 // Decodes resp.body according to its Content-Encoding (gzip, x-gzip,
@@ -375,7 +397,7 @@ struct HttpConn {
     int            keep_alive;     // the server will keep the connection open after
                                    // this response; set to 0 to close it instead
     int            detached;
-    void*          reader_;        // internal: the connection's BufReader<TcpStream>
+    ?&Erased       reader_;        // internal: the connection's BufReader<TcpStream>
     ?&heap TlsStream tls;          // the TLS session on an HTTPS server's connection, else null
 
     // Takes over the (blocking) socket. Bytes the client already sent past
@@ -387,8 +409,9 @@ struct HttpConn {
 };
 
 // Dispatch entry the server loops call (std/http/router.h's Router uses
-// it); a plain HttpHandler is adapted to it. Internal: ctx is the router.
-typedef fn struct HttpResponse(void* ctx, &HttpRequest req, &HttpConn conn) HttpDispatchFn_;
+// it); a plain HttpHandler is adapted to it. Internal: ctx is the router
+// (erased, see std/erased.h).
+typedef fn struct HttpResponse(?&Erased ctx, &HttpRequest req, &HttpConn conn) HttpDispatchFn_;
 
 // A bound, configurable blocking server: threads × one connection at a
 // time each, with keep-alive. bind() opens the socket; serve() (blocking)
@@ -400,7 +423,7 @@ typedef fn struct HttpResponse(void* ctx, &HttpRequest req, &HttpConn conn) Http
 //   srv.stop();                      // in-flight requests finish, then the workers exit
 struct HttpServer {
     unsigned short port;                // the bound port (useful with config port 0)
-    void*          shared_;             // internal server state
+    ?&Erased       shared_;             // internal server state
 
     static struct HttpServer bind(const &HttpServerConfig cfg, ?&int ok);
     // Runs the worker threads and blocks until stop(). 0 after a stop, -1
@@ -408,8 +431,8 @@ struct HttpServer {
     int  serve(HttpHandler handler);
     // serve() on a background thread; returns 0 once the workers run.
     int  start(HttpHandler handler);
-    int  serve_raw_(HttpDispatchFn_ dispatch, void* ctx);
-    int  start_raw_(HttpDispatchFn_ dispatch, void* ctx);
+    int  serve_raw_(HttpDispatchFn_ dispatch, ?&Erased ctx);
+    int  start_raw_(HttpDispatchFn_ dispatch, ?&Erased ctx);
     // Stops accepting, wakes idle keep-alive connections, waits for the
     // workers to finish their current request, and closes the listening
     // socket. Safe to call from a handler's thread too (then it doesn't
@@ -431,7 +454,7 @@ struct HttpChunkedWriter {
     int              ok;      // 0 once any write failed
 
     static struct HttpChunkedWriter begin(&HttpConn conn, int status, const ?&char headers);
-    int write(const &unsigned char data, unsigned long len);
+    int write([]const unsigned char data);
     int write_str(const &char text);
     int finish();
 };

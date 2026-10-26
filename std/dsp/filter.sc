@@ -8,11 +8,10 @@ namespace std {
 
 // ── FIR ──────────────────────────────────────────────────────────────────────
 
-inline struct FirFilter FirFilter::new(const &double coeffs, unsigned long numTaps, &double history) {
+inline struct FirFilter FirFilter::new([]const double coeffs, []double history) {
     struct FirFilter f;
-    f.coeffs = coeffs;
-    f.numTaps = numTaps;
-    f.history = history;
+    unsafe { f.coeffs = (const &double)coeffs.ptr; f.history = (&double)history.ptr; }
+    f.numTaps = coeffs.len < history.len ? coeffs.len : history.len;
     f.pos = 0UL;
     return f;
 }
@@ -74,10 +73,15 @@ void FirFilter::reset() {
 #define FIR_CHUNK      512UL
 #endif
 
-void FirFilter::process_block(const &double in, &double out, unsigned long n) {
+void FirFilter::process_block([]const double in_s, []double out_s) {
+    unsigned long n = in_s.len < out_s.len ? in_s.len : out_s.len;
+    if (n == 0UL) return;
+    const &double in;
+    &double out;
+    unsafe { in = (const &double)in_s.ptr; out = (&double)out_s.ptr; }
     unsigned long T = self.numTaps;
     if (T == 0UL || T > FIR_STACK_TAPS) {
-        filter_process_each(self, in, out, n);
+        filter_process_each_n_(self, in, out, n);
         return;
     }
     double crev[FIR_STACK_TAPS];
@@ -98,7 +102,7 @@ void FirFilter::process_block(const &double in, &double out, unsigned long n) {
             unsigned long len = n - done < FIR_CHUNK ? n - done : FIR_CHUNK;
             unsigned long q = 0UL;
             while (q < len) { win[T - 1UL + q] = in[done + q]; q = q + 1UL; }
-            dsp_sliding_dot_f64((const double*)&crev[0], (const double*)&win[0], &out[done], len, T);
+            dsp_sliding_dot_f64_n_((const double*)&crev[0], (const double*)&win[0], &out[done], len, T);
             // keep the newest T - 1 samples at the front
             q = 0UL;
             while (q + 1UL < T) { win[q] = win[len + q]; q = q + 1UL; }
@@ -113,11 +117,10 @@ void FirFilter::process_block(const &double in, &double out, unsigned long n) {
 
 // The float FIR: the same code on floats (dsp_dot_f32 for blocks).
 
-inline struct FirFilter32 FirFilter32::new(const &float coeffs, unsigned long numTaps, &float history) {
+inline struct FirFilter32 FirFilter32::new([]const float coeffs, []float history) {
     struct FirFilter32 f;
-    f.coeffs = coeffs;
-    f.numTaps = numTaps;
-    f.history = history;
+    unsafe { f.coeffs = (const &float)coeffs.ptr; f.history = (&float)history.ptr; }
+    f.numTaps = coeffs.len < history.len ? coeffs.len : history.len;
     f.pos = 0UL;
     return f;
 }
@@ -165,10 +168,15 @@ void FirFilter32::reset() {
     self.pos = 0UL;
 }
 
-void FirFilter32::process_block(const &float in, &float out, unsigned long n) {
+void FirFilter32::process_block([]const float in_s, []float out_s) {
+    unsigned long n = in_s.len < out_s.len ? in_s.len : out_s.len;
+    if (n == 0UL) return;
+    const &float in;
+    &float out;
+    unsafe { in = (const &float)in_s.ptr; out = (&float)out_s.ptr; }
     unsigned long T = self.numTaps;
     if (T == 0UL || T > FIR_STACK_TAPS) {
-        filter_process_each(self, in, out, n);
+        filter_process_each_n_(self, in, out, n);
         return;
     }
     float crev[FIR_STACK_TAPS];
@@ -189,7 +197,7 @@ void FirFilter32::process_block(const &float in, &float out, unsigned long n) {
             unsigned long len = n - done < FIR_CHUNK ? n - done : FIR_CHUNK;
             unsigned long q = 0UL;
             while (q < len) { win[T - 1UL + q] = in[done + q]; q = q + 1UL; }
-            dsp_sliding_dot_f32((const float*)&crev[0], (const float*)&win[0], &out[done], len, T);
+            dsp_sliding_dot_f32_n_((const float*)&crev[0], (const float*)&win[0], &out[done], len, T);
             // keep the newest T - 1 samples at the front
             q = 0UL;
             while (q + 1UL < T) { win[q] = win[len + q]; q = q + 1UL; }
@@ -202,11 +210,10 @@ void FirFilter32::process_block(const &float in, &float out, unsigned long n) {
     self.pos = 0UL;
 }
 
-inline struct FFirFilter FFirFilter::new(const &Fixed coeffs, unsigned long numTaps, &Fixed history) {
+inline struct FFirFilter FFirFilter::new([]const Fixed coeffs, []Fixed history) {
     struct FFirFilter f;
-    f.coeffs = coeffs;
-    f.numTaps = numTaps;
-    f.history = history;
+    unsafe { f.coeffs = (const &Fixed)coeffs.ptr; f.history = (&Fixed)history.ptr; }
+    f.numTaps = coeffs.len < history.len ? coeffs.len : history.len;
     f.pos = 0UL;
     return f;
 }
@@ -233,22 +240,26 @@ void FFirFilter::reset() {
     self.pos = 0UL;
 }
 
-void FFirFilter::process_block(const &Fixed in, &Fixed out, unsigned long n) {
-    filter_process_each(self, in, out, n);
+void FFirFilter::process_block([]const Fixed in_s, []Fixed out_s) {
+    unsigned long n = in_s.len < out_s.len ? in_s.len : out_s.len;
+    if (n == 0UL) return;
+    const &Fixed in;
+    &Fixed out;
+    unsafe { in = (const &Fixed)in_s.ptr; out = (&Fixed)out_s.ptr; }
+    filter_process_each_n_(self, in, out, n);
 }
 
 // ── IIR (general order, direct form I) ────────────────────────────────────────
 
-inline struct IirFilter IirFilter::new(const &double b, unsigned long numB,
-                                       const &double a, unsigned long numA,
-                                       &double xHistory, &double yHistory) {
+inline struct IirFilter IirFilter::new([]const double b, []const double a,
+                                       []double xHistory, []double yHistory) {
     struct IirFilter f;
-    f.b = b;
-    f.numB = numB;
-    f.a = a;
-    f.numA = numA;
-    f.xHistory = xHistory;
-    f.yHistory = yHistory;
+    unsafe {
+        f.b = (const &double)b.ptr; f.a = (const &double)a.ptr;
+        f.xHistory = (&double)xHistory.ptr; f.yHistory = (&double)yHistory.ptr;
+    }
+    f.numB = b.len < xHistory.len ? b.len : xHistory.len;
+    f.numA = a.len < yHistory.len ? a.len : yHistory.len;
     f.xPos = 0UL;
     f.yPos = 0UL;
     return f;
@@ -286,23 +297,27 @@ void IirFilter::reset() {
     self.yPos = 0UL;
 }
 
-void IirFilter::process_block(const &double in, &double out, unsigned long n) {
-    filter_process_each(self, in, out, n);
+void IirFilter::process_block([]const double in_s, []double out_s) {
+    unsigned long n = in_s.len < out_s.len ? in_s.len : out_s.len;
+    if (n == 0UL) return;
+    const &double in;
+    &double out;
+    unsafe { in = (const &double)in_s.ptr; out = (&double)out_s.ptr; }
+    filter_process_each_n_(self, in, out, n);
 }
 
 // The float IIR (high orders lose precision in float: prefer Biquad32
 // sections for those).
 
-inline struct IirFilter32 IirFilter32::new(const &float b, unsigned long numB,
-                                           const &float a, unsigned long numA,
-                                           &float xHistory, &float yHistory) {
+inline struct IirFilter32 IirFilter32::new([]const float b, []const float a,
+                                           []float xHistory, []float yHistory) {
     struct IirFilter32 f;
-    f.b = b;
-    f.numB = numB;
-    f.a = a;
-    f.numA = numA;
-    f.xHistory = xHistory;
-    f.yHistory = yHistory;
+    unsafe {
+        f.b = (const &float)b.ptr; f.a = (const &float)a.ptr;
+        f.xHistory = (&float)xHistory.ptr; f.yHistory = (&float)yHistory.ptr;
+    }
+    f.numB = b.len < xHistory.len ? b.len : xHistory.len;
+    f.numA = a.len < yHistory.len ? a.len : yHistory.len;
     f.xPos = 0UL;
     f.yPos = 0UL;
     return f;
@@ -340,20 +355,24 @@ void IirFilter32::reset() {
     self.yPos = 0UL;
 }
 
-void IirFilter32::process_block(const &float in, &float out, unsigned long n) {
-    filter_process_each(self, in, out, n);
+void IirFilter32::process_block([]const float in_s, []float out_s) {
+    unsigned long n = in_s.len < out_s.len ? in_s.len : out_s.len;
+    if (n == 0UL) return;
+    const &float in;
+    &float out;
+    unsafe { in = (const &float)in_s.ptr; out = (&float)out_s.ptr; }
+    filter_process_each_n_(self, in, out, n);
 }
 
-inline struct FIirFilter FIirFilter::new(const &Fixed b, unsigned long numB,
-                                         const &Fixed a, unsigned long numA,
-                                         &Fixed xHistory, &Fixed yHistory) {
+inline struct FIirFilter FIirFilter::new([]const Fixed b, []const Fixed a,
+                                         []Fixed xHistory, []Fixed yHistory) {
     struct FIirFilter f;
-    f.b = b;
-    f.numB = numB;
-    f.a = a;
-    f.numA = numA;
-    f.xHistory = xHistory;
-    f.yHistory = yHistory;
+    unsafe {
+        f.b = (const &Fixed)b.ptr; f.a = (const &Fixed)a.ptr;
+        f.xHistory = (&Fixed)xHistory.ptr; f.yHistory = (&Fixed)yHistory.ptr;
+    }
+    f.numB = b.len < xHistory.len ? b.len : xHistory.len;
+    f.numA = a.len < yHistory.len ? a.len : yHistory.len;
     f.xPos = 0UL;
     f.yPos = 0UL;
     return f;
@@ -391,8 +410,13 @@ void FIirFilter::reset() {
     self.yPos = 0UL;
 }
 
-void FIirFilter::process_block(const &Fixed in, &Fixed out, unsigned long n) {
-    filter_process_each(self, in, out, n);
+void FIirFilter::process_block([]const Fixed in_s, []Fixed out_s) {
+    unsigned long n = in_s.len < out_s.len ? in_s.len : out_s.len;
+    if (n == 0UL) return;
+    const &Fixed in;
+    &Fixed out;
+    unsafe { in = (const &Fixed)in_s.ptr; out = (&Fixed)out_s.ptr; }
+    filter_process_each_n_(self, in, out, n);
 }
 
 } // namespace std

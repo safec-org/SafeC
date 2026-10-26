@@ -125,10 +125,10 @@ static int fft_host_z2z_(struct Complex* data, unsigned long nx, unsigned long n
     unsafe {
         // gpu_cuda's transfer path: large copies are staged through pinned
         // buffers by the thread pool, faster than the driver's pageable path
-        if (!cuda_copy_to_device((unsigned long)d, (const void*)data, bytes)) return 0;
+        if (!cuda_copy_to_device((unsigned long)d, ((const unsigned char*)data)[0..bytes])) return 0;
         if (cufftExecZ2Z(plan, (void*)(unsigned long)d, (void*)(unsigned long)d,
                          inverse ? FFT_INVERSE : FFT_FORWARD) != 0) return 0;
-        if (!cuda_copy_to_host((void*)data, (unsigned long)d, bytes)) return 0;
+        if (!cuda_copy_to_host(((unsigned char*)data)[0..bytes], (unsigned long)d)) return 0;
         if (inverse) {
             double inv = 1.0 / (double)len;
             unsigned long i = 0UL;
@@ -142,15 +142,21 @@ static int fft_host_z2z_(struct Complex* data, unsigned long nx, unsigned long n
     return 1;
 }
 
-int cuda_fft(&Complex data, unsigned long n) { return fft_host_z2z_(data, n, 0UL, 1UL, 0); }
-int cuda_ifft(&Complex data, unsigned long n) { return fft_host_z2z_(data, n, 0UL, 1UL, 1); }
+int cuda_fft_n_(&Complex data, unsigned long n) { return fft_host_z2z_(data, n, 0UL, 1UL, 0); }
+int cuda_ifft_n_(&Complex data, unsigned long n) { return fft_host_z2z_(data, n, 0UL, 1UL, 1); }
 
-int cuda_fft_batch(&Complex data, unsigned long n, unsigned long batch, int inverse) {
+int cuda_fft_batch_n_(&Complex data, unsigned long n, unsigned long batch, int inverse) {
     return fft_host_z2z_(data, n, 0UL, batch, inverse);
 }
 
-int cuda_fft2d(&Complex img, unsigned long h, unsigned long w) { return fft_host_z2z_(img, h, w, 1UL, 0); }
-int cuda_ifft2d(&Complex img, unsigned long h, unsigned long w) { return fft_host_z2z_(img, h, w, 1UL, 1); }
+int cuda_fft2d([]Complex img, unsigned long h, unsigned long w) {
+    if (h == 0UL || w == 0UL || img.len / w < h) { return 0; }
+    unsafe { return fft_host_z2z_((&Complex)img.ptr, h, w, 1UL, 0); }
+}
+int cuda_ifft2d([]Complex img, unsigned long h, unsigned long w) {
+    if (h == 0UL || w == 0UL || img.len / w < h) { return 0; }
+    unsafe { return fft_host_z2z_((&Complex)img.ptr, h, w, 1UL, 1); }
+}
 
 // ── Queued device ops (fp32) ─────────────────────────────────────────────────
 
@@ -192,6 +198,24 @@ int cuda_fft_c2r(struct CudaBuf in, struct CudaBuf out, unsigned long n, unsigne
         if (cufftExecC2R(plan, (void*)in.dev, (void*)out.dev) != 0) return 0;
     }
     return fft_normalize_(out, n * batch, n);
+}
+
+// ── Slice API (the public signatures; the (reference, length) cores above
+// are the *_n_ functions) ─────────────────────────────────────────────────────
+
+int cuda_fft([]Complex data) {
+    if (data.len == 0UL) return 0;
+    unsafe { return cuda_fft_n_((&Complex)data.ptr, data.len); }
+}
+
+int cuda_ifft([]Complex data) {
+    if (data.len == 0UL) return 0;
+    unsafe { return cuda_ifft_n_((&Complex)data.ptr, data.len); }
+}
+
+int cuda_fft_batch([]Complex data, unsigned long n, int inverse) {
+    if (n == 0UL || data.len == 0UL || data.len % n != 0UL) return 0;
+    unsafe { return cuda_fft_batch_n_((&Complex)data.ptr, n, data.len / n, inverse); }
 }
 
 } // namespace std

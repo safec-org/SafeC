@@ -230,15 +230,15 @@ void t_cookies() {
 void t_chunked_coding() {
     struct String enc = String::new();
     unsafe {
-        http_chunked_encode(&enc, (const &unsigned char)"hello ", 6UL);
-        http_chunked_encode(&enc, (const &unsigned char)"", 0UL);
-        http_chunked_encode(&enc, (const &unsigned char)"world, this is longer", 21UL);
+        http_chunked_encode(&enc, str_bytes("hello "));
+        http_chunked_encode(&enc, str_bytes(""));
+        http_chunked_encode(&enc, str_bytes("world, this is longer"));
     }
     http_chunked_end(&enc);
     ASSERT_STR_EQ(enc.as_ptr(), "6\r\nhello \r\n15\r\nworld, this is longer\r\n0\r\n\r\n");
     struct String dec = String::new();
     unsigned long used = 0UL;
-    unsafe { ASSERT_TRUE(http_chunked_decode((const &unsigned char)enc.as_ptr(), enc.length(), &dec, &used)); }
+    unsafe { ASSERT_TRUE(http_chunked_decode(enc.as_bytes(), &dec, &used)); }
     ASSERT_STR_EQ(dec.as_ptr(), "hello world, this is longer");
     ASSERT_EQ(used, enc.length());
     dec.free();
@@ -246,12 +246,12 @@ void t_chunked_coding() {
     // Extensions and trailers are skipped; truncation fails.
     const &char ext = "3;name=v\r\nabc\r\n0\r\nX-Trailer: 1\r\n\r\nextra";
     dec = String::new();
-    unsafe { ASSERT_TRUE(http_chunked_decode((const &unsigned char)ext, str_len(ext), &dec, &used)); }
+    unsafe { ASSERT_TRUE(http_chunked_decode(str_bytes(ext), &dec, &used)); }
     ASSERT_STR_EQ(dec.as_ptr(), "abc");
     ASSERT_EQ(used, str_len(ext) - 5UL);
     dec.clear();
-    unsafe { ASSERT_FALSE(http_chunked_decode((const &unsigned char)"5\r\nab", 5UL, &dec, null)); }
-    unsafe { ASSERT_FALSE(http_chunked_decode((const &unsigned char)"zz\r\n", 4UL, &dec, null)); }
+    unsafe { ASSERT_FALSE(http_chunked_decode(str_bytes("5\r\nab"), &dec, null)); }
+    unsafe { ASSERT_FALSE(http_chunked_decode(str_bytes("zz\r\n"), &dec, null)); }
     dec.free();
 }
 
@@ -438,7 +438,7 @@ void t_multipart_roundtrip() {
     struct MultipartBuilder b = MultipartBuilder::new();
     b.add_field("title", "Hello \"there\"");
     unsigned char bin[5] = { (unsigned char)0, (unsigned char)1, (unsigned char)13, (unsigned char)10, (unsigned char)255 };
-    b.add_file("upload", "data.bin", "application/octet-stream", &bin[0], 5UL);
+    b.add_file("upload", "data.bin", "application/octet-stream", bin[0..5UL]);
     b.add_field("empty", "");
     b.finish();
     struct String ct = b.content_type();
@@ -476,7 +476,7 @@ void t_multipart_roundtrip() {
 void t_sse_parser() {
     struct SseParser p = SseParser::new();
     const &char text = ": comment\nretry: 1500\nevent: tick\nid: 7\ndata: one\ndata: two\n\ndata: plain\r\n\r\nevent: noData\n\ndata:x";
-    unsafe { p.feed((const &unsigned char)text, str_len(text)); }
+    unsafe { p.feed(str_bytes(text)); }
     struct SseEvent e;
     ASSERT_TRUE(p.next(&e));
     ASSERT_STR_EQ(e.event.as_ptr(), "tick");
@@ -491,7 +491,7 @@ void t_sse_parser() {
     ASSERT_EQ(e.retry, -1);
     e.free();
     ASSERT_FALSE(p.next(&e));             // "data:x" not terminated yet
-    unsafe { p.feed((const &unsigned char)"\n\n", 2UL); }
+    unsafe { p.feed(str_bytes("\n\n")); }
     ASSERT_TRUE(p.next(&e));
     ASSERT_STR_EQ(e.data.as_ptr(), "x");
     e.free();
@@ -632,13 +632,13 @@ static struct HttpResponse a_ws(&HttpRequest req, &HttpCtx ctx) {
                                      (unsigned char)0x89, (unsigned char)0,
                                      (unsigned char)0x80, (unsigned char)2, (unsigned char)'l', (unsigned char)'o',
                                      (unsigned char)0, (unsigned char)0 };
-        write_all(&s, &frames[0], 11UL);
+        write_all(&s, frames[0..11UL]);
     }
     struct WsMessage m;
     while (c.recv_message(&m, 1048576UL)) {
         if (m.opcode == WS_OPCODE_CLOSE) { m.free(); break; }
         struct String echo = String::from("echo:");
-        unsafe { echo.push_n((const char*)m.data, m.len); }
+        unsafe { echo.push_bytes(((const char*)m.data)[0..m.len]); }
         c.send_text(echo.as_ptr());
         echo.free();
         m.free();
@@ -654,7 +654,7 @@ static struct HttpResponse a_close(&HttpRequest req, &HttpCtx ctx) {
 static void write_file(const &char path, const &char text) {
     ?&File f = File::open(path, "wb");
     match (f) {
-        case some(file): { unsafe { file.write((const &unsigned char)text, str_len(text)); } file.close(); }
+        case some(file): { unsafe { file.write(str_bytes(text)); } file.close(); }
         case null: { ASSERT_TRUE(0); }
     }
 }
@@ -709,7 +709,7 @@ static int raw_connect() {
 
 static int raw_send(int fd, const &char text) {
     struct TcpStream s = TcpStream::from_fd(fd);
-    unsafe { return write_all(&s, (const &unsigned char)text, str_len(text)); }
+    unsafe { return write_all(&s, str_bytes(text)); }
 }
 
 // Reads one response (head + Content-Length body) from 'in'.
@@ -723,8 +723,8 @@ static int raw_response(&BufReader<TcpStream> in, &String head, &String body) {
     cl.free();
     if (!ok) return 1;
     unsigned char buf[8192];
-    if (n > 8192LL || !read_exact(in, &buf[0], (unsigned long)n)) return 0;
-    unsafe { body.push_n((const char*)&buf[0], (unsigned long)n); }
+    if (n > 8192LL || !read_exact(in, buf[0..(unsigned long)n])) return 0;
+    body.push_bytes(buf[0..(unsigned long)n]);
     return 1;
 }
 
@@ -770,7 +770,7 @@ void t_server_keep_alive() {
     ASSERT_TRUE(raw_response(&in, &head, &body));
     ASSERT_TRUE(head.contains("Connection: close"));
     unsigned char one[1];
-    ASSERT_EQ(in.read(&one[0], 1UL), 0);
+    ASSERT_EQ(in.read(one[0..1UL]), 0);
     s.close();
 
     // HTTP/1.0 without keep-alive closes after one response.
@@ -834,8 +834,7 @@ void t_client_fetch() {
     struct String u = url("/hop/3");
     struct String final_url = String::new();
     struct HttpResponse r;
-    unsafe { r = http_fetch("POST", u.as_ptr(), "Content-Type: text/plain", (const unsigned char*)"x", 1UL,
-                            null, &final_url, &ok); }
+    unsafe { r = http_fetch("POST", u.as_ptr(), "Content-Type: text/plain", str_bytes("x"), null, &final_url, &ok); }
     ASSERT_TRUE(ok);
     ASSERT_EQ(r.status, 200);
     ASSERT_STR_EQ(r.body.as_ptr(), "GET /final?from=chain");   // 302/303 turn POST into GET
@@ -847,13 +846,13 @@ void t_client_fetch() {
     struct HttpClientOptions o = HttpClientOptions::defaults();
     o.max_redirects = 0;
     u = url("/hop/1");
-    r = http_fetch("GET", u.as_ptr(), null, null, 0UL, &o, null, &ok);
+    r = http_fetch("GET", u.as_ptr(), null, str_bytes(""), &o, null, &ok);
     ASSERT_TRUE(ok);
     ASSERT_EQ(r.status, 302);
     r.free();
     u.free();
     u = url("/loop");
-    r = http_fetch("GET", u.as_ptr(), null, null, 0UL, null, null, &ok);
+    r = http_fetch("GET", u.as_ptr(), null, str_bytes(""), null, null, &ok);
     ASSERT_FALSE(ok);   // too many redirects
     r.free();
     u.free();
@@ -867,7 +866,7 @@ void t_client_fetch() {
     r.free();
     o = HttpClientOptions::defaults();
     o.decompress = 0;
-    r = http_fetch("GET", u.as_ptr(), "Accept-Encoding: gzip", null, 0UL, &o, null, &ok);
+    r = http_fetch("GET", u.as_ptr(), "Accept-Encoding: gzip", str_bytes(""), &o, null, &ok);
     ASSERT_TRUE(ok);
     struct String ce = r.header("Content-Encoding");
     ASSERT_STR_EQ(ce.as_ptr(), "gzip");
@@ -876,7 +875,7 @@ void t_client_fetch() {
     r.free();
     o.decompress = 1;
     o.max_body_bytes = 1000UL;
-    r = http_fetch("GET", u.as_ptr(), null, null, 0UL, &o, null, &ok);
+    r = http_fetch("GET", u.as_ptr(), null, str_bytes(""), &o, null, &ok);
     ASSERT_FALSE(ok);   // decoded body over the limit
     r.free();
     u.free();
@@ -912,13 +911,13 @@ void t_client_fetch() {
     struct MultipartBuilder mb = MultipartBuilder::new();
     mb.add_field("who", "Ada");
     struct String payload = String::repeat_str("\x01\x02\x03", 1000UL);
-    unsafe { mb.add_file("file", "blob.bin", "application/octet-stream", (const &unsigned char)payload.as_ptr(), payload.length()); }
+    unsafe { mb.add_file("file", "blob.bin", "application/octet-stream", payload.as_bytes()); }
     mb.finish();
     struct String ct = mb.content_type();
     struct String hdr = String::from("Content-Type: ");
     hdr.push_str(&ct);
     u = url("/upload");
-    unsafe { r = http_fetch("POST", u.as_ptr(), hdr.as_ptr(), (const unsigned char*)mb.body.as_ptr(), mb.body.length(), null, null, &ok); }
+    unsafe { r = http_fetch("POST", u.as_ptr(), hdr.as_ptr(), mb.body.as_bytes(), null, null, &ok); }
     ASSERT_TRUE(ok);
     ASSERT_STR_EQ(r.body.as_ptr(), "1:Ada:blob.bin=3000");
     r.free();
@@ -956,7 +955,7 @@ void t_static_files() {
     // Conditional GETs.
     struct String h = String::from("If-None-Match: ");
     h.push_str(&etag);
-    r = http_fetch("GET", u.as_ptr(), h.as_ptr(), null, 0UL, null, null, &ok);
+    r = http_fetch("GET", u.as_ptr(), h.as_ptr(), str_bytes(""), null, null, &ok);
     ASSERT_TRUE(ok);
     ASSERT_EQ(r.status, 304);
     ASSERT_EQ(r.body.length(), 0);
@@ -964,29 +963,29 @@ void t_static_files() {
     h.clear();
     h.push("If-Modified-Since: ");
     h.push_str(&lm);
-    r = http_fetch("GET", u.as_ptr(), h.as_ptr(), null, 0UL, null, null, &ok);
+    r = http_fetch("GET", u.as_ptr(), h.as_ptr(), str_bytes(""), null, null, &ok);
     ASSERT_EQ(r.status, 304);
     r.free();
     // Ranges.
-    r = http_fetch("GET", u.as_ptr(), "Range: bytes=2-5", null, 0UL, null, null, &ok);
+    r = http_fetch("GET", u.as_ptr(), "Range: bytes=2-5", str_bytes(""), null, null, &ok);
     ASSERT_EQ(r.status, 206);
     ASSERT_STR_EQ(r.body.as_ptr(), "2345");
     struct String cr = r.header("Content-Range");
     ASSERT_STR_EQ(cr.as_ptr(), "bytes 2-5/20");
     cr.free();
     r.free();
-    r = http_fetch("GET", u.as_ptr(), "Range: bytes=-3", null, 0UL, null, null, &ok);
+    r = http_fetch("GET", u.as_ptr(), "Range: bytes=-3", str_bytes(""), null, null, &ok);
     ASSERT_STR_EQ(r.body.as_ptr(), "hij");
     r.free();
-    r = http_fetch("GET", u.as_ptr(), "Range: bytes=15-", null, 0UL, null, null, &ok);
+    r = http_fetch("GET", u.as_ptr(), "Range: bytes=15-", str_bytes(""), null, null, &ok);
     ASSERT_STR_EQ(r.body.as_ptr(), "fghij");
     r.free();
-    r = http_fetch("GET", u.as_ptr(), "Range: bytes=50-60", null, 0UL, null, null, &ok);
+    r = http_fetch("GET", u.as_ptr(), "Range: bytes=50-60", str_bytes(""), null, null, &ok);
     ASSERT_EQ(r.status, 416);
     r.free();
     h.clear();
     h.push("Range: bytes=0-1\r\nIf-Range: \"stale\"");
-    r = http_fetch("GET", u.as_ptr(), h.as_ptr(), null, 0UL, null, null, &ok);
+    r = http_fetch("GET", u.as_ptr(), h.as_ptr(), str_bytes(""), null, null, &ok);
     ASSERT_EQ(r.status, 200);   // validator mismatch: whole file
     r.free();
     h.free();
@@ -1015,7 +1014,7 @@ void t_static_files() {
     struct HttpClientOptions o = HttpClientOptions::defaults();
     o.max_redirects = 0;
     u = url("/static/tests");
-    r = http_fetch("GET", u.as_ptr(), null, null, 0UL, &o, null, &ok);
+    r = http_fetch("GET", u.as_ptr(), null, str_bytes(""), &o, null, &ok);
     ASSERT_EQ(r.status, 301);
     struct String loc = r.header("Location");
     ASSERT_STR_EQ(loc.as_ptr(), "/static/tests/");
@@ -1104,13 +1103,13 @@ void t_server_stop() {
     struct TcpStream is = TcpStream::from_fd(idle);
     raw_send(idle, "GET / HTTP/1.1\r\nHost: t\r\n\r\n");
     unsigned char buf[512];
-    ASSERT_TRUE(is.read(&buf[0], 512UL) > 0LL);   // served; now idle on keep-alive
+    ASSERT_TRUE(is.read(buf[0..512UL]) > 0LL);   // served; now idle on keep-alive
     long long t0 = time_mono_ns();
     srv.stop();
     ASSERT_TRUE((time_mono_ns() - t0) / 1000000LL < 1500LL);
     ASSERT_FALSE(srv.is_running());
     is.close();
-    r = http_request_timeout("127.0.0.1", srv.port, "GET", "/", null, null, 0UL, 500, 500, &ok);
+    r = http_request_timeout("127.0.0.1", srv.port, "GET", "/", null, str_bytes(""), 500, 500, &ok);
     ASSERT_FALSE(ok);
     r.free();
     srv.stop();   // idempotent

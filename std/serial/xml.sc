@@ -8,12 +8,12 @@
 
 namespace std {
 
-// Batches runs of bytes needing no escaping into one push_n() call rather
+// Batches runs of bytes needing no escaping into one push_n_() call rather
 // than one push_char() per byte — most string content has no special
 // chars, so this is the hot path.
 static void xml_flush_run_(&String out, const char* s, unsigned long run_start, unsigned long i) {
     if (i > run_start) {
-        unsafe { out.push_n(s + run_start, i - run_start); }
+        unsafe { out.push_n_(s + run_start, i - run_start); }
     }
 }
 
@@ -194,7 +194,7 @@ static struct String xml_read_name_(struct XmlCursor_* c) {
     unsigned long end;
     unsafe { end = c->pos; }
     struct String out = String::new();
-    if (end > start) { unsafe { out.push_n(c->text + start, end - start); } }
+    if (end > start) { unsafe { out.push_n_(c->text + start, end - start); } }
     return out;
 }
 
@@ -222,7 +222,7 @@ static struct String xml_decode_text_(struct XmlCursor_* c) {
         if (ch == '&') {
             unsigned long cur;
             unsafe { cur = c->pos; }
-            if (cur > run_start) { unsafe { out.push_n(c->text + run_start, cur - run_start); } }
+            if (cur > run_start) { unsafe { out.push_n_(c->text + run_start, cur - run_start); } }
             unsafe { c->pos = c->pos + 1UL; }
             if (xml_eat_literal_(c, "amp;")) { out.push_char('&'); }
             else if (xml_eat_literal_(c, "lt;")) { out.push_char('<'); }
@@ -237,7 +237,7 @@ static struct String xml_decode_text_(struct XmlCursor_* c) {
     }
     unsigned long cur2;
     unsafe { cur2 = c->pos; }
-    if (cur2 > run_start) { unsafe { out.push_n(c->text + run_start, cur2 - run_start); } }
+    if (cur2 > run_start) { unsafe { out.push_n_(c->text + run_start, cur2 - run_start); } }
     return out;
 }
 

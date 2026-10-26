@@ -25,10 +25,9 @@
 
 namespace std {
 
-void resample_nearest(const &double in, unsigned long inLen, &double out, unsigned long outLen);
-void resample_linear(const &double in, unsigned long inLen, &double out, unsigned long outLen);
-void resample_sinc(const &double in, unsigned long inLen, &double out, unsigned long outLen,
-                    unsigned long kernelHalfWidth);
+void resample_nearest([]const double in, []double out);
+void resample_linear([]const double in, []double out);
+void resample_sinc([]const double in, []double out, unsigned long kernelHalfWidth);
 
 // Fixed-point nearest/linear (straightforward, no transcendentals in the
 // per-sample path). resample_sinc has no Q8.24 counterpart: a windowed
@@ -38,13 +37,25 @@ void resample_sinc(const &double in, unsigned long inLen, &double out, unsigned 
 // not just fixed design-time coefficients — so there's no fixed sinc
 // variant, matching the same "if available" scoping used for
 // dsp_dot_f64/SIMD in dsp.h.
-void fresample_nearest(const &Fixed in, unsigned long inLen, &Fixed out, unsigned long outLen);
-void fresample_linear(const &Fixed in, unsigned long inLen, &Fixed out, unsigned long outLen);
+void fresample_nearest([]const Fixed in, []Fixed out);
+void fresample_linear([]const Fixed in, []Fixed out);
 
 // Float samples, same contracts (positions and sums still in double).
-void resample_nearest_f32(const &float in, unsigned long inLen, &float out, unsigned long outLen);
-void resample_linear_f32(const &float in, unsigned long inLen, &float out, unsigned long outLen);
-void resample_sinc_f32(const &float in, unsigned long inLen, &float out, unsigned long outLen,
+void resample_nearest_f32([]const float in, []float out);
+void resample_linear_f32([]const float in, []float out);
+void resample_sinc_f32([]const float in, []float out, unsigned long kernelHalfWidth);
+
+// Internal: the (reference, length) forms the slice API above wraps
+// (std/dsp's own code calls these; not API).
+void resample_nearest_n_(const &double in, unsigned long inLen, &double out, unsigned long outLen);
+void resample_linear_n_(const &double in, unsigned long inLen, &double out, unsigned long outLen);
+void resample_sinc_n_(const &double in, unsigned long inLen, &double out, unsigned long outLen,
+                    unsigned long kernelHalfWidth);
+void fresample_nearest_n_(const &Fixed in, unsigned long inLen, &Fixed out, unsigned long outLen);
+void fresample_linear_n_(const &Fixed in, unsigned long inLen, &Fixed out, unsigned long outLen);
+void resample_nearest_f32_n_(const &float in, unsigned long inLen, &float out, unsigned long outLen);
+void resample_linear_f32_n_(const &float in, unsigned long inLen, &float out, unsigned long outLen);
+void resample_sinc_f32_n_(const &float in, unsigned long inLen, &float out, unsigned long outLen,
                        unsigned long kernelHalfWidth);
 
 } // namespace std

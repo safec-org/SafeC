@@ -33,32 +33,44 @@ unsigned long stft_num_frames(unsigned long signalLen, unsigned long frameSize, 
 
 // 'out' must have room for stft_num_frames(signalLen, frameSize, hopSize)
 // * frameSize Complex values (frames stored consecutively).
-void stft_forward(const &double signal, unsigned long signalLen,
-                   unsigned long frameSize, unsigned long hopSize,
-                   int windowType, &Complex out);
+int stft_forward([]const double signal, unsigned long frameSize, unsigned long hopSize,
+                 int windowType, []Complex out);
 
 // 'outSignal' must have room for (numFrames-1)*hopSize + frameSize samples
 // and should be zero-initialized by the caller (stft_inverse accumulates
 // into it).
-void stft_inverse(const &Complex frames, unsigned long numFrames,
-                   unsigned long frameSize, unsigned long hopSize,
-                   int windowType, &double outSignal);
+int stft_inverse([]const Complex frames, unsigned long frameSize, unsigned long hopSize,
+                 int windowType, []double outSignal);
 
 // Multi-resolution STFT loss between signals x and y (same length 'len').
 // 'frameSizes' is an array of 'numResolutions' power-of-two frame sizes;
 // each resolution uses a Hann window with hop = frameSize/4 (the standard
 // convention in the MR-STFT loss literature). Lower is more similar; 0 for
 // identical signals.
-double mr_stft_loss(const &double x, const &double y, unsigned long len,
-                     const &unsigned long frameSizes, unsigned long numResolutions);
+double mr_stft_loss([]const double x, []const double y, []const unsigned long frameSizes);
 
 // Single precision: stft_forward / stft_inverse on float and Complex32,
 // same layout and contracts (fft_batch_f32 / ifft_f32 underneath).
-void stft_forward_f32(const &float signal, unsigned long signalLen,
+int stft_forward_f32([]const float signal, unsigned long frameSize, unsigned long hopSize,
+                 int windowType, []Complex32 out);
+int stft_inverse_f32([]const Complex32 frames, unsigned long frameSize, unsigned long hopSize,
+                 int windowType, []float outSignal);
+
+// Internal: the (reference, length) forms the slice API above wraps
+// (std/dsp's own code calls these; not API).
+void stft_forward_n_(const &double signal, unsigned long signalLen,
+                   unsigned long frameSize, unsigned long hopSize,
+                   int windowType, &Complex out);
+void stft_forward_f32_n_(const &float signal, unsigned long signalLen,
                       unsigned long frameSize, unsigned long hopSize,
                       int windowType, &Complex32 out);
-void stft_inverse_f32(const &Complex32 frames, unsigned long numFrames,
+void stft_inverse_n_(const &Complex frames, unsigned long numFrames,
+                   unsigned long frameSize, unsigned long hopSize,
+                   int windowType, &double outSignal);
+void stft_inverse_f32_n_(const &Complex32 frames, unsigned long numFrames,
                       unsigned long frameSize, unsigned long hopSize,
                       int windowType, &float outSignal);
+double mr_stft_loss_n_(const &double x, const &double y, unsigned long len,
+                     const &unsigned long frameSizes, unsigned long numResolutions);
 
 } // namespace std

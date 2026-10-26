@@ -64,8 +64,8 @@ static void fe_pack_(&unsigned char out, const &Fe25519_ n) {
             i = i + 1;
         }
     }
-    mem_zero_secure(&t, sizeof(struct Fe25519_));
-    mem_zero_secure(&m, sizeof(struct Fe25519_));
+    mem_zero_secure_obj(&t);
+    mem_zero_secure_obj(&m);
 }
 
 static void fe_unpack_(&Fe25519_ o, const &unsigned char n) {
@@ -185,26 +185,39 @@ static void x25519_raw_(&unsigned char q, const &unsigned char n, const &unsigne
     struct Fe25519_ res;
     fe_mul_(&res, &a, &ci);
     fe_pack_(q, &res);
-    mem_zero_secure(&z[0], 32UL);
-    mem_zero_secure(&a, sizeof(struct Fe25519_));
-    mem_zero_secure(&b, sizeof(struct Fe25519_));
-    mem_zero_secure(&c, sizeof(struct Fe25519_));
-    mem_zero_secure(&d, sizeof(struct Fe25519_));
-    mem_zero_secure(&e, sizeof(struct Fe25519_));
-    mem_zero_secure(&f, sizeof(struct Fe25519_));
+    mem_zero_secure(z[0..32UL]);
+    mem_zero_secure_obj(&a);
+    mem_zero_secure_obj(&b);
+    mem_zero_secure_obj(&c);
+    mem_zero_secure_obj(&d);
+    mem_zero_secure_obj(&e);
+    mem_zero_secure_obj(&f);
 }
 
-int x25519(&unsigned char out, const &unsigned char scalar, const &unsigned char point) {
+int x25519_n_(&unsigned char out, const &unsigned char scalar, const &unsigned char point) {
     x25519_raw_(out, scalar, point);
-    return !ct_is_zero(out, 32UL);
+    return !ct_is_zero_n_(out, 32UL);
 }
 
-void x25519_public(&unsigned char out, const &unsigned char scalar) {
+int x25519([]unsigned char out_s, []const unsigned char scalar_s, []const unsigned char point_s) {
+    &unsigned char out = crypto_out_(out_s, 32UL);
+    const &unsigned char scalar = crypto_in_(scalar_s, 32UL);
+    const &unsigned char point = crypto_in_(point_s, 32UL);
+    return x25519_n_(out, scalar, point);
+}
+
+void x25519_public_n_(&unsigned char out, const &unsigned char scalar) {
     unsigned char nine[32];
     int i = 0;
     while (i < 32) { nine[i] = (unsigned char)0; i = i + 1; }
     nine[0] = (unsigned char)9;
     x25519_raw_(out, scalar, &nine[0]);
+}
+
+void x25519_public([]unsigned char out_s, []const unsigned char scalar_s) {
+    &unsigned char out = crypto_out_(out_s, 32UL);
+    const &unsigned char scalar = crypto_in_(scalar_s, 32UL);
+    x25519_public_n_(out, scalar);
 }
 
 } // namespace std

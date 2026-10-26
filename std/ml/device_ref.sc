@@ -1083,7 +1083,7 @@ int device_ref_gemm_(int ta, int tb, unsigned long m, unsigned long n, unsigned 
                      unsigned long a, unsigned long lda, unsigned long b, unsigned long ldb,
                      float beta, unsigned long c, unsigned long ldc) {
     unsafe {
-        sgemm(ta ? SGEMM_TRANS : SGEMM_NO_TRANS, tb ? SGEMM_TRANS : SGEMM_NO_TRANS, m, n, k, alpha,
+        sgemm_n_(ta ? SGEMM_TRANS : SGEMM_NO_TRANS, tb ? SGEMM_TRANS : SGEMM_NO_TRANS, m, n, k, alpha,
               (const &float)(const float*)a, lda, (const &float)(const float*)b, ldb, beta, (&float)(float*)c, ldc);
     }
     return 1;

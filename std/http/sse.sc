@@ -14,7 +14,7 @@ namespace std {
 
 static int sse_write_(&SseStream st, const &String text) {
     if (!st.ok) { return 0; }
-    unsafe { st.ok = write_all(&st.s, (const &unsigned char)text.as_ptr(), text.length()); }
+    unsafe { st.ok = write_all(&st.s, text.as_bytes()); }
     return st.ok;
 }
 
@@ -109,8 +109,14 @@ struct SseParser SseParser::new() {
     return p;
 }
 
-void SseParser::feed(const &unsigned char bytes, unsigned long len) {
-    unsafe { self.buf.push_n((const char*)bytes, len); }
+void SseParser::feed_n_(const &unsigned char bytes, unsigned long len) {
+    unsafe { self.buf.push_n_((const char*)bytes, len); }
+}
+
+void SseParser::feed([]const unsigned char bytes_s) {
+    unsigned long len = bytes_s.len;
+    const &unsigned char bytes = crypto_in_(bytes_s, 0UL);
+    self.feed_n_(bytes, len);
 }
 
 int SseParser::next(&SseEvent out) {
@@ -231,7 +237,7 @@ struct SseClient SseClient::connect_tls(const &char url, const ?&char last_event
         req.push("\r\n");
         target.free();
         hp.free();
-        unsafe { if (!write_all(&s, (const &unsigned char)req.as_ptr(), req.length())) { good = 0; } }
+        unsafe { if (!write_all(&s, req.as_bytes())) { good = 0; } }
         req.free();
     }
     if (good) {
@@ -240,9 +246,9 @@ struct SseClient SseClient::connect_tls(const &char url, const ?&char last_event
         long long end = -1LL;
         unsigned char buf[4096];
         while (end < 0LL && head.length() < 65536UL) {
-            long long n = s.read(&buf[0], 4096UL);
+            long long n = s.read(buf[0..4096UL]);
             if (n <= 0LL) { break; }
-            unsafe { head.push_n((const char*)&buf[0], (unsigned long)n); }
+            unsafe { head.push_n_((const char*)&buf[0], (unsigned long)n); }
             end = head.index_of("\r\n\r\n");
         }
         if (end < 0LL || !head.starts_with("HTTP/1.") || head.length() < 12UL || head.char_at(9UL) != (int)'2') {
@@ -277,14 +283,14 @@ struct SseClient SseClient::connect_tls(const &char url, const ?&char last_event
 // Moves decoded bytes from 'raw' into the parser; 0 on malformed chunking.
 static int sse_drain_raw_(&SseClient c) {
     if (!c.chunked) {
-        unsafe { c.parser.feed((const &unsigned char)c.raw.as_ptr(), c.raw.length()); }
+        unsafe { c.parser.feed_n_((const &unsigned char)c.raw.as_ptr(), c.raw.length()); }
         c.raw.clear();
         return 1;
     }
     while (!c.raw.is_empty()) {
         if (c.chunk_left > 0UL) {
             unsigned long take = c.raw.length() < c.chunk_left ? c.raw.length() : c.chunk_left;
-            unsafe { c.parser.feed((const &unsigned char)c.raw.as_ptr(), take); }
+            unsafe { c.parser.feed_n_((const &unsigned char)c.raw.as_ptr(), take); }
             c.raw.remove_range(0UL, take);
             c.chunk_left = c.chunk_left - take;
             continue;
@@ -324,14 +330,14 @@ int SseClient::next(&SseEvent out) {
         unsigned char buf[4096];
         struct TcpStream s = TcpStream::from_fd(self.fd);
         s.tls = self.tls;
-        long long n = s.read(&buf[0], 4096UL);
+        long long n = s.read(buf[0..4096UL]);
         if (n <= 0LL) {
             self.eof = 1;
             // A final event without its blank line is dropped, as
             // EventSource does.
             return 0;
         }
-        unsafe { self.raw.push_n((const char*)&buf[0], (unsigned long)n); }
+        unsafe { self.raw.push_n_((const char*)&buf[0], (unsigned long)n); }
     }
     return 0;
 }

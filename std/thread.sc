@@ -43,9 +43,9 @@ extern void ReleaseSRWLockExclusive(void* rw);
 extern int  TryAcquireSRWLockShared(void* rw);
 extern int  TryAcquireSRWLockExclusive(void* rw);
 
-inline int thread_create_raw_(&unsigned long long tid, void* func, void* arg) {
+inline int thread_create_raw_(&unsigned long long tid, fn ?&Erased(?&Erased) func, ?&Erased arg) {
     unsafe {
-        void* h = CreateThread((void*)0, 0UL, func, arg, 0u, (unsigned int*)0);
+        void* h = CreateThread((void*)0, 0UL, (void*)func, (void*)arg, 0u, (unsigned int*)0);
         if (h == (void*)0) return -1;
         *tid = (unsigned long long)h;
         return 0;
@@ -198,8 +198,8 @@ extern int pthread_rwlock_tryrdlock(void* rw);
 extern int pthread_rwlock_trywrlock(void* rw);
 extern int pthread_rwlock_unlock(void* rw);
 
-inline int thread_create_raw_(&unsigned long long tid, void* func, void* arg) {
-    unsafe { return pthread_create((unsigned long long*)tid, (void*)0, func, arg); }
+inline int thread_create_raw_(&unsigned long long tid, fn ?&Erased(?&Erased) func, ?&Erased arg) {
+    unsafe { return pthread_create((unsigned long long*)tid, (void*)0, (void*)func, (void*)arg); }
 }
 int thread_join(unsigned long long tid)    { unsafe { return pthread_join(tid, (void**)0); } }
 int thread_detach(unsigned long long tid)  { unsafe { return pthread_detach(tid); } }

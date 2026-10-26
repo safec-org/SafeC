@@ -40,27 +40,27 @@ static int fft_dispatch32_(&Complex32 data, unsigned long n, int inv) {
     unsafe { return fft_run_((float*)data, n, inv, FFT_MODE_TOP); }
 }
 
-int fft_f32(&Complex32 data, unsigned long n) { return fft_dispatch32_(data, n, 0); }
-int ifft_f32(&Complex32 data, unsigned long n) { return fft_dispatch32_(data, n, 1); }
+int fft_f32_n_(&Complex32 data, unsigned long n) { return fft_dispatch32_(data, n, 0); }
+int ifft_f32_n_(&Complex32 data, unsigned long n) { return fft_dispatch32_(data, n, 1); }
 
-int fft_serial_f32(&Complex32 data, unsigned long n) {
+int fft_serial_f32_n_(&Complex32 data, unsigned long n) {
     if (dsp_is_pow2(n) == 0) return 0;
     if (n <= 1UL) return 1;
     unsafe { return fft_run_((float*)data, n, 0, FFT_MODE_RT); }
 }
 
-int ifft_serial_f32(&Complex32 data, unsigned long n) {
+int ifft_serial_f32_n_(&Complex32 data, unsigned long n) {
     if (dsp_is_pow2(n) == 0) return 0;
     if (n <= 1UL) return 1;
     unsafe { return fft_run_((float*)data, n, 1, FFT_MODE_RT); }
 }
 
-int fft_real_f32(const &float in, &Complex32 out, unsigned long n) {
+int fft_real_f32_n_(const &float in, &Complex32 out, unsigned long n) {
     if (dsp_is_pow2(n) == 0) return 0;
     unsafe { return fft_real_run_((const float*)in, (float*)out, n, FFT_MODE_TOP, 1); }
 }
 
-int fft_batch_f32(&Complex32 data, unsigned long n, unsigned long batch, int inverse) {
+int fft_batch_f32_n_(&Complex32 data, unsigned long n, unsigned long batch, int inverse) {
     if (dsp_is_pow2(n) == 0) return 0;
     if (n <= 1UL || batch == 0UL) return 1;
     if (fft_twiddles_(n) == (const float*)0) return 0;
@@ -78,7 +78,7 @@ int fft_batch_f32(&Complex32 data, unsigned long n, unsigned long batch, int inv
     return j.ok;
 }
 
-int fft_real_batch_f32(const &float in, &Complex32 out, unsigned long n, unsigned long batch) {
+int fft_real_batch_f32_n_(const &float in, &Complex32 out, unsigned long n, unsigned long batch) {
     if (dsp_is_pow2(n) == 0) return 0;
     if (batch == 0UL) return 1;
     if (fft_twiddles_(n) == (const float*)0) return 0;
@@ -95,16 +95,69 @@ int fft_real_batch_f32(const &float in, &Complex32 out, unsigned long n, unsigne
     return j.ok;
 }
 
-int fft_real_batch_inplace_f32(&Complex32 data, unsigned long n, unsigned long batch) {
+int fft_real_batch_inplace_f32_n_(&Complex32 data, unsigned long n, unsigned long batch) {
     unsafe { return fft_real_inplace_((float*)data, n, batch); }
 }
 
-int fft_real_half_f32(const &float in, &Complex32 out, unsigned long n) {
+int fft_real_half_f32_n_(const &float in, &Complex32 out, unsigned long n) {
     unsafe { return fft_real_half_batch_((const float*)in, (float*)out, n, 1UL); }
 }
 
-int fft_real_half_batch_f32(const &float in, &Complex32 out, unsigned long n, unsigned long batch) {
+int fft_real_half_batch_f32_n_(const &float in, &Complex32 out, unsigned long n, unsigned long batch) {
     unsafe { return fft_real_half_batch_((const float*)in, (float*)out, n, batch); }
+}
+
+// ── Slice API (the public signatures; the (reference, length) cores above
+// are the *_n_ functions) ─────────────────────────────────────────────────────
+
+int fft_f32([]Complex32 data) {
+    if (data.len == 0UL) return 0;
+    unsafe { return fft_f32_n_((&Complex32)data.ptr, data.len); }
+}
+
+int ifft_f32([]Complex32 data) {
+    if (data.len == 0UL) return 0;
+    unsafe { return ifft_f32_n_((&Complex32)data.ptr, data.len); }
+}
+
+int fft_serial_f32([]Complex32 data) {
+    if (data.len == 0UL) return 0;
+    unsafe { return fft_serial_f32_n_((&Complex32)data.ptr, data.len); }
+}
+
+int ifft_serial_f32([]Complex32 data) {
+    if (data.len == 0UL) return 0;
+    unsafe { return ifft_serial_f32_n_((&Complex32)data.ptr, data.len); }
+}
+
+int fft_real_f32([]const float in, []Complex32 out) {
+    if (in.len == 0UL || out.len < in.len) return 0;
+    unsafe { return fft_real_f32_n_((const &float)in.ptr, (&Complex32)out.ptr, in.len); }
+}
+
+int fft_batch_f32([]Complex32 data, unsigned long n, int inverse) {
+    if (n == 0UL || data.len == 0UL || data.len % n != 0UL) return 0;
+    unsafe { return fft_batch_f32_n_((&Complex32)data.ptr, n, data.len / n, inverse); }
+}
+
+int fft_real_batch_f32([]const float in, []Complex32 out, unsigned long n) {
+    if (n == 0UL || in.len == 0UL || in.len % n != 0UL || out.len < in.len) return 0;
+    unsafe { return fft_real_batch_f32_n_((const &float)in.ptr, (&Complex32)out.ptr, n, in.len / n); }
+}
+
+int fft_real_batch_inplace_f32([]Complex32 data, unsigned long n) {
+    if (n == 0UL || data.len == 0UL || data.len % n != 0UL) return 0;
+    unsafe { return fft_real_batch_inplace_f32_n_((&Complex32)data.ptr, n, data.len / n); }
+}
+
+int fft_real_half_f32([]const float in, []Complex32 out) {
+    if (in.len == 0UL || out.len < in.len / 2UL + 1UL) return 0;
+    unsafe { return fft_real_half_f32_n_((const &float)in.ptr, (&Complex32)out.ptr, in.len); }
+}
+
+int fft_real_half_batch_f32([]const float in, []Complex32 out, unsigned long n) {
+    if (n == 0UL || in.len == 0UL || in.len % n != 0UL || out.len < (in.len / n) * (n / 2UL + 1UL)) return 0;
+    unsafe { return fft_real_half_batch_f32_n_((const &float)in.ptr, (&Complex32)out.ptr, n, in.len / n); }
 }
 
 } // namespace std

@@ -134,14 +134,14 @@ static void list_midi(int api) {
 
 static int cmd_list(&Args a) {
     int apis[AUDIO_API_COUNT];
-    int n = std::audio_compiled_apis(&apis[0], AUDIO_API_COUNT);
+    int n = std::audio_compiled_apis(apis[0..AUDIO_API_COUNT]);
     printf("audio APIs compiled in:");
     for (int i = 0; i < n; i = i + 1) printf(" %s", std::audio_api_name(apis[i]));
     printf(" (default: %s)\n", std::audio_api_name(std::audio_default_api()));
     int want = audio_api_of(a);
     for (int i = 0; i < n; i = i + 1) if (want == AUDIO_API_UNSPECIFIED || want == apis[i]) list_audio(apis[i]);
     int mapis[MIDI_API_COUNT];
-    int m = std::midi_compiled_apis(&mapis[0], MIDI_API_COUNT);
+    int m = std::midi_compiled_apis(mapis[0..MIDI_API_COUNT]);
     printf("MIDI APIs compiled in:");
     for (int i = 0; i < m; i = i + 1) printf(" %s", std::midi_api_name(mapis[i]));
     printf(" (default: %s)\n", std::midi_api_name(std::midi_default_api()));
@@ -166,7 +166,7 @@ int render_tone(&AudioIo io, ?&Tone tp) {
     match (tp) {
         case some(t): {
             if (io.status != 0U) t.xruns = t.xruns + 1U;
-            struct Slice<float> out = io.output_f32();
+            []float out = io.output_f32();
             int ch = io.output_channels;
             for (unsigned int f = 0U; f < io.frames; f = f + 1U) {
                 double gain = 0.2;
@@ -174,7 +174,7 @@ int render_tone(&AudioIo io, ?&Tone tp) {
                 if (t.frame < t.fade) gain = gain * (double)t.frame / (double)t.fade;
                 if (left < t.fade) gain = gain * (double)(left < 0L ? 0L : left) / (double)t.fade;
                 float v = (float)(gain * std::sin_d(t.phase));
-                for (int c = 0; c < ch; c = c + 1) out.set((unsigned long)(f * (unsigned int)ch) + (unsigned long)c, v);
+                for (int c = 0; c < ch; c = c + 1) out[(unsigned long)(f * (unsigned int)ch) + (unsigned long)c] = v;
                 t.phase = t.phase + t.step;
                 if (t.phase > 6.283185307179586) t.phase = t.phase - 6.283185307179586;
                 t.frame = t.frame + 1L;
@@ -231,12 +231,13 @@ static int cmd_sine(&Args a) {
 
 // ── MIDI monitor ─────────────────────────────────────────────────────────
 
-static void print_message(const &unsigned char b, long n, double t) {
-    unsafe {
+static void print_message([]const unsigned char b, double t) {
+    long n = (long)b.len;
+    {
         printf("%10.4f  ", t);
         for (long i = 0L; i < n && i < 12L; i = i + 1L) printf("%02X ", (unsigned int)b[i]);
         if (n > 12L) printf("... (%ld bytes)", n);
-        struct MidiMsg m = std::MidiMsg::of(b, n <= 3L ? (unsigned long)n : 0UL);
+        struct MidiMsg m = std::MidiMsg::of(b);
         int type = m.type();
         if (m.is_note_on()) printf("  note on  ch %d note %d vel %d", m.channel() + 1, m.data1(), m.data2());
         else if (m.is_note_off()) printf("  note off ch %d note %d", m.channel() + 1, m.data1());
@@ -273,8 +274,8 @@ static int cmd_midi(&Args a) {
     while (std::audio_now_ns_() < end) {
         double t = 0.0;
         // g_buf holds the longest message std reassembles (MIDI_MAX_SYSEX).
-        long n = in.get_message(&g_buf[0], MIDI_MAX_SYSEX, &t);
-        if (n > 0L) { print_message(&g_buf[0], n, t); count = count + 1; continue; }
+        long n = in.get_message(g_buf[0..MIDI_MAX_SYSEX], &t);
+        if (n > 0L) { print_message(g_buf[0..(unsigned long)n], t); count = count + 1; continue; }
         std::audio_sleep_us_(2000LL);
     }
     printf("%d message(s), %lu dropped\n", count, in.dropped());

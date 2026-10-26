@@ -35,9 +35,9 @@ static const int SIG_TSTP() { return 20; }  // Stop typed at terminal
 #endif
 static const int SIG_WINCH(){ return 28; }  // Window size change
 
-// Install a handler for signal sig.
-// Returns the previous handler, or SIG_ERR ((void*)-1) on error.
-?&void signal_handle(int sig, fn void(int) handler);
+// Install a handler for signal sig. 0 on success, -1 on error (an
+// invalid or uncatchable signal).
+int signal_handle(int sig, fn void(int) handler);
 
 // Restore default handling for signal sig.
 void signal_default(int sig);

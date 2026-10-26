@@ -8,7 +8,7 @@
 // Internal failure handler — do not call directly. 'file' may be null
 // (no location known), 'msg' may be null (no description).
 namespace std {
-void assert_fail_(const char* file, int line, const char* msg);
+void assert_fail_(const ?&char file, int line, const ?&char msg);
 
 // Assert that `cond` is true at runtime, reporting the given location.
 // On failure: prints "Assertion failed: <msg> at <file>:<line>" to stderr

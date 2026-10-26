@@ -36,7 +36,10 @@ inline int Pipe::init() {
     return 0;
 }
 
-inline long long Pipe::read(&unsigned char buf, unsigned long count) {
+inline long long Pipe::read([]unsigned char buf_s) {
+    unsigned long count = buf_s.len;
+    &unsigned char buf;
+    unsafe { buf = (&unsigned char)buf_s.ptr; }
     unsigned long long h;
     unsafe { h = (unsigned long long)self.read_fd; }
     unsigned int got = 0U;
@@ -48,7 +51,10 @@ inline long long Pipe::read(&unsigned char buf, unsigned long count) {
     return (long long)got;
 }
 
-inline long long Pipe::write(const &unsigned char buf, unsigned long count) {
+inline long long Pipe::write([]const unsigned char buf_s) {
+    unsigned long count = buf_s.len;
+    const &unsigned char buf;
+    unsafe { buf = (const &unsigned char)buf_s.ptr; }
     unsigned long long h;
     unsafe { h = (unsigned long long)self.write_fd; }
     unsigned int sent = 0U;

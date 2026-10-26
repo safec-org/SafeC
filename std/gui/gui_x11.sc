@@ -824,7 +824,7 @@ static void __gui_x11_serve_selection(struct X11SelectionRequestEvent* rq) {
 static int __gui_x11_clip_set(const &char utf8, unsigned long n) {
     unsafe {
         gX.clip.free();
-        gX.clip = String::from_n(utf8, n);
+        gX.clip = String::from_n_(utf8, n);
         XSetSelectionOwner(gX.display, gX.aClipboard, gX.helper, 0UL);
         gX.clipOwned = XGetSelectionOwner(gX.display, gX.aClipboard) == gX.helper ? 1 : 0;
         XFlush(gX.display);
@@ -852,7 +852,7 @@ static int __gui_x11_clip_get(&String out) {
         unsigned long owner = XGetSelectionOwner(gX.display, gX.aClipboard);
         if (owner == 0UL) { return 0; }
         if (owner == gX.helper && gX.clipOwned) {
-            out.push_n((const char*)gX.clip.data, gX.clip.len);
+            out.push_n_((const char*)gX.clip.data, gX.clip.len);
             return 1;
         }
         unsigned long target = gX.aUtf8;
@@ -893,11 +893,11 @@ static int __gui_x11_clip_get(&String out) {
                     while (i < nitems) {
                         char enc[4];
                         int k = gui_utf8_encode((unsigned int)data[i], &enc[0]);
-                        out.push_n(&enc[0], (unsigned long)k);
+                        out.push_n_(&enc[0], (unsigned long)k);
                         i = i + 1UL;
                     }
                 } else {
-                    out.push_n((const char*)data, nitems);
+                    out.push_n_((const char*)data, nitems);
                 }
             }
             XFree((void*)data);
@@ -1032,13 +1032,13 @@ static void __gui_x11_handle(struct X11EventBuf* buf) {
             if (t == GUI_X11_KEY_PRESS_TYPE && n > 0 && (ev.modifiers & (GUI_MOD_CTRL | GUI_MOD_META)) == 0) {
                 text[n] = '\0';
                 unsigned long pos = 0UL;
-                unsigned int c = gui_utf8_next(&text[0], (unsigned long)n, &pos);
+                unsigned int c = gui_utf8_next_n_(&text[0], (unsigned long)n, &pos);
                 if (c >= 32U && c != 127U) { ev.codepoint = c; }
                 gui_backend_post(st, ev);
                 // Anything after the first character (a composed sequence)
                 // arrives as CHAR events.
                 while (pos < (unsigned long)n) {
-                    unsigned int c2 = gui_utf8_next(&text[0], (unsigned long)n, &pos);
+                    unsigned int c2 = gui_utf8_next_n_(&text[0], (unsigned long)n, &pos);
                     if (c2 >= 32U && c2 != 127U) {
                         struct GuiEvent ce = GuiEvent::new(GUI_EVENT_CHAR);
                         ce.codepoint = c2;

@@ -31,7 +31,7 @@ void t_convert_formats() {
     float f[6];
     f[0] = (float)0.0; f[1] = (float)0.5; f[2] = (float)-0.5; f[3] = (float)1.0; f[4] = (float)-1.0; f[5] = (float)2.0;
     short s[6];
-    audio_f32_to_i16(&f[0], &s[0], 6UL);
+    ASSERT_EQ(audio_f32_to_i16(f[0..6], s[0..6]), 6);
     ASSERT_EQ(s[0], 0);
     ASSERT_EQ(s[1], 16384);              // 0.5 * 32767 rounded
     ASSERT_EQ(s[2], -16384);
@@ -39,53 +39,77 @@ void t_convert_formats() {
     ASSERT_EQ(s[4], -32767);
     ASSERT_EQ(s[5], 32767);              // out of range saturates
     float back[6];
-    audio_i16_to_f32(&s[0], &back[0], 6UL);
+    audio_i16_to_f32(s[0..6], back[0..6]);
     ASSERT_TRUE(absf_(back[1] - (float)0.5) < (float)0.0001);
-    short mn = (short)-32768;
-    float mnf = (float)0.0;
-    audio_i16_to_f32(&mn, &mnf, 1UL);
-    ASSERT_TRUE(mnf == (float)-1.0);
+    short mn[1]; mn[0] = (short)-32768;
+    float mnf[1]; mnf[0] = (float)0.0;
+    audio_i16_to_f32(mn[0..1], mnf[0..1]);
+    ASSERT_TRUE(mnf[0] == (float)-1.0);
+    // A short output truncates instead of overrunning.
+    ASSERT_EQ(audio_i16_to_f32(s[0..6], mnf[0..1]), 1);
 
-    unsigned char p24[18];
-    audio_f32_to_i24(&f[0], &p24[0], 6UL);
-    ASSERT_EQ(p24[3], 0x00); ASSERT_EQ(p24[4], 0x00); ASSERT_EQ(p24[5], 0x40);   // 0.5 -> 0x400000 (rounded)
-    ASSERT_EQ(p24[9], 0xFF); ASSERT_EQ(p24[10], 0xFF); ASSERT_EQ(p24[11], 0x7F); // 1.0 -> 0x7FFFFF
+    struct S24 p24[6];
+    ASSERT_EQ(sizeof(struct S24), 3);
+    audio_f32_to_i24(f[0..6], p24[0..6]);
+    ASSERT_EQ(p24[1].b[0], 0x00); ASSERT_EQ(p24[1].b[1], 0x00); ASSERT_EQ(p24[1].b[2], 0x40);   // 0.5 -> 0x400000 (rounded)
+    ASSERT_EQ(p24[3].b[0], 0xFF); ASSERT_EQ(p24[3].b[1], 0xFF); ASSERT_EQ(p24[3].b[2], 0x7F);   // 1.0 -> 0x7FFFFF
+    ASSERT_EQ(p24[3].value(), S24_MAX);
+    ASSERT_EQ(p24[4].value(), -S24_MAX);
+    ASSERT_EQ(S24::of(-9000000).value(), S24_MIN);            // clamped
+    ASSERT_TRUE(S24::of(S24_MIN).to_f32() == (float)-1.0);
+    struct S24 one = S24::of(0);
+    one.set(-2);
+    ASSERT_EQ(one.b[0], 0xFE); ASSERT_EQ(one.b[2], 0xFF);
     float f24[6];
-    audio_i24_to_f32(&p24[0], &f24[0], 6UL);
+    audio_i24_to_f32(p24[0..6], f24[0..6]);
     ASSERT_TRUE(absf_(f24[2] + (float)0.5) < (float)0.000001);
     ASSERT_TRUE(absf_(f24[4] + (float)1.0) < (float)0.000001);
 
     int i32[6];
-    audio_f32_to_i32(&f[0], &i32[0], 6UL);
+    audio_f32_to_i32(f[0..6], i32[0..6]);
     ASSERT_EQ(i32[3], 2147483647);
     ASSERT_EQ(i32[5], 2147483647);
     float f32b[6];
-    audio_i32_to_f32(&i32[0], &f32b[0], 6UL);
+    audio_i32_to_f32(i32[0..6], f32b[0..6]);
     ASSERT_TRUE(absf_(f32b[2] + (float)0.5) < (float)0.000001);
 
     double d[6];
-    audio_f32_to_f64(&f[0], &d[0], 6UL);
+    audio_f32_to_f64(f[0..6], d[0..6]);
     ASSERT_TRUE(d[1] == 0.5);
     signed char b8[6];
-    audio_f32_to_i8(&f[0], &b8[0], 6UL);
+    audio_f32_to_i8(f[0..6], b8[0..6]);
     ASSERT_EQ(b8[3], 127);
     ASSERT_EQ(b8[4], -127);
     short sh[2]; sh[0] = (short)1000; sh[1] = (short)-1000;
     int wide[2];
-    audio_i16_to_i32(&sh[0], &wide[0], 2UL);
+    audio_i16_to_i32(sh[0..2], wide[0..2]);
     ASSERT_EQ(wide[0], 1000 * 65536);
     short narrow[2];
-    audio_i32_to_i16(&wide[0], &narrow[0], 2UL);
+    audio_i32_to_i16(wide[0..2], narrow[0..2]);
     ASSERT_EQ(narrow[0], 1000);
     ASSERT_EQ(narrow[1], -1000);
 
     // The generic path agrees with the specialized ones.
-    short s2[6];
-    unsafe { audio_convert_raw_((void*)&s2[0], AUDIO_FORMAT_I16, (const void*)&f[0], AUDIO_FORMAT_F32, 6UL); }
-    for (int i = 0; i < 6; i = i + 1) ASSERT_EQ(s2[i], s[i]);
-    double d2[6];
-    unsafe { audio_convert_raw_((void*)&d2[0], AUDIO_FORMAT_F64, (const void*)&p24[0], AUDIO_FORMAT_I24, 6UL); }
-    ASSERT_TRUE(d2[3] > 0.99999 && d2[3] <= 1.0);
+    // Byte views of the typed buffers (the layout a device buffer has).
+    unsigned char fb[24];
+    unsigned char sb[12];
+    for (int i = 0; i < 6; i = i + 1) {
+        audio_sample_write(fb[(unsigned long)i * 4UL..24], AUDIO_FORMAT_F32, (double)f[i]);
+    }
+    ASSERT_EQ(audio_convert(sb[0..12], AUDIO_FORMAT_I16, fb[0..24], AUDIO_FORMAT_F32), 6);
+    for (int i = 0; i < 6; i = i + 1) {
+        double v = audio_sample_read(sb[(unsigned long)i * 2UL..12], AUDIO_FORMAT_I16);
+        ASSERT_TRUE(v == (double)s[i] / 32768.0);
+    }
+    unsigned char pb[18];
+    for (int i = 0; i < 6; i = i + 1)
+        for (int k = 0; k < 3; k = k + 1) pb[i * 3 + k] = p24[i].b[k];
+    unsigned char db[48];
+    ASSERT_EQ(audio_convert(db[0..48], AUDIO_FORMAT_F64, pb[0..18], AUDIO_FORMAT_I24), 6);
+    double d3 = audio_sample_read(db[24..48], AUDIO_FORMAT_F64);
+    ASSERT_TRUE(d3 > 0.99999 && d3 <= 1.0);
+    ASSERT_TRUE(audio_sample_read(db[47..48], AUDIO_FORMAT_F64) == 0.0);   // too short: 0
+    ASSERT_EQ(audio_convert(sb[0..3], AUDIO_FORMAT_I16, fb[0..24], AUDIO_FORMAT_F32), 1);
 }
 
 void t_convert_dither_layout() {
@@ -94,7 +118,7 @@ void t_convert_dither_layout() {
     for (int i = 0; i < 64; i = i + 1) f[i] = (float)0.25;
     short s[64];
     unsigned int seed = 12345U;
-    audio_f32_to_i16_dither(&f[0], &s[0], 64UL, &seed);
+    audio_f32_to_i16_dither(f[0..64], s[0..64], &seed);
     int lo = 99999; int hi = -99999;
     for (int i = 0; i < 64; i = i + 1) {
         int v = (int)s[i];
@@ -107,32 +131,33 @@ void t_convert_dither_layout() {
     planar[0] = (float)1.0; planar[1] = (float)2.0; planar[2] = (float)3.0;
     planar[3] = (float)-1.0; planar[4] = (float)-2.0; planar[5] = (float)-3.0;
     float inter[6];
-    audio_interleave_f32(&planar[0], &inter[0], 3UL, 2);
+    ASSERT_EQ(audio_interleave_f32(planar[0..6], inter[0..6], 2), 3);
     ASSERT_TRUE(inter[0] == (float)1.0 && inter[1] == (float)-1.0 && inter[4] == (float)3.0 && inter[5] == (float)-3.0);
     float back[6];
-    audio_deinterleave_f32(&inter[0], &back[0], 3UL, 2);
+    audio_deinterleave_f32(inter[0..6], back[0..6], 2);
     for (int i = 0; i < 6; i = i + 1) ASSERT_TRUE(back[i] == planar[i]);
 
     // 2 interleaved f32 channels -> channels 1..2 of a 4-channel planar i16 buffer.
-    short dev[12];
-    for (int i = 0; i < 12; i = i + 1) dev[i] = (short)7;
-    unsafe {
-        audio_copy_frames_raw_((void*)&dev[0], AUDIO_FORMAT_I16, 4, 0, 1, (const void*)&inter[0], AUDIO_FORMAT_F32, 2, 1, 0,
-                               2, 3UL);
-    }
-    ASSERT_EQ(dev[0], 7);                       // channel 0 untouched
-    ASSERT_EQ(dev[3], 32767);                   // channel 1, frame 0: 1.0
-    ASSERT_EQ(dev[6], -32767);                  // channel 2, frame 0: -1.0
-    ASSERT_EQ(dev[9], 7);                       // channel 3 untouched
+    unsigned char ib[24];
+    for (int i = 0; i < 6; i = i + 1) audio_sample_write(ib[(unsigned long)i * 4UL..24], AUDIO_FORMAT_F32, (double)inter[i]);
+    unsigned char dev[24];
+    for (int i = 0; i < 12; i = i + 1) audio_sample_write(dev[(unsigned long)i * 2UL..24], AUDIO_FORMAT_I16, 7.0 / 32767.0);
+    ASSERT_EQ(audio_copy_frames(dev[0..24], AUDIO_FORMAT_I16, 4, 0, 1, ib[0..24], AUDIO_FORMAT_F32, 2, 1, 0, 2, 3UL), 3);
+    ASSERT_TRUE(audio_sample_read(dev[0..24], AUDIO_FORMAT_I16) == 7.0 / 32768.0);    // channel 0 untouched
+    ASSERT_TRUE(audio_sample_read(dev[6..24], AUDIO_FORMAT_I16) == 32767.0 / 32768.0); // channel 1, frame 0: 1.0
+    ASSERT_TRUE(audio_sample_read(dev[12..24], AUDIO_FORMAT_I16) == -32767.0 / 32768.0); // channel 2, frame 0: -1.0
+    ASSERT_TRUE(audio_sample_read(dev[18..24], AUDIO_FORMAT_I16) == 7.0 / 32768.0);   // channel 3 untouched
+    // A destination too small for the frames copies nothing.
+    ASSERT_EQ(audio_copy_frames(dev[0..20], AUDIO_FORMAT_I16, 4, 0, 1, ib[0..24], AUDIO_FORMAT_F32, 2, 1, 0, 2, 3UL), 0);
 
     float g[4];
     g[0] = (float)0.5; g[1] = (float)-0.25; g[2] = (float)1.0; g[3] = (float)0.0;
-    audio_gain_f32(&g[0], 4UL, (float)2.0);
+    audio_gain_f32(g[0..4], (float)2.0);
     ASSERT_TRUE(g[0] == (float)1.0 && g[1] == (float)-0.5);
-    ASSERT_TRUE(audio_peak_f32(&g[0], 4UL) == (float)2.0);
+    ASSERT_TRUE(audio_peak_f32(g[0..4]) == (float)2.0);
     float m[4];
     for (int i = 0; i < 4; i = i + 1) m[i] = (float)1.0;
-    audio_mix_f32(&m[0], &g[0], 4UL, (float)0.5);
+    audio_mix_f32(m[0..4], g[0..4], (float)0.5);
     ASSERT_TRUE(m[0] == (float)1.5 && m[2] == (float)2.0);
 }
 
@@ -140,31 +165,31 @@ void t_convert_dsp() {
     float f[4];
     f[0] = (float)0.5; f[1] = (float)-0.5; f[2] = (float)0.0; f[3] = (float)1.0;
     Fixed q[4];
-    audio_f32_to_fixed(&f[0], &q[0], 4UL);
+    audio_f32_to_fixed(f[0..4], q[0..4]);
     ASSERT_EQ((int)q[0], 1 << 23);
     ASSERT_EQ((int)q[3], 1 << 24);
     float back[4];
-    audio_fixed_to_f32(&q[0], &back[0], 4UL);
+    audio_fixed_to_f32(q[0..4], back[0..4]);
     for (int i = 0; i < 4; i = i + 1) ASSERT_TRUE(back[i] == f[i]);
 
     // A dsp AudioBuffer as the lock-free hand-off between a callback and the app.
     struct AudioBuffer ring = AudioBuffer::new(2UL);
     float frames[600];
     for (int i = 0; i < 600; i = i + 1) frames[i] = (float)(i % 50) / (float)100.0;
-    ASSERT_EQ(audio_buffer_write_f32(&ring, &frames[0], 300UL), 300);
+    ASSERT_EQ(audio_buffer_write_f32(&ring, frames[0..600]), 300);
     float out[600];
-    ASSERT_EQ(audio_buffer_read_f32(&ring, &out[0], 300UL), 300);
+    ASSERT_EQ(audio_buffer_read_f32(&ring, out[0..600]), 300);
     int same = 1;
     for (int i = 0; i < 600; i = i + 1) if (absf_(out[i] - frames[i]) > (float)0.0000001) same = 0;
     ASSERT_TRUE(same);
-    ASSERT_EQ(audio_buffer_read_f32(&ring, &out[0], 10UL), 0);
+    ASSERT_EQ(audio_buffer_read_f32(&ring, out[0..20]), 0);
 }
 
 // ── API registry, devices, errors ────────────────────────────────────────
 
 void t_api_registry() {
     int apis[AUDIO_API_COUNT];
-    int n = audio_compiled_apis(&apis[0], AUDIO_API_COUNT);
+    int n = audio_compiled_apis(apis[0..AUDIO_API_COUNT]);
     ASSERT_TRUE(n >= 1);
     ASSERT_EQ(apis[n - 1], AUDIO_API_DUMMY);
     ASSERT_TRUE(audio_api_compiled(AUDIO_API_DUMMY));
@@ -248,17 +273,17 @@ int rec_f32(&AudioIo io, ?&Rec rp) {
             r.status = r.status | io.status;
             r.frames = io.frames;
             r.last_time = io.stream_time;
-            struct Slice<float> in = io.input_f32();
+            []const float in = io.input_f32();
             if (in.len > 0UL) {
-                r.first_in = *in.at(0UL);
+                r.first_in = in[0UL];
                 r.in_sum = (float)0.0;
-                for (unsigned long i = 0UL; i < in.len; i = i + 1UL) r.in_sum = r.in_sum + *in.at(i);
+                for (unsigned long i = 0UL; i < in.len; i = i + 1UL) r.in_sum = r.in_sum + in[i];
             }
-            struct Slice<float> o = io.output_f32();
+            []float o = io.output_f32();
             for (unsigned long f = 0UL; f < (unsigned long)io.frames && o.len > 0UL; f = f + 1UL) {
                 float v = (float)(r.calls * 1000 + (int)f) / (float)100000.0;
-                o.set(f * 2UL, v);
-                o.set(f * 2UL + 1UL, -v);
+                o[f * 2UL] = v;
+                o[f * 2UL + 1UL] = -v;
             }
             if (r.calls == r.stop_after) return AUDIO_CB_STOP;
             if (r.calls == r.abort_after) return AUDIO_CB_ABORT;
@@ -326,21 +351,61 @@ int rec_i16_planar(&AudioIo io, ?&Rec rp) {
         case some(r): {
             r.calls = r.calls + 1;
             if (io.interleaved || io.format != AUDIO_FORMAT_I16) r.bad = r.bad + 1;
-            if (!io.output_f32().is_empty()) r.bad = r.bad + 1;     // other formats' views are empty
-            if (!io.output_channel_f32(0).is_empty()) r.bad = r.bad + 1;
-            struct Slice<short> in = io.input_i16();
+            if (io.output_f32().len != 0UL) r.bad = r.bad + 1;     // other formats' views are empty
+            if (io.output_channel_f32(0).len != 0UL) r.bad = r.bad + 1;
+            []const short in = io.input_i16();
             // Channel 1 of the input (planar: second half) is the loopback of
             // what we wrote to output channel 1 last period.
-            if (in.len == 2UL * (unsigned long)io.frames) r.first_in = (float)*in.at((unsigned long)io.frames);
-            struct Slice<short> o = io.output_i16();
+            if (in.len == 2UL * (unsigned long)io.frames) r.first_in = (float)in[(unsigned long)io.frames];
+            []short o = io.output_i16();
             for (unsigned long f = 0UL; f < (unsigned long)io.frames; f = f + 1UL) {
-                o.set(f, (short)1000);                                   // channel 0
-                o.set((unsigned long)io.frames + f, (short)(r.calls * 10)); // channel 1
+                o[f] = (short)1000;                                   // channel 0
+                o[(unsigned long)io.frames + f] = (short)(r.calls * 10); // channel 1
             }
         }
         case null: {}
     }
     return AUDIO_CB_CONTINUE;
+}
+
+// i24 duplex through the dummy loopback: the callback writes []S24 and
+// reads back last period's samples (device f32 in between).
+int rec_i24(&AudioIo io, ?&Rec rp) {
+    match (rp) {
+        case some(r): {
+            r.calls = r.calls + 1;
+            []S24 o = io.output_i24();
+            []const S24 in = io.input_i24();
+            unsigned long n = (unsigned long)io.frames * 2UL;
+            if (o.len != n || in.len != n) r.bad = r.bad + 1;
+            if (io.output_f32().len != 0UL || io.output_bytes().len != n * 3UL) r.bad = r.bad + 1;
+            if (in.len == n) r.first_in = (float)in[1].value();
+            for (unsigned long i = 0UL; i < o.len; i = i + 1UL) o[i] = S24::of(r.calls * 4096);
+        }
+        case null: {}
+    }
+    return AUDIO_CB_CONTINUE;
+}
+
+void t_dummy_i24() {
+    struct Audio a = Audio::open(AUDIO_API_DUMMY).unwrap_or(Audio::closed());
+    struct AudioStreamParams p = AudioStreamParams::of(AUDIO_DEFAULT_DEVICE, 2);
+    struct AudioStreamOptions o = AudioStreamOptions::with_flags(AUDIO_FLAG_DUMMY_MANUAL);
+    struct Rec r = rec_new_();
+    unsigned int frames = 32U;
+    struct Result<AudioStream, AudioError> sr =
+        a.open_stream((?&AudioStreamParams)&p, (?&AudioStreamParams)&p, AUDIO_FORMAT_I24, 48000U, &frames, rec_i24,
+                      (?&Rec)&r, (?&AudioStreamOptions)&o);
+    ASSERT_TRUE(sr.ok());
+    struct AudioStream s = sr.unwrap_or(AudioStream::closed());
+    s.start();
+    s.pump();
+    s.pump();
+    s.pump();
+    ASSERT_EQ(r.bad, 0);
+    ASSERT_TRUE(r.first_in == (float)(2 * 4096));   // what period 2 wrote
+    s.close();
+    a.close();
 }
 
 void t_dummy_layouts() {
@@ -534,11 +599,11 @@ int alsa_cap(&AudioIo io, ?&Rec rp) {
     match (rp) {
         case some(r): {
             r.calls = r.calls + 1;
-            struct Slice<short> in = io.input_i16();
+            []const short in = io.input_i16();
             for (unsigned long i = 0UL; i < in.len; i = i + 1UL) {
                 // The capture file holds the ramp 0, 1, 2, ... (i16 mono).
                 int want = (r.calls - 1) * (int)io.frames + (int)i;
-                if ((int)*in.at(i) != want) r.bad = r.bad + 1;
+                if ((int)in[i] != want) r.bad = r.bad + 1;
             }
             if (r.calls == r.stop_after) return AUDIO_CB_STOP;
         }
@@ -666,12 +731,12 @@ int jack_gen(&AudioIo io, ?&Ramp gp) {
     match (gp) {
         case some(g): {
             g.calls = g.calls + 1;
-            struct Slice<float> o = io.output_f32();
+            []float o = io.output_f32();
             for (unsigned long f = 0UL; f < (unsigned long)io.frames; f = f + 1UL) {
                 g.next = g.next + (float)(1.0 / 65536.0);
                 if (g.next > (float)0.5) g.next = (float)(1.0 / 65536.0);
-                o.set(f * 2UL, g.next);
-                o.set(f * 2UL + 1UL, -g.next);
+                o[f * 2UL] = g.next;
+                o[f * 2UL + 1UL] = -g.next;
             }
         }
         case null: {}
@@ -683,10 +748,10 @@ int jack_sink(&AudioIo io, ?&Ramp sp) {
     match (sp) {
         case some(s): {
             s.calls = s.calls + 1;
-            struct Slice<float> in = io.input_f32();
+            []const float in = io.input_f32();
             for (unsigned long f = 0UL; f < (unsigned long)io.frames; f = f + 1UL) {
-                float l = *in.at(f * 2UL);
-                float r = *in.at(f * 2UL + 1UL);
+                float l = in[f * 2UL];
+                float r = in[f * 2UL + 1UL];
                 if (l == (float)0.0 && r == (float)0.0) continue;    // before the ports were connected
                 float d = l - s.next;
                 if (r == -l && ((d > (float)0.0 && d < (float)0.0001) || l <= (float)(1.0 / 65536.0) || s.seen == 0)) s.ok = s.ok + 1;
@@ -795,18 +860,18 @@ void t_midi_messages() {
     ASSERT_TRUE(midi_is_realtime(0xFE) && !midi_is_realtime(0xF7));
     unsigned char sx[8];
     unsigned char pl[3]; pl[0] = (unsigned char)0x7E; pl[1] = (unsigned char)0x7F; pl[2] = (unsigned char)0x06;
-    ASSERT_EQ(midi_build_sysex(&sx[0], 8UL, &pl[0], 3UL), 5);
+    ASSERT_EQ(midi_build_sysex(sx[0..8UL], pl[0..3UL]), 5);
     ASSERT_EQ(sx[0], 0xF0);
     ASSERT_EQ(sx[4], 0xF7);
-    ASSERT_EQ(midi_build_sysex(&sx[0], 4UL, &pl[0], 3UL), -1);
+    ASSERT_EQ(midi_build_sysex(sx[0..4UL], pl[0..3UL]), -1);
     pl[1] = (unsigned char)0x80;
-    ASSERT_EQ(midi_build_sysex(&sx[0], 8UL, &pl[0], 3UL), -1);
+    ASSERT_EQ(midi_build_sysex(sx[0..8UL], pl[0..3UL]), -1);
     ASSERT_EQ(midi_14bit(0x7F, 0x7F), 16383);
 }
 
 void t_midi_parser() {
     unsigned char sysex[8];
-    struct MidiParser p = MidiParser::new((?&unsigned char)&sysex[0], 8UL);
+    struct MidiParser p = MidiParser::new(sysex[0..8]);
     // Running status: one status byte, three notes.
     unsigned char stream[7];
     stream[0] = (unsigned char)0x90; stream[1] = (unsigned char)60; stream[2] = (unsigned char)100;
@@ -839,6 +904,8 @@ void t_midi_parser() {
     ASSERT_EQ(p.sysex_length(), 4);
     ASSERT_EQ(sysex[1], 0x41);
     ASSERT_EQ(sysex[3], 0xF7);
+    ASSERT_EQ(p.sysex_message().len, 4UL);
+    ASSERT_EQ(p.sysex_message()[3], 0xF7);
     // Running status was cancelled by the sysex: a stray data byte is an error.
     ASSERT_EQ(p.feed(0x22), MIDI_PARSE_ERROR);
     // A sysex longer than the buffer is dropped.
@@ -860,20 +927,20 @@ void t_midi_parser() {
     struct MidiMsg a = MidiMsg::note_on(0, 60, 1);
     struct MidiMsg b = MidiMsg::note_on(0, 61, 1);
     struct MidiMsg c = MidiMsg::note_on(1, 61, 1);
-    ASSERT_EQ(e.encode(&a.data[0], 3UL, &out[0], 16UL), 3);
-    ASSERT_EQ(e.encode(&b.data[0], 3UL, &out[0], 16UL), 2);
+    ASSERT_EQ(e.encode(a.data[0..3UL], out[0..16UL]), 3);
+    ASSERT_EQ(e.encode(b.data[0..3UL], out[0..16UL]), 2);
     ASSERT_EQ(out[0], 61);
-    ASSERT_EQ(e.encode(&c.data[0], 3UL, &out[0], 16UL), 3);
+    ASSERT_EQ(e.encode(c.data[0..3UL], out[0..16UL]), 3);
     struct MidiMsg clk = MidiMsg::system(MIDI_CLOCK);
-    ASSERT_EQ(e.encode(&clk.data[0], 1UL, &out[0], 16UL), 1);       // real-time keeps running status
-    ASSERT_EQ(e.encode(&c.data[0], 3UL, &out[0], 16UL), 2);
+    ASSERT_EQ(e.encode(clk.data[0..1UL], out[0..16UL]), 1);       // real-time keeps running status
+    ASSERT_EQ(e.encode(c.data[0..3UL], out[0..16UL]), 2);
     struct MidiMsg tr = MidiMsg::system(MIDI_TUNE_REQUEST);
-    e.encode(&tr.data[0], 1UL, &out[0], 16UL);                       // system common cancels it
-    ASSERT_EQ(e.encode(&c.data[0], 3UL, &out[0], 16UL), 3);
-    ASSERT_EQ(e.encode(&c.data[0], 3UL, &out[0], 1UL), -1);
+    e.encode(tr.data[0..1UL], out[0..16UL]);                       // system common cancels it
+    ASSERT_EQ(e.encode(c.data[0..3UL], out[0..16UL]), 3);
+    ASSERT_EQ(e.encode(c.data[0..3UL], out[0..1UL]), -1);
     struct MidiEncoder plain = MidiEncoder::new(0);
-    plain.encode(&a.data[0], 3UL, &out[0], 16UL);
-    ASSERT_EQ(plain.encode(&a.data[0], 3UL, &out[0], 16UL), 3);
+    plain.encode(a.data[0..3UL], out[0..16UL]);
+    ASSERT_EQ(plain.encode(a.data[0..3UL], out[0..16UL]), 3);
 }
 
 struct MidiMon { int n; int notes; int sysex_len; double last_t; double total_delta; int bad_order; };
@@ -901,8 +968,8 @@ static void midi_roundtrip_(&MidiIn in, &MidiOut out, int waitMs) {
     unsigned char sx[64];
     unsigned char pl[40];
     for (int i = 0; i < 40; i = i + 1) pl[i] = (unsigned char)i;
-    long sl = midi_build_sysex(&sx[0], 64UL, &pl[0], 40UL);
-    ASSERT_TRUE(out.send_message(&sx[0], (unsigned long)sl).ok());
+    long sl = midi_build_sysex(sx[0..64UL], pl[0..40UL]);
+    ASSERT_TRUE(out.send_message(sx[0..(unsigned long)sl]).ok());
     ASSERT_TRUE(out.send(MidiMsg::system(MIDI_CLOCK)).ok());        // filtered
     ASSERT_TRUE(out.send(MidiMsg::system(MIDI_ACTIVE_SENSING)).ok()); // filtered
     ASSERT_TRUE(out.send(MidiMsg::pitch_bend(2, -100)).ok());
@@ -913,7 +980,7 @@ static void midi_roundtrip_(&MidiIn in, &MidiOut out, int waitMs) {
     long n = 0L;
     long long t0 = audio_now_ns_();
     while (got < 4 && audio_now_ns_() - t0 < (long long)waitMs * 1000000LL) {
-        n = in.get_message(&buf[0], 64UL, &t);
+        n = in.get_message(buf[0..64UL], &t);
         if (n == 0L) { audio_sleep_us_(1000LL); continue; }
         if (got == 0) { ASSERT_EQ(n, 3); ASSERT_EQ(buf[0], 0x90); ASSERT_EQ(buf[1], 60); }
         if (got == 1) { ASSERT_EQ(n, 3); ASSERT_EQ(buf[0], 0xB5); }
@@ -924,25 +991,25 @@ static void midi_roundtrip_(&MidiIn in, &MidiOut out, int waitMs) {
         got = got + 1;
     }
     ASSERT_EQ(got, 4);
-    ASSERT_EQ(in.get_message(&buf[0], 64UL, &t), 0);
+    ASSERT_EQ(in.get_message(buf[0..64UL], &t), 0);
     // A buffer too small: the size comes back negative and the message stays.
-    out.send_message(&sx[0], (unsigned long)sl);
+    out.send_message(sx[0..(unsigned long)sl]);
     t0 = audio_now_ns_();
     n = 0L;
-    while (n == 0L && audio_now_ns_() - t0 < (long long)waitMs * 1000000LL) { n = in.get_message(&buf[0], 8UL, &t); if (n == 0L) audio_sleep_us_(1000LL); }
+    while (n == 0L && audio_now_ns_() - t0 < (long long)waitMs * 1000000LL) { n = in.get_message(buf[0..8UL], &t); if (n == 0L) audio_sleep_us_(1000LL); }
     ASSERT_EQ(n, 0L - sl);
-    ASSERT_EQ(in.get_message(&buf[0], 64UL, &t), sl);
+    ASSERT_EQ(in.get_message(buf[0..64UL], &t), sl);
     // Callback mode.
     struct MidiMon mon;
     mon.n = 0; mon.notes = 0; mon.sysex_len = 0; mon.last_t = 0.0; mon.total_delta = 0.0; mon.bad_order = 0;
     in.set_callback(midi_mon, (?&MidiMon)&mon);
     for (int i = 0; i < 20; i = i + 1) out.send(MidiMsg::note_on(1, 40 + i, 90));
-    out.send_message(&sx[0], (unsigned long)sl);
+    out.send_message(sx[0..(unsigned long)sl]);
     t0 = audio_now_ns_();
     while (mon.n < 21 && audio_now_ns_() - t0 < (long long)waitMs * 1000000LL) audio_sleep_us_(1000LL);
     // The filter applies to what arrives from now on.
     in.ignore_types(1, 1, 1);
-    out.send_message(&sx[0], (unsigned long)sl);
+    out.send_message(sx[0..(unsigned long)sl]);
     audio_sleep_us_((long long)waitMs * 100LL);
     ASSERT_EQ(mon.n, 21);
     ASSERT_EQ(mon.notes, 20);
@@ -955,7 +1022,7 @@ static void midi_roundtrip_(&MidiIn in, &MidiOut out, int waitMs) {
 
 void t_midi_dummy() {
     int apis[MIDI_API_COUNT];
-    int na = midi_compiled_apis(&apis[0], MIDI_API_COUNT);
+    int na = midi_compiled_apis(apis[0..MIDI_API_COUNT]);
     ASSERT_EQ(apis[na - 1], MIDI_API_DUMMY);
     ASSERT_EQ(midi_api_by_name("winmm"), MIDI_API_WINMM);
     ASSERT_STR_EQ(midi_api_display_name(MIDI_API_COREMIDI), "Core MIDI");
@@ -1003,7 +1070,7 @@ void t_midi_dummy() {
     unsigned char b[4];
     double t = 0.0;
     int kept = 0;
-    while (small.get_message(&b[0], 4UL, &t) > 0L) kept = kept + 1;
+    while (small.get_message(b[0..4], &t) > 0L) kept = kept + 1;
     ASSERT_EQ((unsigned long)kept + small.dropped(), 20UL);
     small.close();
     in.close();
@@ -1078,6 +1145,7 @@ int main() {
         t.add("dummy: devices", t_dummy_devices);
         t.add("dummy: manual pump, loopback, stop/abort", t_dummy_manual);
         t.add("dummy: i16 planar, offsets, f64", t_dummy_layouts);
+        t.add("dummy: i24 duplex as []S24", t_dummy_i24);
         t.add("dummy: input-only sine", t_dummy_input);
         t.add("dummy: timer thread", t_dummy_thread);
         t.add("stream errors", t_stream_errors);

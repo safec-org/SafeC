@@ -165,9 +165,10 @@ extern void   js_console(int level, const char* ptr, int len);
 unsigned long wasm_strlen(const &char s);
 
 // Minimal signed-decimal integer formatter — no snprintf on wasm32. 'buf'
-// must be at least 24 bytes (fits any 64-bit value's sign + digits + NUL).
+// should hold 24 bytes (any 64-bit value's sign + digits + NUL); a shorter
+// buf gets a truncated number.
 // Always NUL-terminates.
-void wasm_itoa(long long v, &char buf, unsigned long cap);
+void wasm_itoa(long long v, []char buf);
 
 // ── Elements ───────────────────────────────────────────────────────────────
 
@@ -245,9 +246,9 @@ void dom_set_disabled(int handle, int disabled);
 // works for boolean properties). DOM_DOCUMENT and DOM_WINDOW work too:
 // dom_set_prop(DOM_DOCUMENT, "title", "...").
 struct String dom_get_prop(int handle, const &char name);
-// The same into a caller buffer: copies up to cap - 1 bytes, NUL-
+// The same into a caller buffer: copies up to buf.len - 1 bytes, NUL-
 // terminates, returns the full length (-1 if undefined/null).
-int  dom_get_prop_buf(int handle, const &char name, &char buf, int cap);
+int  dom_get_prop_buf(int handle, const &char name, []char buf);
 void dom_set_prop(int handle, const &char name, const &char value);
 double dom_get_prop_num(int handle, const &char name);
 void dom_set_prop_num(int handle, const &char name, double value);
@@ -269,7 +270,7 @@ void dom_console(int level, const &char text);
 // a handler with userdata of the matching type. A callback id is
 // slot + DOM_MAX_CALLBACKS * generation, so an id whose slot was freed
 // and reused (a timer that already fired, say) is recognized as stale.
-typedef fn void(void* userdata) DomEventHandler;
+typedef fn void(?&Erased userdata) DomEventHandler;   // erased, see std/erased.h
 
 #define DOM_MAX_CALLBACKS 256
 
@@ -278,24 +279,23 @@ typedef fn void(void* userdata) DomEventHandler;
 #define DOM_CB_FRAME_ 2    // fn void(?&T, double)
 #define DOM_CB_FETCH_ 3    // fn void(?&T, &DomFetchResponse)
 
-int  dom_register_callback_kind_raw_(int kind, void* handler, void* userdata);
 // Frees a callback slot (dom_off / dom_clear_timer / ... do this).
 void dom_unregister_callback(int callbackId);
 
 // Registers handler(userdata) as a callback slot and returns its id (-1 if
 // the table is full). Stays registered until dom_unregister_callback().
-int  dom_register_callback_raw_(void* handler, void* userdata);
+int  dom_register_callback_raw_(fn void(?&Erased) handler, ?&Erased userdata);
 generic<T>
 int  dom_register_callback(fn void(?&T) handler, ?&T userdata) {
-    unsafe { return dom_register_callback_raw_((void*)handler, (void*)userdata); }
+    unsafe { return dom_register_callback_raw_((fn void(?&Erased))handler, (?&Erased)userdata); }
 }
 
 // Looks up 'selector' and calls handler(userdata) on every click. Returns
 // the element handle, or -1 if not found (no listener registered then).
-int  dom_on_click_raw_(const &char selector, void* handler, void* userdata);
+int  dom_on_click_raw_(const &char selector, fn void(?&Erased) handler, ?&Erased userdata);
 generic<T>
 int  dom_on_click(const &char selector, fn void(?&T) handler, ?&T userdata) {
-    unsafe { return dom_on_click_raw_(selector, (void*)handler, (void*)userdata); }
+    unsafe { return dom_on_click_raw_(selector, (fn void(?&Erased))handler, (?&Erased)userdata); }
 }
 
 // ── Events ─────────────────────────────────────────────────────────────────
@@ -337,20 +337,20 @@ struct DomEvent {
 // el.addEventListener(type, ...) for any event type; the handler gets the
 // userdata and the event. 'flags' is DOM_LISTEN_* bits (0 for none).
 // Returns a listener id for dom_off(), or -1 (bad handle / table full).
-int  dom_add_listener_raw_(int handle, const &char type, void* handler, void* userdata, int flags);
+int  dom_add_listener_raw_(int handle, const &char type, fn void(?&Erased, &DomEvent) handler, ?&Erased userdata, int flags);
 generic<T>
 int  dom_add_listener(int handle, const &char type, fn void(?&T, &DomEvent) handler, ?&T userdata, int flags) {
-    unsafe { return dom_add_listener_raw_(handle, type, (void*)handler, (void*)userdata, flags); }
+    unsafe { return dom_add_listener_raw_(handle, type, (fn void(?&Erased, &DomEvent))handler, (?&Erased)userdata, flags); }
 }
 generic<T>
 int  dom_on(int handle, const &char type, fn void(?&T, &DomEvent) handler, ?&T userdata) {
-    unsafe { return dom_add_listener_raw_(handle, type, (void*)handler, (void*)userdata, 0); }
+    unsafe { return dom_add_listener_raw_(handle, type, (fn void(?&Erased, &DomEvent))handler, (?&Erased)userdata, 0); }
 }
 // dom_on on the first element matching 'selector'; the listener id, or -1.
-int  dom_on_selector_raw_(const &char selector, const &char type, void* handler, void* userdata);
+int  dom_on_selector_raw_(const &char selector, const &char type, fn void(?&Erased, &DomEvent) handler, ?&Erased userdata);
 generic<T>
 int  dom_on_selector(const &char selector, const &char type, fn void(?&T, &DomEvent) handler, ?&T userdata) {
-    unsafe { return dom_on_selector_raw_(selector, type, (void*)handler, (void*)userdata); }
+    unsafe { return dom_on_selector_raw_(selector, type, (fn void(?&Erased, &DomEvent))handler, (?&Erased)userdata); }
 }
 // removeEventListener + frees the callback slot.
 void dom_off(int listenerId);
@@ -359,24 +359,24 @@ void dom_off(int listenerId);
 
 // setTimeout / setInterval; the timer id for dom_clear_timer, or -1. A
 // one-shot timer's slot is freed after it fires.
-int  dom_set_timer_raw_(void* handler, void* userdata, int ms, int repeat);
+int  dom_set_timer_raw_(fn void(?&Erased) handler, ?&Erased userdata, int ms, int repeat);
 generic<T>
 int  dom_set_timeout(fn void(?&T) handler, ?&T userdata, int ms) {
-    unsafe { return dom_set_timer_raw_((void*)handler, (void*)userdata, ms, 0); }
+    unsafe { return dom_set_timer_raw_((fn void(?&Erased))handler, (?&Erased)userdata, ms, 0); }
 }
 generic<T>
 int  dom_set_interval(fn void(?&T) handler, ?&T userdata, int ms) {
-    unsafe { return dom_set_timer_raw_((void*)handler, (void*)userdata, ms, 1); }
+    unsafe { return dom_set_timer_raw_((fn void(?&Erased))handler, (?&Erased)userdata, ms, 1); }
 }
 void dom_clear_timer(int timerId);
 
 // requestAnimationFrame: handler(userdata, timestamp_ms) once, on the next
 // frame (re-request from inside the handler for an animation loop). The
 // frame id, or -1.
-int  dom_request_animation_frame_raw_(void* handler, void* userdata);
+int  dom_request_animation_frame_raw_(fn void(?&Erased, double) handler, ?&Erased userdata);
 generic<T>
 int  dom_request_animation_frame(fn void(?&T, double) handler, ?&T userdata) {
-    unsafe { return dom_request_animation_frame_raw_((void*)handler, (void*)userdata); }
+    unsafe { return dom_request_animation_frame_raw_((fn void(?&Erased, double))handler, (?&Erased)userdata); }
 }
 void dom_cancel_animation_frame(int frameId);
 
@@ -403,15 +403,15 @@ struct DomFetchResponse {
 // handler(userdata, &response) runs once it completes (or fails). Returns
 // the request id, or -1.
 int  dom_fetch_raw_(const &char method, const &char url, const ?&char headers, const ?&char body,
-                    void* handler, void* userdata);
+                    fn void(?&Erased, &DomFetchResponse) handler, ?&Erased userdata);
 generic<T>
 int  dom_fetch(const &char method, const &char url, const ?&char headers, const ?&char body,
                fn void(?&T, &DomFetchResponse) handler, ?&T userdata) {
-    unsafe { return dom_fetch_raw_(method, url, headers, body, (void*)handler, (void*)userdata); }
+    unsafe { return dom_fetch_raw_(method, url, headers, body, (fn void(?&Erased, &DomFetchResponse))handler, (?&Erased)userdata); }
 }
 generic<T>
 int  dom_fetch_get(const &char url, fn void(?&T, &DomFetchResponse) handler, ?&T userdata) {
-    unsafe { return dom_fetch_raw_("GET", url, null, null, (void*)handler, (void*)userdata); }
+    unsafe { return dom_fetch_raw_("GET", url, null, null, (fn void(?&Erased, &DomFetchResponse))handler, (?&Erased)userdata); }
 }
 
 // ── Storage ────────────────────────────────────────────────────────────────
