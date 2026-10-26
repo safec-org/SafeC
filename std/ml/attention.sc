@@ -11,8 +11,8 @@
 
 namespace std {
 
-extern void* malloc(size_t size);
-extern void  free(void* ptr);
+extern unsigned char* malloc(size_t size);
+extern void  free(unsigned char* ptr);
 
 // ── Temporaries ──────────────────────────────────────────────────────────────
 void attn_release_(&FloatTensor t) {
@@ -20,7 +20,7 @@ void attn_release_(&FloatTensor t) {
     // A heap tensor: destroyed in place through the reference, then its
     // memory released (a Box the checker can't see).
     unsafe { t->free(); }
-    unsafe { free((void*)t); }
+    unsafe { free((unsigned char*)t); }
 }
 
 void attn_release_tmp_(const &FloatTensor out, &FloatTensor t) {
@@ -45,7 +45,7 @@ static int attn_on_cpu_(const &FloatTensor a, const &FloatTensor b, const &Float
 &FloatTensor FloatTensor::softmax_rows_mask(int causal, unsigned long window) const {
     if (!causal && window == 0UL) return self.softmax();
     match (tdev_softmax_mask_(self, causal, window)) { case some(o): { return o; } case null: { } }
-    unsafe { tensor_host_raw_((void*)self); }
+    unsafe { tensor_host_raw_((FloatTensor*)self); }
     unsigned long rows; unsigned long cols;
     unsafe { cols = self->shape[self->ndim - 1UL]; rows = self->size / cols; }
     long off = (long)cols - (long)rows;
@@ -84,11 +84,11 @@ static int attn_on_cpu_(const &FloatTensor a, const &FloatTensor b, const &Float
         r = r + 1UL;
     }
     // hidden entries are 0: the softmax backward gives them no gradient
-    __tensor_link1(out, self, (void*)__softmax_backward);
+    __tensor_link1(out, self, __softmax_backward);
     return out;
 }
 
-static void attn_transpose_backward_(void* selfPtr) {
+static void attn_transpose_backward_(&FloatTensor selfPtr) {
     unsafe {
         FloatTensor* s = (FloatTensor*)selfPtr;
         FloatTensor* a = __tensor_parent(s, 0UL);
@@ -107,7 +107,7 @@ static void attn_transpose_backward_(void* selfPtr) {
 
 &FloatTensor FloatTensor::transpose() const {
     match (tdev_transpose_(self)) { case some(o): { return o; } case null: { } }
-    unsafe { tensor_host_raw_((void*)self); }
+    unsafe { tensor_host_raw_((FloatTensor*)self); }
     unsigned long rows; unsigned long cols;
     unsafe { rows = self->shape[0]; cols = self->shape[1]; }
     unsigned long shape[2];
@@ -123,12 +123,12 @@ static void attn_transpose_backward_(void* selfPtr) {
         }
         r = r + 1UL;
     }
-    __tensor_link1(out, self, (void*)attn_transpose_backward_);
+    __tensor_link1(out, self, attn_transpose_backward_);
     return out;
 }
 
 // Column slice, differentiable: the start column rides in extraScalar.
-static void attn_slice_backward_(void* selfPtr) {
+static void attn_slice_backward_(&FloatTensor selfPtr) {
     unsafe {
         FloatTensor* s = (FloatTensor*)selfPtr;
         FloatTensor* a = __tensor_parent(s, 0UL);
@@ -149,7 +149,7 @@ static void attn_slice_backward_(void* selfPtr) {
 
 &FloatTensor FloatTensor::slice_cols(unsigned long start, unsigned long len) const {
     match (tdev_slice_cols_(self, start, len)) { case some(o): { return o; } case null: { } }
-    unsafe { tensor_host_raw_((void*)self); }
+    unsafe { tensor_host_raw_((FloatTensor*)self); }
     unsigned long rows; unsigned long n;
     unsafe { rows = self->shape[0]; n = self->shape[1]; }
     &FloatTensor out = FloatTensor::new_2d(rows, len, 0);
@@ -162,12 +162,12 @@ static void attn_slice_backward_(void* selfPtr) {
         }
         out->extraScalar = (float)start;
     }
-    __tensor_link1(out, self, (void*)attn_slice_backward_);
+    __tensor_link1(out, self, attn_slice_backward_);
     return out;
 }
 
 void tensor_set_cols(&FloatTensor dst, unsigned long startCol, const &FloatTensor src) {
-    unsafe { tensor_host_write_raw_((void*)dst); tensor_host_raw_((void*)src); }
+    unsafe { tensor_host_write_raw_((FloatTensor*)dst); tensor_host_raw_((FloatTensor*)src); }
     unsigned long rows; unsigned long dstCols; unsigned long srcCols;
     unsafe { rows = dst->shape[0]; dstCols = dst->shape[1]; srcCols = src->shape[1]; }
     unsigned long r = 0UL;
@@ -277,7 +277,7 @@ static &FloatTensor attn_composed_(const &FloatTensor Q, const &FloatTensor K, c
 // phi(x) = elu(x) + 1, elementwise (always > 0, used as linear
 // attention's kernel feature map).
 static &FloatTensor __phi_elu_p1(&FloatTensor x) {
-    unsafe { tensor_host_write_raw_((void*)x); }
+    unsafe { tensor_host_write_raw_((FloatTensor*)x); }
     &FloatTensor out = x.zeros_like();
     unsafe {
         unsigned long i = 0UL;
@@ -320,7 +320,7 @@ static &FloatTensor attn_linear_graph_(const &FloatTensor Q, const &FloatTensor 
 
 &FloatTensor linear_attention_forward(const &FloatTensor Q, const &FloatTensor K, const &FloatTensor V) {
     if (attn_grad_(Q, K, V) || !attn_on_cpu_(Q, K, V)) return attn_linear_graph_(Q, K, V);
-    unsafe { tensor_host_raw_((void*)Q); tensor_host_raw_((void*)K); tensor_host_raw_((void*)V); }
+    unsafe { tensor_host_raw_((FloatTensor*)Q); tensor_host_raw_((FloatTensor*)K); tensor_host_raw_((FloatTensor*)V); }
     unsigned long seqLen; unsigned long headDim; unsigned long kvLen;
     unsafe { seqLen = Q->shape[0]; headDim = Q->shape[1]; kvLen = K->shape[0]; }
 
@@ -371,11 +371,11 @@ static &FloatTensor attn_linear_graph_(const &FloatTensor Q, const &FloatTensor 
             }
             i = i + 1UL;
         }
-        free((void*)KV); free((void*)Z);
+        free((unsigned char*)KV); free((unsigned char*)Z);
     }
 
     phiQ->free(); phiK->free();
-    unsafe { free((void*)phiQ); free((void*)phiK); }
+    unsafe { free((unsigned char*)phiQ); free((unsigned char*)phiK); }
     return out;
 }
 
@@ -389,7 +389,7 @@ static &FloatTensor attn_linear_graph_(const &FloatTensor Q, const &FloatTensor 
         match (tensor_attention_fused_(Q, K, V, 1UL, 0, 0UL, scale)) { case some(o): { return o; } case null: { } }
         return attn_composed_(Q, K, V, 0, 0UL);
     }
-    unsafe { tensor_host_raw_((void*)Q); tensor_host_raw_((void*)K); tensor_host_raw_((void*)V); }
+    unsafe { tensor_host_raw_((FloatTensor*)Q); tensor_host_raw_((FloatTensor*)K); tensor_host_raw_((FloatTensor*)V); }
 
     &FloatTensor out = FloatTensor::new_2d(seqLen, headDim, 0); // doubles as the running 'acc' buffer
 
@@ -452,7 +452,7 @@ static &FloatTensor attn_linear_graph_(const &FloatTensor Q, const &FloatTensor 
                 l[i] = l[i] * correction + rowSumP;
                 m[i] = newMax;
 
-                free((void*)scores); free((void*)p);
+                free((unsigned char*)scores); free((unsigned char*)p);
                 i = i + 1UL;
             }
             blockStart = blockEnd;
@@ -464,7 +464,7 @@ static &FloatTensor attn_linear_graph_(const &FloatTensor Q, const &FloatTensor 
             while (d < headDim) { out->data[ii * headDim + d] = out->data[ii * headDim + d] / l[ii]; d = d + 1UL; }
             ii = ii + 1UL;
         }
-        free((void*)m); free((void*)l);
+        free((unsigned char*)m); free((unsigned char*)l);
     }
 
     return out;

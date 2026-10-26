@@ -7,7 +7,7 @@
 
 namespace std {
 
-extern void* memcpy(void* dst, const void* src, unsigned long n);
+extern unsigned char* memcpy(unsigned char* dst, const unsigned char* src, unsigned long n);
 
 // ── Precision helpers ────────────────────────────────────────────────────────
 
@@ -30,7 +30,7 @@ float half_round(float v, int dtype) {
 // ── Mixed precision with Autograd::get ────────────────────────────────────────────
 
 // Straight-through: d(cast(a))/da is treated as the identity.
-static void __cast_backward(void* selfPtr) {
+static void __cast_backward(&FloatTensor selfPtr) {
     unsafe {
         FloatTensor* selfT = (FloatTensor*)selfPtr;
         FloatTensor* a = __tensor_parent(selfT, 0UL);
@@ -39,13 +39,13 @@ static void __cast_backward(void* selfPtr) {
 }
 
 &FloatTensor FloatTensor::cast(int dtype) const {
-    unsafe { tensor_host_raw_((void*)self); }
+    unsafe { tensor_host_raw_((FloatTensor*)self); }
     &FloatTensor out = __tensor_alloc_uninit_like(self);
     unsafe {
         unsigned long i = 0UL;
         while (i < out->size) { out->data[i] = half_round(self->data[i], dtype); i = i + 1UL; }
     }
-    __tensor_link1(out, self, (void*)__cast_backward);
+    __tensor_link1(out, self, __cast_backward);
     return out;
 }
 
@@ -75,7 +75,7 @@ static int __is_finite(float x) {
 }
 
 int LossScaler::unscale(&FloatTensor p) {
-    unsafe { tensor_host_write_raw_((void*)p); }
+    unsafe { tensor_host_write_raw_((FloatTensor*)p); }
     int finite = 1;
     unsafe {
         if (p->grad == (float*)0) return 1;
@@ -137,17 +137,17 @@ static float half_gemv_w_(unsigned short h, int bf) __attribute__((always_inline
     float v = (float)0.0;
     if (bf) {
         u = ((unsigned int)h) << 16;
-        unsafe { memcpy((void*)&v, (const void*)&u, 4UL); }
+        unsafe { memcpy((unsigned char*)&v, (const unsigned char*)&u, 4UL); }
         return v;
     }
     u = ((unsigned int)h & 0x7fffU) << 13;
-    unsafe { memcpy((void*)&v, (const void*)&u, 4UL); }
+    unsafe { memcpy((unsigned char*)&v, (const unsigned char*)&u, 4UL); }
     v = v * (float)5.192296858534828e33;                      // 2^112
     unsigned int r = 0U;
-    unsafe { memcpy((void*)&r, (const void*)&v, 4UL); }
+    unsafe { memcpy((unsigned char*)&r, (const unsigned char*)&v, 4UL); }
     if (((unsigned int)h & 0x7c00U) == 0x7c00U) r = u | 0x7f800000U;   // inf / NaN
     r = r | (((unsigned int)h & 0x8000U) << 16);
-    unsafe { memcpy((void*)&v, (const void*)&r, 4UL); }
+    unsafe { memcpy((unsigned char*)&v, (const unsigned char*)&r, 4UL); }
     return v;
 }
 
@@ -223,13 +223,13 @@ static f32x4 half_gemv_f4_(float v) __attribute__((always_inline)) {
 
 static f32x4 half_gemv_as_f32x4_(u32x4 u) __attribute__((always_inline)) {
     f32x4 f;
-    unsafe { memcpy((void*)&f, (const void*)&u, 16UL); }
+    unsafe { memcpy((unsigned char*)&f, (const unsigned char*)&u, 16UL); }
     return f;
 }
 
 static u32x4 half_gemv_as_u32x4_(f32x4 f) __attribute__((always_inline)) {
     u32x4 u;
-    unsafe { memcpy((void*)&u, (const void*)&f, 16UL); }
+    unsafe { memcpy((unsigned char*)&u, (const unsigned char*)&f, 16UL); }
     return u;
 }
 
@@ -509,17 +509,17 @@ static int half_gemv_batch_(const unsigned short* w, const &unsigned long shape,
     if (grain < 1UL) grain = 1UL;
     if (n * b.j.k >= 262144UL) parallel_for(n, grain, half_gemv_batch_rows_, &b);
     else half_gemv_batch_rows_(&b, 0UL, n);
-    unsafe { if (split != (float*)0) free((void*)split); }
+    unsafe { if (split != (float*)0) free((unsigned char*)split); }
     return 1;
 }
 
 int HalfTensor::gemv_batch_n_(const &float x, unsigned long m, &float y) const {
-    unsafe { tensor_host_raw_((void*)self); }
+    unsafe { tensor_host_raw_((FloatTensor*)self); }
     unsafe { return half_gemv_batch_((const unsigned short*)self.data, (const &unsigned long)self.shape, self.ndim, 0, x, m, y); }
 }
 
 int BF16Tensor::gemv_batch_n_(const &float x, unsigned long m, &float y) const {
-    unsafe { tensor_host_raw_((void*)self); }
+    unsafe { tensor_host_raw_((FloatTensor*)self); }
     unsafe { return half_gemv_batch_((const unsigned short*)self.data, (const &unsigned long)self.shape, self.ndim, 1, x, m, y); }
 }
 

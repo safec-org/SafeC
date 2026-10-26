@@ -59,8 +59,8 @@ extern int cublasGemmStridedBatchedEx(void* handle, int transa, int transb, int 
 #define DCUDA_R_16BF 14   // CUDA_R_16BF
 #define DCUDA_COMPUTE_32F 68   // CUBLAS_COMPUTE_32F
 #define DCUDA_GEMM_DEFAULT -1
-extern void* malloc(size_t size);
-extern void  free(void* ptr);
+extern unsigned char* malloc(size_t size);
+extern void  free(unsigned char* ptr);
 
 #define DCUDA_ATTR_CC_MAJOR 75   // CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR
 #define DCUDA_ATTR_CC_MINOR 76
@@ -96,7 +96,7 @@ static int dcuda_module_(int tagged, &void fns) {
         nvrtcDestroyProgram(&prog);
         void* module = (void*)0;
         int loaded = cuModuleLoadData(&module, (const void*)cubin);
-        free((void*)cubin);
+        free((unsigned char*)cubin);
         if (loaded != 0) return 0;
         void** f = (void**)fns;
         int k = 0;

@@ -50,8 +50,8 @@ extern int rocblas_gemm_strided_batched_ex(void* handle, int transA, int transB,
 #define DROCM_BLAS_F16  150   // rocblas_datatype_f16_r
 #define DROCM_BLAS_F32  151   // rocblas_datatype_f32_r
 #define DROCM_BLAS_BF16 168   // rocblas_datatype_bf16_r
-extern void* malloc(size_t size);
-extern void  free(void* ptr);
+extern unsigned char* malloc(size_t size);
+extern void  free(unsigned char* ptr);
 
 #define DROCM_H2D 1
 #define DROCM_D2H 2
@@ -86,7 +86,7 @@ static int drocm_module_(int tagged, &void fns) {
         hiprtcDestroyProgram(&prog);
         void* module = (void*)0;
         int loaded = hipModuleLoadData(&module, (const void*)code);
-        free((void*)code);
+        free((unsigned char*)code);
         if (loaded != 0) return 0;
         void** f = (void**)fns;
         int k = 0;

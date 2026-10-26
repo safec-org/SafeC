@@ -2916,7 +2916,7 @@ int rocm_matmul_f32_blas([]const float a_s, []const float b_s, []float out_s, un
 // ── Mixed precision ──────────────────────────────────────────────────────────
 
 extern void* malloc(unsigned long size);
-extern void  free(void* ptr);
+extern void  free(unsigned char* ptr);
 
 int rocm_zero(struct RocmBuf b) {
     if (!rocm_ensure_() || b.dev == 0UL) return 0;
@@ -2999,7 +2999,7 @@ static struct RocmCvtLists_ rocm_cvt_lists_(unsigned long count) {
 }
 
 static void rocm_cvt_lists_free_(&RocmCvtLists_ l) {
-    unsafe { free((void*)l.src); free((void*)l.dst); free((void*)l.len); }
+    unsafe { free((unsigned char*)l.src); free((unsigned char*)l.dst); free((unsigned char*)l.len); }
 }
 
 // One 16-bit dtype per call (the kernel's bf flag); mixed lists are refused.

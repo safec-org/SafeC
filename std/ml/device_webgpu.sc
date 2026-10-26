@@ -93,9 +93,9 @@
 
 namespace std {
 
-extern void* malloc(size_t size);
-extern void  free(void* ptr);
-extern void* memcpy(void* dst, const void* src, size_t n);
+extern unsigned char* malloc(size_t size);
+extern void  free(unsigned char* ptr);
+extern unsigned char* memcpy(unsigned char* dst, const unsigned char* src, size_t n);
 extern void* memset(void* dst, int c, size_t n);
 extern long  write(int fd, const void* buf, unsigned long n);
 extern char* getenv(const char* name);
@@ -257,7 +257,7 @@ static unsigned long dwg_queue_submit_(void* cb) {
     unsafe {
         wgpuQueueSubmit(g_dwg_queue, 1UL, (void* const*)&cb);
         struct WGPUQueueWorkDoneCallbackInfo info;
-        memset((void*)&info, 0, sizeof(struct WGPUQueueWorkDoneCallbackInfo));
+        memset((unsigned char*)&info, 0, sizeof(struct WGPUQueueWorkDoneCallbackInfo));
         info.mode = WGPU_CALLBACK_MODE_ALLOW_PROCESS_EVENTS;
         info.callback = dwg_on_done_;
         info.userdata1 = (void*)g_dwg_serial;
@@ -278,7 +278,7 @@ static int dwg_map_readback_(unsigned long bytes) {
     g_dwg_map_status = 0;
     unsafe {
         struct WGPUBufferMapCallbackInfo info;
-        memset((void*)&info, 0, sizeof(struct WGPUBufferMapCallbackInfo));
+        memset((unsigned char*)&info, 0, sizeof(struct WGPUBufferMapCallbackInfo));
         info.mode = WGPU_CALLBACK_MODE_ALLOW_PROCESS_EVENTS;
         info.callback = dwg_on_map_;
         wgpuBufferMapAsync(g_dwg_rb, WGPU_MAP_MODE_READ, 0UL, bytes, info);
@@ -303,7 +303,7 @@ static void* dwg_await_request_() {
 static void* dwg_buffer_(unsigned long bytes, unsigned long usage) {
     unsafe {
         struct WGPUBufferDescriptor d;
-        memset((void*)&d, 0, sizeof(struct WGPUBufferDescriptor));
+        memset((unsigned char*)&d, 0, sizeof(struct WGPUBufferDescriptor));
         d.label = dwg_sv_("safec");
         d.usage = usage;
         d.size = bytes;
@@ -319,12 +319,12 @@ static void* dwg_buffer_(unsigned long bytes, unsigned long usage) {
 static int dwg_bind_() {
     unsafe {
         struct WGPUBindGroupEntry e[3];
-        memset((void*)&e[0], 0, sizeof(struct WGPUBindGroupEntry) * 3UL);
+        memset((unsigned char*)&e[0], 0, sizeof(struct WGPUBindGroupEntry) * 3UL);
         e[0].binding = 0U; e[0].buffer = g_dwg_heap; e[0].offset = 0UL; e[0].size = g_dwg_heap_bytes;
         e[1].binding = 1U; e[1].buffer = g_dwg_heap; e[1].offset = 0UL; e[1].size = g_dwg_heap_bytes;
         e[2].binding = 2U; e[2].buffer = g_dwg_data; e[2].offset = 0UL; e[2].size = DWG_FLIGHT * DWG_DATA_BYTES;
         struct WGPUBindGroupDescriptor d;
-        memset((void*)&d, 0, sizeof(struct WGPUBindGroupDescriptor));
+        memset((unsigned char*)&d, 0, sizeof(struct WGPUBindGroupDescriptor));
         d.label = dwg_sv_("safec heap");
         d.layout = g_dwg_bgl[0];
         d.entryCount = 3UL;
@@ -343,10 +343,10 @@ static int dwg_bind_() {
 static int dwg_bind_args_() {
     unsafe {
         struct WGPUBindGroupEntry e;
-        memset((void*)&e, 0, sizeof(struct WGPUBindGroupEntry));
+        memset((unsigned char*)&e, 0, sizeof(struct WGPUBindGroupEntry));
         e.binding = 0U; e.buffer = g_dwg_args; e.offset = 0UL; e.size = DWG_ARG_WORDS * 4UL;
         struct WGPUBindGroupDescriptor d;
-        memset((void*)&d, 0, sizeof(struct WGPUBindGroupDescriptor));
+        memset((unsigned char*)&d, 0, sizeof(struct WGPUBindGroupDescriptor));
         d.label = dwg_sv_("safec arguments");
         d.layout = g_dwg_bgl[1];
         d.entryCount = 1UL;
@@ -363,8 +363,8 @@ static void dwg_push_free_(unsigned long order, unsigned long unit) {
             unsigned long cap = g_dwg_capfree[order] == 0UL ? 64UL : g_dwg_capfree[order] * 2UL;
             unsigned long* a = (unsigned long*)malloc(sizeof(unsigned long) * cap);
             if (a == (unsigned long*)0) return;   // the block is lost to the allocator, not to correctness
-            if (g_dwg_nfree[order] > 0UL) memcpy((void*)a, (const void*)g_dwg_free[order], sizeof(unsigned long) * g_dwg_nfree[order]);
-            if (g_dwg_free[order] != (unsigned long*)0) free((void*)g_dwg_free[order]);
+            if (g_dwg_nfree[order] > 0UL) memcpy((unsigned char*)a, (const unsigned char*)g_dwg_free[order], sizeof(unsigned long) * g_dwg_nfree[order]);
+            if (g_dwg_free[order] != (unsigned long*)0) free((unsigned char*)g_dwg_free[order]);
             g_dwg_free[order] = a;
             g_dwg_capfree[order] = cap;
         }
@@ -485,7 +485,7 @@ static int dwg_dispatch_(void* pipe, const unsigned int* words, unsigned long gx
     if (!dwg_pass_()) return 0;
     unsafe {
         unsigned long off = (g_dwg_slot * DWG_BATCH + g_dwg_nargs) * DWG_ARG_STRIDE;
-        memcpy((void*)(g_dwg_args_host + off), (const void*)words, DWG_ARG_WORDS * 4UL);
+        memcpy((unsigned char*)(g_dwg_args_host + off), (const unsigned char*)words, DWG_ARG_WORDS * 4UL);
         if (pipe != g_dwg_last_pipe) {
             wgpuComputePassEncoderSetPipeline(g_dwg_pass, pipe);
             g_dwg_last_pipe = pipe;
@@ -522,10 +522,10 @@ static int dwg_grow_(unsigned long order) {
         unsigned char* tag = (unsigned char*)malloc(units);
         if (tag == (unsigned char*)0) return 0;
         void* nh = dwg_buffer_(bytes, WGPU_BUFFER_USAGE_STORAGE | WGPU_BUFFER_USAGE_COPY_SRC | WGPU_BUFFER_USAGE_COPY_DST);
-        if (nh == (void*)0) { free((void*)tag); return 0; }
+        if (nh == (void*)0) { free((unsigned char*)tag); return 0; }
         if (!dwg_copy_buffers_(g_dwg_heap, 0UL, nh, 0UL, g_dwg_heap_bytes)) {
             wgpuBufferRelease(nh);
-            free((void*)tag);
+            free((unsigned char*)tag);
             return 0;
         }
         dwg_submit_();   // what is queued still binds the old heap
@@ -535,9 +535,9 @@ static int dwg_grow_(unsigned long order) {
         g_dwg_heap_bytes = bytes;
         if (!dwg_bind_()) return 0;
         wgpuBufferRelease(old);   // kept alive by the GPU until the copy has run
-        memcpy((void*)tag, (const void*)g_dwg_tag, oldUnits);
-        memset((void*)(tag + oldUnits), 0, units - oldUnits);
-        free((void*)g_dwg_tag);
+        memcpy((unsigned char*)tag, (const unsigned char*)g_dwg_tag, oldUnits);
+        memset((unsigned char*)(tag + oldUnits), 0, units - oldUnits);
+        free((unsigned char*)g_dwg_tag);
         g_dwg_tag = tag;
         // the new space: free blocks of orders top, top + 1, ... above the old heap
         unsigned long top = g_dwg_top;
@@ -553,7 +553,7 @@ static int dwg_grow_(unsigned long order) {
 // ── Pipelines ────────────────────────────────────────────────────────────────
 static struct WGPUConstantEntry dwg_const_(const char* key, double value) {
     struct WGPUConstantEntry c;
-    unsafe { memset((void*)&c, 0, sizeof(struct WGPUConstantEntry)); }
+    unsafe { memset((unsigned char*)&c, 0, sizeof(struct WGPUConstantEntry)); }
     c.key = dwg_sv_(key);
     c.value = value;
     return c;
@@ -564,7 +564,7 @@ static struct WGPUConstantEntry dwg_const_(const char* key, double value) {
 static void* dwg_make_pipe_(const char* entry, const struct WGPUConstantEntry* consts, unsigned long n) {
     unsafe {
         struct WGPUComputePipelineDescriptor d;
-        memset((void*)&d, 0, sizeof(struct WGPUComputePipelineDescriptor));
+        memset((unsigned char*)&d, 0, sizeof(struct WGPUComputePipelineDescriptor));
         d.label = dwg_sv_(entry);
         d.layout = g_dwg_layout;
         d.compute.module = g_dwg_module;
@@ -693,10 +693,10 @@ static int dwg_ensure_() {
         g_dwg_inst = wgpuCreateInstance((const struct WGPUInstanceDescriptor*)0);
         if (g_dwg_inst == (void*)0) return 0;
         struct WGPURequestAdapterOptions opts;
-        memset((void*)&opts, 0, sizeof(struct WGPURequestAdapterOptions));
+        memset((unsigned char*)&opts, 0, sizeof(struct WGPURequestAdapterOptions));
         opts.powerPreference = WGPU_POWER_HIGH_PERFORMANCE;
         struct WGPURequestAdapterCallbackInfo ai;
-        memset((void*)&ai, 0, sizeof(struct WGPURequestAdapterCallbackInfo));
+        memset((unsigned char*)&ai, 0, sizeof(struct WGPURequestAdapterCallbackInfo));
         ai.mode = WGPU_CALLBACK_MODE_ALLOW_PROCESS_EVENTS;
         ai.callback = dwg_on_adapter_;
         g_dwg_req_done = 0;
@@ -707,18 +707,18 @@ static int dwg_ensure_() {
         // every limit the adapter offers (the attention tiles need 17 KB of
         // workgroup memory, the heap a large storage binding)
         struct WGPULimits lim;
-        memset((void*)&lim, 0, sizeof(struct WGPULimits));
+        memset((unsigned char*)&lim, 0, sizeof(struct WGPULimits));
         if (wgpuAdapterGetLimits(g_dwg_adapter, &lim) != WGPU_STATUS_SUCCESS) return 0;
         if (lim.minUniformBufferOffsetAlignment > (unsigned int)DWG_ARG_STRIDE || lim.maxStorageBuffersPerShaderStage < 2U) return 0;
         struct WGPUDeviceDescriptor dd;
-        memset((void*)&dd, 0, sizeof(struct WGPUDeviceDescriptor));
+        memset((unsigned char*)&dd, 0, sizeof(struct WGPUDeviceDescriptor));
         dd.label = dwg_sv_("safec");
         dd.requiredLimits = (const struct WGPULimits*)&lim;
         dd.uncapturedErrorCallbackInfo.callback = dwg_on_error_;
         dd.deviceLostCallbackInfo.mode = WGPU_CALLBACK_MODE_ALLOW_PROCESS_EVENTS;
         dd.deviceLostCallbackInfo.callback = dwg_on_lost_;
         struct WGPURequestDeviceCallbackInfo di;
-        memset((void*)&di, 0, sizeof(struct WGPURequestDeviceCallbackInfo));
+        memset((unsigned char*)&di, 0, sizeof(struct WGPURequestDeviceCallbackInfo));
         di.mode = WGPU_CALLBACK_MODE_ALLOW_PROCESS_EVENTS;
         di.callback = dwg_on_device_;
         g_dwg_req_done = 0;
@@ -730,11 +730,11 @@ static int dwg_ensure_() {
 
         // the kernels
         struct WGPUShaderSourceWGSL src;
-        memset((void*)&src, 0, sizeof(struct WGPUShaderSourceWGSL));
+        memset((unsigned char*)&src, 0, sizeof(struct WGPUShaderSourceWGSL));
         src.chain.sType = WGPU_STYPE_SHADER_SOURCE_WGSL;
         src.code = dwg_sv_(device_kernel_wgsl_source_());
         struct WGPUShaderModuleDescriptor md;
-        memset((void*)&md, 0, sizeof(struct WGPUShaderModuleDescriptor));
+        memset((unsigned char*)&md, 0, sizeof(struct WGPUShaderModuleDescriptor));
         md.nextInChain = (void*)&src;
         md.label = dwg_sv_("device_kernels.wgsl");
         g_dwg_module = dwg_module_(&md);
@@ -742,7 +742,7 @@ static int dwg_ensure_() {
 
         // group 0: the heap as words and as atomics, the uploads' data; group 1: the arguments (dynamic offset)
         struct WGPUBindGroupLayoutEntry le[4];
-        memset((void*)&le[0], 0, sizeof(struct WGPUBindGroupLayoutEntry) * 4UL);
+        memset((unsigned char*)&le[0], 0, sizeof(struct WGPUBindGroupLayoutEntry) * 4UL);
         unsigned long i = 0UL;
         while (i < 4UL) {
             le[i].binding = i == 3UL ? 0U : (unsigned int)i;
@@ -753,7 +753,7 @@ static int dwg_ensure_() {
         le[3].buffer.hasDynamicOffset = 1U;
         le[3].buffer.minBindingSize = DWG_ARG_WORDS * 4UL;
         struct WGPUBindGroupLayoutDescriptor ld;
-        memset((void*)&ld, 0, sizeof(struct WGPUBindGroupLayoutDescriptor));
+        memset((unsigned char*)&ld, 0, sizeof(struct WGPUBindGroupLayoutDescriptor));
         ld.entryCount = 3UL;
         ld.entries = (const struct WGPUBindGroupLayoutEntry*)&le[0];
         g_dwg_bgl[0] = wgpuDeviceCreateBindGroupLayout(g_dwg_dev, &ld);
@@ -761,7 +761,7 @@ static int dwg_ensure_() {
         ld.entries = (const struct WGPUBindGroupLayoutEntry*)&le[3];
         g_dwg_bgl[1] = wgpuDeviceCreateBindGroupLayout(g_dwg_dev, &ld);
         struct WGPUPipelineLayoutDescriptor pd;
-        memset((void*)&pd, 0, sizeof(struct WGPUPipelineLayoutDescriptor));
+        memset((unsigned char*)&pd, 0, sizeof(struct WGPUPipelineLayoutDescriptor));
         pd.bindGroupLayoutCount = 2UL;
         pd.bindGroupLayouts = (const void* const*)&g_dwg_bgl[0];
         g_dwg_layout = wgpuDeviceCreatePipelineLayout(g_dwg_dev, &pd);
@@ -783,8 +783,8 @@ static int dwg_ensure_() {
         if (g_dwg_heap == (void*)0 || g_dwg_args == (void*)0 || g_dwg_data == (void*)0 ||
             g_dwg_args_host == (unsigned char*)0 || g_dwg_data_host == (unsigned char*)0 || g_dwg_tag == (unsigned char*)0)
             return 0;
-        memset((void*)g_dwg_args_host, 0, DWG_FLIGHT * DWG_BATCH * DWG_ARG_STRIDE);
-        memset((void*)g_dwg_tag, 0, units);
+        memset((unsigned char*)g_dwg_args_host, 0, DWG_FLIGHT * DWG_BATCH * DWG_ARG_STRIDE);
+        memset((unsigned char*)g_dwg_tag, 0, units);
         if (!dwg_bind_() || !dwg_bind_args_()) return 0;
         g_dwg_top = 0UL;
         while ((1UL << g_dwg_top) < units) g_dwg_top = g_dwg_top + 1UL;
@@ -834,10 +834,10 @@ int WebGpuBackend::upload_bytes_(unsigned long dst, const void* src, unsigned lo
             if (g_dwg_upload == (void*)0) g_dwg_upload = dwg_make_pipe_("wk_upload", (const struct WGPUConstantEntry*)0, 0UL);
             if (g_dwg_upload != (void*)0) {
                 unsigned long so = g_dwg_slot * DWG_DATA_BYTES + g_dwg_data_used;
-                memcpy((void*)(g_dwg_data_host + so), src, bytes);
+                memcpy((unsigned char*)(g_dwg_data_host + so), src, bytes);
                 g_dwg_data_used = g_dwg_data_used + bytes;
                 unsigned int w[DWG_ARG_WORDS];
-                memset((void*)&w[0], 0, DWG_ARG_WORDS * 4UL);
+                memset((unsigned char*)&w[0], 0, DWG_ARG_WORDS * 4UL);
                 w[0] = (unsigned int)so; w[2] = (unsigned int)dst; w[23] = (unsigned int)(bytes / 4UL);
                 unsigned long groups = (bytes / 4UL + DWG_BLOCK - 1UL) / DWG_BLOCK;
                 return dwg_dispatch_(g_dwg_upload, (const unsigned int*)&w[0], groups, 1UL, 1UL);
@@ -877,7 +877,7 @@ int WebGpuBackend::download_bytes_(void* dst, unsigned long src, unsigned long b
         if (!dwg_map_readback_(total)) return 0;
         const unsigned char* p = (const unsigned char*)wgpuBufferGetConstMappedRange(g_dwg_rb, 0UL, total);
         if (p == (const unsigned char*)0) { wgpuBufferUnmap(g_dwg_rb); return 0; }
-        memcpy(dst, (const void*)(p + lead), bytes);
+        memcpy(dst, (const unsigned char*)(p + lead), bytes);
         wgpuBufferUnmap(g_dwg_rb);
     }
     return 1;
@@ -896,7 +896,7 @@ int WebGpuBackend::copy(unsigned long dst, unsigned long src, unsigned long n) {
     if (g_dwg_copy == (void*)0) { device_note_cpu_launch_(DEVICE_WEBGPU); return 0; }
     unsigned int w[DWG_ARG_WORDS];
     unsafe {
-        memset((void*)&w[0], 0, DWG_ARG_WORDS * 4UL);
+        memset((unsigned char*)&w[0], 0, DWG_ARG_WORDS * 4UL);
         w[0] = (unsigned int)dev_addr_(src);
         w[2] = (unsigned int)dev_addr_(dst);
         w[23] = (unsigned int)n;
@@ -932,13 +932,13 @@ static int dwg_gemm_(int ta, int tb, int at, int ct, unsigned long m, unsigned l
         if (p1 == (void*)0) return 0;
         unsigned int w1[DWG_ARG_WORDS];
         unsafe {
-            memset((void*)&w1[0], 0, DWG_ARG_WORDS * 4UL);
+            memset((unsigned char*)&w1[0], 0, DWG_ARG_WORDS * 4UL);
             w1[0] = (unsigned int)dev_addr_(a); w1[1] = (unsigned int)dev_addr_(b); w1[2] = (unsigned int)dev_addr_(c);
             w1[3] = (unsigned int)m; w1[4] = (unsigned int)n; w1[5] = (unsigned int)k;
             w1[6] = (unsigned int)lda; w1[7] = (unsigned int)ldb; w1[8] = (unsigned int)ldc;
             w1[9] = (unsigned int)sa; w1[10] = (unsigned int)sb; w1[11] = (unsigned int)sc;
-            memcpy((void*)&w1[12], (const void*)&alpha, 4UL);
-            memcpy((void*)&w1[13], (const void*)&beta, 4UL);
+            memcpy((unsigned char*)&w1[12], (const unsigned char*)&alpha, 4UL);
+            memcpy((unsigned char*)&w1[13], (const unsigned char*)&beta, 4UL);
             w1[17] = (unsigned int)batch;
             unsigned long g = (m * n * batch + 255UL) / 256UL;
             if (g > DWG_MAX_GROUPS) g = DWG_MAX_GROUPS;
@@ -970,13 +970,13 @@ static int dwg_gemm_(int ta, int tb, int at, int ct, unsigned long m, unsigned l
     }
     unsigned int w[DWG_ARG_WORDS];
     unsafe {
-        memset((void*)&w[0], 0, DWG_ARG_WORDS * 4UL);
+        memset((unsigned char*)&w[0], 0, DWG_ARG_WORDS * 4UL);
         w[0] = (unsigned int)dev_addr_(a); w[1] = (unsigned int)dev_addr_(b); w[2] = (unsigned int)dev_addr_(c);
         w[3] = (unsigned int)m; w[4] = (unsigned int)n; w[5] = (unsigned int)k;
         w[6] = (unsigned int)lda; w[7] = (unsigned int)ldb; w[8] = (unsigned int)ldc;
         w[9] = (unsigned int)sa; w[10] = (unsigned int)sb; w[11] = (unsigned int)sc;
-        memcpy((void*)&w[12], (const void*)&alpha, 4UL);
-        memcpy((void*)&w[13], (const void*)&beta, 4UL);
+        memcpy((unsigned char*)&w[12], (const unsigned char*)&alpha, 4UL);
+        memcpy((unsigned char*)&w[13], (const unsigned char*)&beta, 4UL);
         w[15] = (unsigned int)S; w[16] = (unsigned int)kSlice;
     }
     unsigned long z = 0UL;
@@ -1045,7 +1045,7 @@ int WebGpuBackend::conv(const &DevConv c) {
     if (pipe == (void*)0 || gx > DWG_MAX_DIM || gy > DWG_MAX_DIM) return 0;   // im2col + GEMM instead
     unsigned int w[DWG_ARG_WORDS];
     unsafe {
-        memset((void*)&w[0], 0, DWG_ARG_WORDS * 4UL);
+        memset((unsigned char*)&w[0], 0, DWG_ARG_WORDS * 4UL);
         w[0] = (unsigned int)dev_addr_(x); w[1] = (unsigned int)dev_addr_(c.w); w[2] = (unsigned int)dev_addr_(y);
         w[3] = (unsigned int)c.batch; w[4] = (unsigned int)Ci; w[5] = (unsigned int)Hi; w[6] = (unsigned int)Wi;
         w[7] = (unsigned int)Co; w[8] = (unsigned int)Ho; w[9] = (unsigned int)Wo;
@@ -1084,7 +1084,7 @@ int WebGpuBackend::launch(int kernel, unsigned long n, const &DevArgs args) {
             w[8UL + i] = (unsigned int)dev_tag_(args.p[i]);
             if (args.p[i] != 0UL && dev_tag_(args.p[i]) != 0UL) tagged = 1;
             w[16UL + i] = args.u[i];
-            memcpy((void*)&w[24UL + i], (const void*)&args.f[i], 4UL);
+            memcpy((unsigned char*)&w[24UL + i], (const unsigned char*)&args.f[i], 4UL);
             i = i + 1UL;
         }
     }
@@ -1120,7 +1120,7 @@ int WebGpuBackend::map(int op, unsigned long a, unsigned long b, unsigned long o
     if (g_dwg_map == (void*)0) return 0;
     unsigned int w[DWG_ARG_WORDS];
     unsafe {
-        memset((void*)&w[0], 0, DWG_ARG_WORDS * 4UL);
+        memset((unsigned char*)&w[0], 0, DWG_ARG_WORDS * 4UL);
         w[0] = (unsigned int)dev_addr_(a); w[1] = (unsigned int)dev_addr_(b); w[2] = (unsigned int)dev_addr_(out);
         w[16] = (unsigned int)op;
         w[23] = (unsigned int)n;

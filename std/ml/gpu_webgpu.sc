@@ -14,9 +14,9 @@
 
 namespace std {
 
-extern void* malloc(size_t size);
-extern void  free(void* ptr);
-extern void* memcpy(void* dst, const void* src, size_t n);
+extern unsigned char* malloc(size_t size);
+extern void  free(unsigned char* ptr);
+extern unsigned char* memcpy(unsigned char* dst, const unsigned char* src, size_t n);
 
 int webgpu_available() { return WebGpuBackend::available(); }
 
@@ -69,7 +69,7 @@ int WebGpuBuf::read_f32_n_(&float dst, unsigned long n) const {
         int ok = self.read(((unsigned char*)(void*)((void*)bits))[0..2UL * n]);
         if (ok && self.dtype == WEBGPU_FP16) fp16_to_f32_bulk_n_((const &unsigned short)bits, dst, n);
         if (ok && self.dtype == WEBGPU_BF16) bf16_to_f32_bulk_n_((const &unsigned short)bits, dst, n);
-        free((void*)bits);
+        free((unsigned char*)bits);
         return ok;
     }
 }
@@ -93,11 +93,11 @@ int WebGpuBuf::write([]const unsigned char srcs) {
         unsigned long words = (bytes + 3UL) & ~3UL;
         unsigned char* tmp = (unsigned char*)malloc(words);
         if (tmp == (unsigned char*)0) return 0;
-        memcpy((void*)tmp, (const void*)src, bytes);
+        memcpy((unsigned char*)tmp, (const unsigned char*)src, bytes);
         unsigned long i = bytes;
         while (i < words) { tmp[i] = (unsigned char)0; i = i + 1UL; }
         int ok = WebGpuBackend::upload_bytes_(dev_addr_(self.handle), (const void*)tmp, words);
-        free((void*)tmp);
+        free((unsigned char*)tmp);
         return ok;
     }
 }
@@ -140,7 +140,7 @@ static struct WebGpuBuf wgb_upload_half_(const &float host, unsigned long n, int
         if (dtype == WEBGPU_FP16) f32_to_fp16_bulk_n_(host, (&unsigned short)bits, n);
         else f32_to_bf16_bulk_n_(host, (&unsigned short)bits, n);
         struct WebGpuBuf b = WebGpuBuf::upload_bits_n_((const &unsigned short)bits, n, dtype);
-        free((void*)bits);
+        free((unsigned char*)bits);
         return b;
     }
 }

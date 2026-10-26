@@ -47,14 +47,14 @@
 
 namespace std {
 
-extern void* malloc(size_t size);
-extern void  free(void* ptr);
+extern unsigned char* malloc(size_t size);
+extern void  free(unsigned char* ptr);
 
 #if defined(__APPLE__)
 extern void* objc_getClass(const char* name);
 extern void* sel_registerName(const char* name);
 extern void* objc_msgSend(void* recv, void* op);
-extern void* memcpy(void* dst, const void* src, size_t n);
+extern unsigned char* memcpy(unsigned char* dst, const unsigned char* src, size_t n);
 extern void* memset(void* dst, int c, size_t n);
 // The real Metal framework entry point — a plain C function (not a
 // message send): returns the default MTLDevice, or NULL if this machine
@@ -76,7 +76,7 @@ extern void  objc_autoreleasePoolPop(void* pool);
 // No Metal outside Apple platforms: null stand-ins for the Objective-C /
 // Metal / libdispatch entry points, so this file still compiles and links
 // into std everywhere (mps_available() is 0 and every op reports failure).
-extern void* memcpy(void* dst, const void* src, size_t n);
+extern unsigned char* memcpy(unsigned char* dst, const unsigned char* src, size_t n);
 extern void* memset(void* dst, int c, size_t n);
 static void* objc_getClass(const char* name) { return (void*)0; }
 static void* sel_registerName(const char* name) { return (void*)0; }
@@ -414,7 +414,7 @@ static int __mps_run_binary_kernel(void** pipelineCache, const char* kernelName,
 
         void* outPtr = msg0(bufOut, __sel_contents);
         if (outPtr == (void*)0) return 0;
-        memcpy((void*)out, outPtr, bytes);
+        memcpy((unsigned char*)out, outPtr, bytes);
         __mps_buf_put(bufA, bytes);
         __mps_buf_put(bufB, bytes);
         __mps_buf_put(bufOut, bytes);
@@ -469,7 +469,7 @@ static int __mps_run_unary_kernel(void** pipelineCache, const char* kernelName,
 
         void* outPtr = msg0(bufOut, __sel_contents);
         if (outPtr == (void*)0) return 0;
-        memcpy((void*)out, outPtr, bytes);
+        memcpy((unsigned char*)out, outPtr, bytes);
         __mps_buf_put(bufA, bytes);
         __mps_buf_put(bufOut, bytes);
         return 1;
@@ -686,7 +686,7 @@ int mps_scale_f32_n_(const &float a, float k, &float out, unsigned long n) {
 
         void* outPtr = msg0(bufOut, __sel_contents);
         if (outPtr == (void*)0) return 0;
-        memcpy((void*)out, outPtr, bytes);
+        memcpy((unsigned char*)out, outPtr, bytes);
         __mps_buf_put(bufA, bytes);
         __mps_buf_put(bufOut, bytes);
         return 1;
@@ -952,7 +952,7 @@ int mps_sub_f32_n_(const &float a, const &float b, &float out, unsigned long n) 
 
         void* outPtr = msg0(bufOut, __sel_contents);
         if (outPtr == (void*)0) return 0;
-        memcpy((void*)out, outPtr, bytes);
+        memcpy((unsigned char*)out, outPtr, bytes);
         __mps_buf_put(bufA, bytes);
         __mps_buf_put(bufB, bytes);
         __mps_buf_put(bufOut, bytes);
@@ -1295,7 +1295,7 @@ int mps_matmul_f32_n_(const &float a, const &float b, &float out,
 
         void* outPtr = msg0(bufOut, __sel_contents);
         if (outPtr == (void*)0) return 0;
-        memcpy((void*)out, outPtr, bytesOut);
+        memcpy((unsigned char*)out, outPtr, bytesOut);
         __mps_buf_put(bufA, bytesA);
         __mps_buf_put(bufB, bytesB);
         __mps_buf_put(bufOut, bytesOut);
@@ -1440,7 +1440,7 @@ int mps_matmul_abt_f32(const &float a, const &float b, &float out,
 
         void* outPtr = msg0(bufOut, __sel_contents);
         if (outPtr == (void*)0) return 0;
-        memcpy((void*)out, outPtr, bytesOut);
+        memcpy((unsigned char*)out, outPtr, bytesOut);
         __mps_buf_put(bufA, bytesA);
         __mps_buf_put(bufB, bytesB);
         __mps_buf_put(bufOut, bytesOut);
@@ -1561,7 +1561,7 @@ int mps_matmul_atb_f32(const &float a, const &float b, &float out,
 
         void* outPtr = msg0(bufOut, __sel_contents);
         if (outPtr == (void*)0) return 0;
-        memcpy((void*)out, outPtr, bytesOut);
+        memcpy((unsigned char*)out, outPtr, bytesOut);
         __mps_buf_put(bufA, bytesA);
         __mps_buf_put(bufB, bytesB);
         __mps_buf_put(bufOut, bytesOut);
@@ -1639,7 +1639,7 @@ int mps_relu_backward_f32_n_(const &float a, const &float selfGrad, &float out, 
 
         void* outPtr = msg0(bufOut, __sel_contents);
         if (outPtr == (void*)0) return 0;
-        memcpy((void*)out, outPtr, bytes);
+        memcpy((unsigned char*)out, outPtr, bytes);
         __mps_buf_put(bufA, bytes);
         __mps_buf_put(bufSelfGrad, bytes);
         __mps_buf_put(bufOut, bytes);
@@ -1732,7 +1732,7 @@ int mps_relu_f32_n_(const &float a, &float out, unsigned long n) {
 
         void* outPtr = msg0(bufOut, __sel_contents);
         if (outPtr == (void*)0) return 0;
-        memcpy((void*)out, outPtr, bytes);
+        memcpy((unsigned char*)out, outPtr, bytes);
         __mps_buf_put(bufA, bytes);
         __mps_buf_put(bufOut, bytes);
         return 1;
@@ -1990,7 +1990,7 @@ int MpsBuf::read([]unsigned char dsts) const {
         MMsg0 msg0 = (MMsg0)objc_msgSend;
         void* src = msg0(self.handle, __sel_contents);
         if (src == (void*)0) return 0;
-        memcpy((void*)dst, src, bytes);
+        memcpy((unsigned char*)dst, src, bytes);
         return 1;
     }
 }
@@ -2013,7 +2013,7 @@ int MpsBuf::write([]const unsigned char srcs) {
         MMsg0 msg0 = (MMsg0)objc_msgSend;
         void* dst = msg0(self.handle, __sel_contents);
         if (dst == (void*)0) return 0;
-        memcpy(dst, (const void*)src, bytes);
+        memcpy(dst, (const unsigned char*)src, bytes);
         return 1;
     }
 }
@@ -2841,9 +2841,9 @@ int mps_matmul_f16(const &float a, const &float b, &float out,
         unsigned short* bHalf = (unsigned short*)malloc(nB * 2UL);
         unsigned short* outHalf = (unsigned short*)malloc(nOut * 2UL);
         if (aHalf == (void*)0 || bHalf == (void*)0 || outHalf == (void*)0) {
-            if (aHalf != (void*)0) free((void*)aHalf);
-            if (bHalf != (void*)0) free((void*)bHalf);
-            if (outHalf != (void*)0) free((void*)outHalf);
+            if (aHalf != (void*)0) free((unsigned char*)aHalf);
+            if (bHalf != (void*)0) free((unsigned char*)bHalf);
+            if (outHalf != (void*)0) free((unsigned char*)outHalf);
             return 0;
         }
         f32_to_fp16_bulk_n_(a, aHalf, nA);
@@ -2855,10 +2855,10 @@ int mps_matmul_f16(const &float a, const &float b, &float out,
         void* bufA = __mps_buf_get_with_bytes((const void*)aHalf, bytesA);
         void* bufB = __mps_buf_get_with_bytes((const void*)bHalf, bytesB);
         void* bufOut = __mps_buf_get(bytesOut);
-        free((void*)aHalf);
-        free((void*)bHalf);
+        free((unsigned char*)aHalf);
+        free((unsigned char*)bHalf);
         if (bufA == (void*)0 || bufB == (void*)0 || bufOut == (void*)0) {
-            free((void*)outHalf);
+            free((unsigned char*)outHalf);
             return 0;
         }
 
@@ -2898,15 +2898,15 @@ int mps_matmul_f16(const &float a, const &float b, &float out,
 
         void* outPtr = msg0(bufOut, __sel_contents);
         if (outPtr == (void*)0) {
-            free((void*)outHalf);
+            free((unsigned char*)outHalf);
             __mps_buf_put(bufA, bytesA);
             __mps_buf_put(bufB, bytesB);
             __mps_buf_put(bufOut, bytesOut);
             return 0;
         }
-        memcpy((void*)outHalf, outPtr, bytesOut);
+        memcpy((unsigned char*)outHalf, outPtr, bytesOut);
         fp16_to_f32_bulk_n_(outHalf, out, nOut);
-        free((void*)outHalf);
+        free((unsigned char*)outHalf);
 
         __mps_buf_put(bufA, bytesA);
         __mps_buf_put(bufB, bytesB);
@@ -2935,9 +2935,9 @@ int mps_matmul_bf16(const &float a, const &float b, &float out,
         unsigned short* bBf = (unsigned short*)malloc(nB * 2UL);
         unsigned short* outBf = (unsigned short*)malloc(nOut * 2UL);
         if (aBf == (void*)0 || bBf == (void*)0 || outBf == (void*)0) {
-            if (aBf != (void*)0) free((void*)aBf);
-            if (bBf != (void*)0) free((void*)bBf);
-            if (outBf != (void*)0) free((void*)outBf);
+            if (aBf != (void*)0) free((unsigned char*)aBf);
+            if (bBf != (void*)0) free((unsigned char*)bBf);
+            if (outBf != (void*)0) free((unsigned char*)outBf);
             return 0;
         }
         f32_to_bf16_bulk_n_(a, aBf, nA);
@@ -2949,10 +2949,10 @@ int mps_matmul_bf16(const &float a, const &float b, &float out,
         void* bufA = __mps_buf_get_with_bytes((const void*)aBf, bytesA);
         void* bufB = __mps_buf_get_with_bytes((const void*)bBf, bytesB);
         void* bufOut = __mps_buf_get(bytesOut);
-        free((void*)aBf);
-        free((void*)bBf);
+        free((unsigned char*)aBf);
+        free((unsigned char*)bBf);
         if (bufA == (void*)0 || bufB == (void*)0 || bufOut == (void*)0) {
-            free((void*)outBf);
+            free((unsigned char*)outBf);
             return 0;
         }
 
@@ -2992,15 +2992,15 @@ int mps_matmul_bf16(const &float a, const &float b, &float out,
 
         void* outPtr = msg0(bufOut, __sel_contents);
         if (outPtr == (void*)0) {
-            free((void*)outBf);
+            free((unsigned char*)outBf);
             __mps_buf_put(bufA, bytesA);
             __mps_buf_put(bufB, bytesB);
             __mps_buf_put(bufOut, bytesOut);
             return 0;
         }
-        memcpy((void*)outBf, outPtr, bytesOut);
+        memcpy((unsigned char*)outBf, outPtr, bytesOut);
         bf16_to_f32_bulk_n_(outBf, out, nOut);
-        free((void*)outBf);
+        free((unsigned char*)outBf);
 
         __mps_buf_put(bufA, bytesA);
         __mps_buf_put(bufB, bytesB);
@@ -3033,8 +3033,8 @@ static int __mps_relu_reduced_precision(const char* kernelName, void** pipelineS
         unsigned short* aRed = (unsigned short*)malloc(n * 2UL);
         unsigned short* outRed = (unsigned short*)malloc(n * 2UL);
         if (aRed == (void*)0 || outRed == (void*)0) {
-            if (aRed != (void*)0) free((void*)aRed);
-            if (outRed != (void*)0) free((void*)outRed);
+            if (aRed != (void*)0) free((unsigned char*)aRed);
+            if (outRed != (void*)0) free((unsigned char*)outRed);
             return 0;
         }
         toReduced(a, aRed, n);
@@ -3042,9 +3042,9 @@ static int __mps_relu_reduced_precision(const char* kernelName, void** pipelineS
         unsigned long bytes = n * 2UL;
         void* bufA = __mps_buf_get_with_bytes((const void*)aRed, bytes);
         void* bufOut = __mps_buf_get(bytes);
-        free((void*)aRed);
+        free((unsigned char*)aRed);
         if (bufA == (void*)0 || bufOut == (void*)0) {
-            free((void*)outRed);
+            free((unsigned char*)outRed);
             return 0;
         }
 
@@ -3079,14 +3079,14 @@ static int __mps_relu_reduced_precision(const char* kernelName, void** pipelineS
 
         void* outPtr = msg0(bufOut, __sel_contents);
         if (outPtr == (void*)0) {
-            free((void*)outRed);
+            free((unsigned char*)outRed);
             __mps_buf_put(bufA, bytes);
             __mps_buf_put(bufOut, bytes);
             return 0;
         }
-        memcpy((void*)outRed, outPtr, bytes);
+        memcpy((unsigned char*)outRed, outPtr, bytes);
         toFloat(outRed, out, n);
-        free((void*)outRed);
+        free((unsigned char*)outRed);
 
         __mps_buf_put(bufA, bytes);
         __mps_buf_put(bufOut, bytes);
@@ -3135,7 +3135,7 @@ struct MpsBuf MpsBuf::upload_f16_n_(const &float host, unsigned long n) {
         if (tmp == (void*)0) return __mps_buf_make((void*)0, 0UL, MPS_FP16);
         f32_to_fp16_bulk_n_(host, tmp, n);
         struct MpsBuf b = __mps_buf_upload((const void*)tmp, n * 2UL, MPS_FP16);
-        free((void*)tmp);
+        free((unsigned char*)tmp);
         return b;
     }
 }
@@ -3154,7 +3154,7 @@ struct MpsBuf MpsBuf::upload_bf16_n_(const &float host, unsigned long n) {
         if (tmp == (void*)0) return __mps_buf_make((void*)0, 0UL, MPS_BF16);
         f32_to_bf16_bulk_n_(host, tmp, n);
         struct MpsBuf b = __mps_buf_upload((const void*)tmp, n * 2UL, MPS_BF16);
-        free((void*)tmp);
+        free((unsigned char*)tmp);
         return b;
     }
 }
@@ -3803,7 +3803,7 @@ int mps_attn_batch_bf16(const &unsigned short q, const &unsigned short kAll, con
                 msgVoid0(cmdBuf, __sel_waitUntilCompleted);
                 void* outPtr = msg0(bufOut, __sel_contents);
                 ok = outPtr != (void*)0;
-                if (ok) { memcpy((void*)out, outPtr, qBytes); }
+                if (ok) { memcpy((unsigned char*)out, outPtr, qBytes); }
             }
         }
 

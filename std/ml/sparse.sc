@@ -27,7 +27,7 @@ static void sp_drop_(&FloatTensor t) {
     // A heap tensor: destroyed in place through the reference, then its
     // memory released (a Box the checker can't see).
     unsafe { t.free(); }
-    unsafe { match (t->owner) { case some(a): { } case null: { free((void*)t); } } }
+    unsafe { match (t->owner) { case some(a): { } case null: { free((unsigned char*)t); } } }
 }
 
 // The pattern arrays as tensors (on the heap: they outlive any step).
@@ -88,7 +88,7 @@ struct SparseTensor SparseTensor::new_csr(unsigned long rows, unsigned long cols
 }
 
 struct SparseTensor SparseTensor::from_dense(const &FloatTensor dense, float threshold, int requiresGrad) {
-    unsafe { tensor_host_raw_((void*)dense); }
+    unsafe { tensor_host_raw_((FloatTensor*)dense); }
     unsigned long rows; unsigned long cols;
     unsafe { rows = dense->shape[0]; cols = dense->size / rows; }
     unsigned long nnz = 0UL;
@@ -143,8 +143,8 @@ struct SparseTensor SparseTensor::identity(unsigned long n, int requiresGrad) {
 // The storage position of (r, c), or nnz when it isn't stored.
 static unsigned long sp_find_(const &SparseTensor s, unsigned long r, unsigned long c) {
     unsafe {
-        tensor_host_raw_((void*)s.rowPtr);
-        tensor_host_raw_((void*)s.colIdx);
+        tensor_host_raw_((FloatTensor*)s.rowPtr);
+        tensor_host_raw_((FloatTensor*)s.colIdx);
         if (r >= s.rows) return s.nnz;
         unsigned long e = (unsigned long)s.rowPtr->data[r];
         unsigned long hi = (unsigned long)s.rowPtr->data[r + 1UL];
@@ -201,7 +201,7 @@ unsigned long SparseTensor::device_buffer() const { return self.values.device_bu
 // ── Sparse x dense ───────────────────────────────────────────────────────────
 // Parents: values, X, then the pattern (colIdx, rowPtr, rowOf), which never
 // needs a gradient.
-static void sp_spmm_backward_(void* selfPtr) {
+static void sp_spmm_backward_(&FloatTensor selfPtr) {
     unsafe {
         FloatTensor* out = (FloatTensor*)selfPtr;
         FloatTensor* vals = __tensor_parent(out, 0UL);
@@ -212,27 +212,27 @@ static void sp_spmm_backward_(void* selfPtr) {
         unsigned long nnz = (unsigned long)out->extraScalar;
         int d = out->dev;
         if ((out->coh & TS_DEVOP) != 0) {
-            if (!tensor_dev_raw_((void*)vals, d) || !tensor_dev_raw_((void*)x, d) || !tensor_dev_raw_((void*)col, d) ||
-                !tensor_dev_raw_((void*)rowOf, d)) return;
-            if (x->requiresGrad && tensor_grad_dev_raw_((void*)x, d)) {
+            if (!tensor_dev_raw_((FloatTensor*)vals, d) || !tensor_dev_raw_((FloatTensor*)x, d) || !tensor_dev_raw_((FloatTensor*)col, d) ||
+                !tensor_dev_raw_((FloatTensor*)rowOf, d)) return;
+            if (x->requiresGrad && tensor_grad_dev_raw_((FloatTensor*)x, d)) {
                 struct DevArgs a = dev_args_();
-                unsigned long tgt = tensor_grad_atomic_begin_raw_((void*)x, d);
+                unsigned long tgt = tensor_grad_atomic_begin_raw_((FloatTensor*)x, d);
                 a.p[1] = col->dbuf; a.p[2] = vals->dbuf; a.p[3] = out->dgrad; a.p[4] = tgt; a.p[5] = rowOf->dbuf;
                 a.u[0] = (unsigned int)n;
                 if (tgt != 0UL) device_launch_(d, DK_SPMM_TGRAD, nnz * n, &a);
-                tensor_grad_atomic_end_raw_((void*)x, d, tgt);
-                tensor_grad_dev_wrote_raw_((void*)x);
+                tensor_grad_atomic_end_raw_((FloatTensor*)x, d, tgt);
+                tensor_grad_dev_wrote_raw_((FloatTensor*)x);
             }
-            if (vals->requiresGrad && tensor_grad_dev_raw_((void*)vals, d)) {
+            if (vals->requiresGrad && tensor_grad_dev_raw_((FloatTensor*)vals, d)) {
                 struct DevArgs a = dev_args_();
                 a.p[1] = col->dbuf; a.p[3] = x->dbuf; a.p[4] = out->dgrad; a.p[5] = rowOf->dbuf; a.p[6] = vals->dgrad;
                 a.u[0] = (unsigned int)n;
                 device_launch_(d, DK_SPMM_VGRAD, nnz, &a);
-                tensor_grad_dev_wrote_raw_((void*)vals);
+                tensor_grad_dev_wrote_raw_((FloatTensor*)vals);
             }
             return;
         }
-        tensor_host_raw_((void*)vals); tensor_host_raw_((void*)x); tensor_host_raw_((void*)col); tensor_host_raw_((void*)rowOf);
+        tensor_host_raw_((FloatTensor*)vals); tensor_host_raw_((FloatTensor*)x); tensor_host_raw_((FloatTensor*)col); tensor_host_raw_((FloatTensor*)rowOf);
         if (x->requiresGrad) {
             __tensor_ensure_grad(x);
             unsigned long e = 0UL;
@@ -270,7 +270,7 @@ static void sp_link_(FloatTensor* out, const &SparseTensor s, FloatTensor* x) {
         out->parents.push(s.colIdx);
         out->parents.push(s.rowPtr);
         out->parents.push(s.rowOf);
-        out->gradFn = (void*)sp_spmm_backward_;
+        out->gradFn = sp_spmm_backward_;
     }
 }
 
@@ -281,11 +281,11 @@ static void sp_link_(FloatTensor* out, const &SparseTensor s, FloatTensor* x) {
         n = x->size / s.cols;
     }
     int d;
-    unsafe { d = tensor_op_device_raw_((void*)s.values, (void*)x, (void*)0); }
+    unsafe { d = tensor_op_device_raw_((FloatTensor*)s.values, (FloatTensor*)x, (FloatTensor*)0); }
     if (d != DEVICE_CPU) {
         unsafe {
-            if (tensor_dev_raw_((void*)s.values, d) && tensor_dev_raw_((void*)x, d) && tensor_dev_raw_((void*)s.colIdx, d) &&
-                tensor_dev_raw_((void*)s.rowPtr, d)) {
+            if (tensor_dev_raw_((FloatTensor*)s.values, d) && tensor_dev_raw_((FloatTensor*)x, d) && tensor_dev_raw_((FloatTensor*)s.colIdx, d) &&
+                tensor_dev_raw_((FloatTensor*)s.rowPtr, d)) {
                 unsigned long shape[2];
                 shape[0] = s.rows; shape[1] = n;
                 match (tensor_dev_new_t_((const &unsigned long)&shape[0], 2UL, d, dev_tag_(x->dbuf) != 0UL ? device_store_tag_(d) : DEVICE_FP32)) {
@@ -298,7 +298,7 @@ static void sp_link_(FloatTensor* out, const &SparseTensor s, FloatTensor* x) {
                             sp_link_((FloatTensor*)o, s, (FloatTensor*)x);
                             return o;
                         }
-                        tensor_free_device_raw_((void*)o);
+                        tensor_free_device_raw_((FloatTensor*)o);
                     }
                     case null: { }
                 }
@@ -306,7 +306,7 @@ static void sp_link_(FloatTensor* out, const &SparseTensor s, FloatTensor* x) {
         }
     }
     unsafe {
-        tensor_host_raw_((void*)s.values); tensor_host_raw_((void*)x); tensor_host_raw_((void*)s.colIdx); tensor_host_raw_((void*)s.rowPtr);
+        tensor_host_raw_((FloatTensor*)s.values); tensor_host_raw_((FloatTensor*)x); tensor_host_raw_((FloatTensor*)s.colIdx); tensor_host_raw_((FloatTensor*)s.rowPtr);
     }
     unsigned long shape[2];
     unsafe { shape[0] = s.rows; shape[1] = n; }
@@ -334,15 +334,15 @@ static void sp_link_(FloatTensor* out, const &SparseTensor s, FloatTensor* x) {
 
 // to_dense: spmm with the identity on the right would cost cols^2; instead a
 // direct scatter, its backward a gather (values grad = out grad at each nonzero).
-static void sp_dense_backward_(void* selfPtr) {
+static void sp_dense_backward_(&FloatTensor selfPtr) {
     unsafe {
         FloatTensor* out = (FloatTensor*)selfPtr;
         FloatTensor* vals = __tensor_parent(out, 0UL);
         FloatTensor* col = __tensor_parent(out, 1UL);
         FloatTensor* rowOf = __tensor_parent(out, 2UL);
         if (!vals->requiresGrad) return;
-        tensor_grad_host_raw_((void*)out);
-        tensor_host_raw_((void*)col); tensor_host_raw_((void*)rowOf);
+        tensor_grad_host_raw_((FloatTensor*)out);
+        tensor_host_raw_((FloatTensor*)col); tensor_host_raw_((FloatTensor*)rowOf);
         __tensor_ensure_grad(vals);
         unsigned long cols = out->shape[1];
         unsigned long e = 0UL;
@@ -355,7 +355,7 @@ static void sp_dense_backward_(void* selfPtr) {
 }
 
 &FloatTensor SparseTensor::to_dense() const {
-    unsafe { tensor_host_raw_((void*)self.values); tensor_host_raw_((void*)self.colIdx); tensor_host_raw_((void*)self.rowOf); }
+    unsafe { tensor_host_raw_((FloatTensor*)self.values); tensor_host_raw_((FloatTensor*)self.colIdx); tensor_host_raw_((FloatTensor*)self.rowOf); }
     &FloatTensor out = FloatTensor::new_2d(self.rows, self.cols, 0);
     unsafe {
         unsigned long e = 0UL;
@@ -368,7 +368,7 @@ static void sp_dense_backward_(void* selfPtr) {
             out->parents.push(self.values);
             out->parents.push(self.colIdx);
             out->parents.push(self.rowOf);
-            out->gradFn = (void*)sp_dense_backward_;
+            out->gradFn = sp_dense_backward_;
         }
     }
     return out;
@@ -384,7 +384,7 @@ struct SparseTensor SparseTensor::scale(float k) const {
 }
 
 struct SparseTensor SparseTensor::transpose() const {
-    unsafe { tensor_host_raw_((void*)self.colIdx); tensor_host_raw_((void*)self.rowOf); }
+    unsafe { tensor_host_raw_((FloatTensor*)self.colIdx); tensor_host_raw_((FloatTensor*)self.rowOf); }
     // counting sort of the nonzeros by column
     struct SparseTensor t = sp_alloc_(self.cols, self.rows, self.nnz, 0);
     &FloatTensor perm = FloatTensor::new_1d(self.nnz == 0UL ? 1UL : self.nnz, 0);
@@ -412,7 +412,7 @@ struct SparseTensor SparseTensor::transpose() const {
             perm->data[dst] = (float)e;
             e = e + 1UL;
         }
-        free((void*)next);
+        free((unsigned char*)next);
     }
     // the values: a gather of this matrix's, so gradients flow back to them
     sp_drop_(t.values);

@@ -62,7 +62,7 @@ void ddpm_linear_schedule(unsigned long numSteps, float betaStart, float betaEnd
     &FloatTensor out = tensor_add(mean, scaledNoise);
 
     scaledEps->free(); diff->free(); mean->free(); scaledNoise->free();
-    unsafe { free((void*)scaledEps); free((void*)diff); free((void*)mean); free((void*)scaledNoise); }
+    unsafe { free((unsigned char*)scaledEps); free((unsigned char*)diff); free((unsigned char*)mean); free((unsigned char*)scaledNoise); }
     return out;
 }
 
@@ -82,8 +82,8 @@ void ddpm_linear_schedule(unsigned long numSteps, float betaStart, float betaEnd
 
     scaledEps1->free(); numer->free(); x0Pred->free(); term1->free(); term2->free();
     unsafe {
-        free((void*)scaledEps1); free((void*)numer); free((void*)x0Pred);
-        free((void*)term1); free((void*)term2);
+        free((unsigned char*)scaledEps1); free((unsigned char*)numer); free((unsigned char*)x0Pred);
+        free((unsigned char*)term1); free((unsigned char*)term2);
     }
     return out;
 }
@@ -101,7 +101,7 @@ void ddpm_linear_schedule(unsigned long numSteps, float betaStart, float betaEnd
     &FloatTensor out = tensor_sub(term1, term2);
 
     term1->free(); term2->free();
-    unsafe { free((void*)term1); free((void*)term2); }
+    unsafe { free((unsigned char*)term1); free((unsigned char*)term2); }
     return out;
 }
 
@@ -142,7 +142,7 @@ void dpm_drop_(&FloatTensor t) {
     // A heap tensor: destroyed in place through the reference, then its
     // memory released (a Box the checker can't see).
     unsafe { t->free(); }
-    unsafe { free((void*)t); }
+    unsafe { free((unsigned char*)t); }
 }
 
 &FloatTensor dpm_solver_pp_1_step(const &FloatTensor x_cur, const &FloatTensor x0Pred,
@@ -158,7 +158,7 @@ void dpm_drop_(&FloatTensor t) {
     &FloatTensor out = tensor_sub(term1, term2);
 
     term1->free(); term2->free();
-    unsafe { free((void*)term1); free((void*)term2); }
+    unsafe { free((unsigned char*)term1); free((unsigned char*)term2); }
     return out;
 }
 

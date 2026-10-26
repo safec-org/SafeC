@@ -218,7 +218,7 @@ void tensors_free(&Vec<&DenseTensor<E>> ts) {
         int onHeap = 1;
         match (t.owner) { case some(o): { onHeap = 0; } case null: { } }
         unsafe { t.free(); }   // a heap tensor: destroyed in place, its memory freed below
-        if (onHeap) { unsafe { std::free((void*)t); } }
+        if (onHeap) { unsafe { std::free((unsigned char*)t); } }
         i = i + 1UL;
     }
     unsafe { ts.free(); }   // the Vec too, in place: the caller doesn't use it again

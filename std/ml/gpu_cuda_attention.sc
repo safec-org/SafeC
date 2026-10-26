@@ -27,7 +27,7 @@ extern int cuMemFree_v2(unsigned long long dptr);
 extern int cuMemsetD32Async(unsigned long long dst, unsigned int value, size_t n, void* stream);
 extern int cuStreamSynchronize(void* stream);
 extern size_t strlen(const char* s);
-extern void* memcpy(void* dst, const void* src, size_t n);
+extern unsigned char* memcpy(unsigned char* dst, const unsigned char* src, size_t n);
 
 #define ATT_FN_MAX_DYN_SMEM  8    // CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES
 #define ATT_SIMT             1    // flash attention, CUDA cores, any dtype
@@ -1300,7 +1300,7 @@ static ?&void attn_kernel_(int kind, int dtype, unsigned long d) {
         p = attn_put_define_(buf, p, "VK", (unsigned long)kind);
         p = attn_put_define_(buf, p, "VT", (unsigned long)dtype);
         p = attn_put_define_(buf, p, "VD", d);
-        memcpy((void*)(buf + p), (const void*)src, srcLen);
+        memcpy((unsigned char*)(buf + p), (const unsigned char*)src, srcLen);
         buf[p + srcLen] = (char)0;
         void* module = cuda_load_module((const &char)buf, "safec_attention.cu");
         dealloc(buf);
@@ -1849,7 +1849,7 @@ static int sd_run_(unsigned long q, unsigned long k, unsigned long v, unsigned l
     unsafe {
         unsigned int ninf = 0xff800000U;
         float nf = 0.0f;
-        memcpy((void*)&nf, (const void*)&ninf, 4UL);
+        memcpy((unsigned char*)&nf, (const unsigned char*)&ninf, 4UL);
         g_sd_f[s * 4] = scale;
         g_sd_f[s * 4 + 1] = nf;
         g_sd_f[s * 4 + 2] = nf;

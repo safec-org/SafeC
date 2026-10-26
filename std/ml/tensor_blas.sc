@@ -8,8 +8,8 @@
 
 namespace std {
 
-extern void* malloc(size_t size);
-extern void  free(void* ptr);
+extern unsigned char* malloc(size_t size);
+extern void  free(unsigned char* ptr);
 
 // The products go through std/simd/gemm.h's sgemm, which hands them to the
 // CBLAS the program links (Accelerate, AOCL-BLAS, oneMKL, OpenBLAS, ...;
@@ -109,7 +109,7 @@ static unsigned long __blas_scratch_cap_ = 0UL;
 static float* __blas_scratch_get_(unsigned long n) {
     unsafe {
         if (n > __blas_scratch_cap_) {
-            if (__blas_scratch_ != (float*)0) { free((void*)__blas_scratch_); }
+            if (__blas_scratch_ != (float*)0) { free((unsigned char*)__blas_scratch_); }
             __blas_scratch_ = (float*)malloc(sizeof(float) * n);
             __blas_scratch_cap_ = n;
         }
@@ -117,7 +117,7 @@ static float* __blas_scratch_get_(unsigned long n) {
     }
 }
 
-static void __matmul_backward_blas(void* selfPtr) {
+static void __matmul_backward_blas(&FloatTensor selfPtr) {
     unsafe {
         FloatTensor* selfT = (FloatTensor*)selfPtr;
         &FloatTensor a = __tensor_parent(selfT, 0UL);
@@ -166,7 +166,7 @@ static void __matmul_backward_blas(void* selfPtr) {
         sgemm_n_(SGEMM_NO_TRANS, SGEMM_NO_TRANS, m, n, k, (float)1.0, (const &float)a->data, k,
               (const &float)b->data, n, (float)0.0, (&float)out->data, n);
     }
-    __tensor_link2(out, a, b, (void*)__matmul_backward_blas);
+    __tensor_link2(out, a, b, __matmul_backward_blas);
     return out;
 }
 

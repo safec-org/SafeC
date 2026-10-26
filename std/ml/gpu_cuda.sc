@@ -93,7 +93,7 @@ extern int cublasLtMatmul(void* handle, void* desc, const void* alpha, const voi
                           void* D, void* Ddesc, const void* algo, void* workspace, size_t wsBytes,
                           void* stream);
 
-extern void* memcpy(void* dst, const void* src, size_t n);
+extern unsigned char* memcpy(unsigned char* dst, const unsigned char* src, size_t n);
 extern int printf(const char* fmt, ...);
 
 #define CUDA_OK                  0
@@ -977,7 +977,7 @@ static int cuda_lane_run_(&CudaLaneJob j, int k) {
             int i = 2 * k + b;
             if (!cuda_pipe_wait_(i)) return 0;
             if (j.toDevice) {
-                memcpy(g_cuda_pipe[i], (const void*)(host + off), c);
+                memcpy(g_cuda_pipe[i], (const unsigned char*)(host + off), c);
                 if (cuMemcpyHtoDAsync_v2(dev + (unsigned long long)off, (const void*)g_cuda_pipe[i], c, st) != CUDA_OK)
                     return 0;
             } else {
@@ -988,7 +988,7 @@ static int cuda_lane_run_(&CudaLaneJob j, int k) {
             if (!j.toDevice && prevLen > 0UL) {
                 int p = 2 * k + (1 - b);
                 if (!cuda_pipe_wait_(p)) return 0;
-                memcpy((void*)(host + prevOff), (const void*)g_cuda_pipe[p], prevLen);
+                memcpy((unsigned char*)(host + prevOff), (const unsigned char*)g_cuda_pipe[p], prevLen);
             }
             prevOff = off;
             prevLen = c;
@@ -998,7 +998,7 @@ static int cuda_lane_run_(&CudaLaneJob j, int k) {
         if (!j.toDevice) {
             int p = 2 * k + (1 - b);
             if (!cuda_pipe_wait_(p)) return 0;
-            memcpy((void*)(host + prevOff), (const void*)g_cuda_pipe[p], prevLen);
+            memcpy((unsigned char*)(host + prevOff), (const unsigned char*)g_cuda_pipe[p], prevLen);
         }
         return cuEventRecord(g_cuda_lane_end[k], st) == CUDA_OK;
     }
@@ -1106,7 +1106,7 @@ static int cuda_read_bytes_(void* host, unsigned long long src, unsigned long by
         if (bytes <= CUDA_STAGING_BYTES) {
             if (cuMemcpyDtoHAsync_v2(g_cuda_staging, src, bytes, g_cuda_stream) != CUDA_OK) return 0;
             if (cuStreamSynchronize(g_cuda_stream) != CUDA_OK) return 0;
-            memcpy(host, (const void*)g_cuda_staging, bytes);
+            memcpy(host, (const unsigned char*)g_cuda_staging, bytes);
             return 1;
         }
         if (bytes < CUDA_PIPE_MIN || !cuda_pipe_ensure_()) {
@@ -2166,7 +2166,7 @@ int cuda_half_sgd2(struct CudaHalfBuf w1, struct CudaHalfBuf g1, struct CudaHalf
 // ── Mixed precision ──────────────────────────────────────────────────────────
 
 extern void* malloc(unsigned long size);
-extern void  free(void* ptr);
+extern void  free(unsigned char* ptr);
 
 int cuda_zero(struct CudaBuf b) {
     if (!cuda_ensure_() || b.dev == 0UL) return 0;
@@ -2261,7 +2261,7 @@ static struct CudaCvtLists_ cuda_cvt_lists_(unsigned long count) {
 }
 
 static void cuda_cvt_lists_free_(&CudaCvtLists_ l) {
-    unsafe { free((void*)l.src); free((void*)l.dst); free((void*)l.len); }
+    unsafe { free((unsigned char*)l.src); free((unsigned char*)l.dst); free((unsigned char*)l.len); }
 }
 
 // One 16-bit dtype per call (the kernel's bf flag); mixed lists are refused.

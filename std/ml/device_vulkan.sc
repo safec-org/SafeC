@@ -76,9 +76,9 @@
 
 namespace std {
 
-extern void* malloc(size_t size);
-extern void  free(void* ptr);
-extern void* memcpy(void* dst, const void* src, size_t n);
+extern unsigned char* malloc(size_t size);
+extern void  free(unsigned char* ptr);
+extern unsigned char* memcpy(unsigned char* dst, const unsigned char* src, size_t n);
 extern long  write(int fd, const void* buf, unsigned long n);
 extern char* getenv(const char* name);
 extern int   strcmp(const char* a, const char* b);
@@ -415,7 +415,7 @@ static struct VkExtensionProperties* dvk_device_exts_(void* pd, unsigned int* n)
         if (vkEnumerateDeviceExtensionProperties(pd, (const char*)0, n, (struct VkExtensionProperties*)0) != 0) return (struct VkExtensionProperties*)0;
         struct VkExtensionProperties* e = (struct VkExtensionProperties*)malloc(sizeof(struct VkExtensionProperties) * ((unsigned long)*n + 1UL));
         if (e == (struct VkExtensionProperties*)0) return e;
-        if (vkEnumerateDeviceExtensionProperties(pd, (const char*)0, n, e) != 0) { free((void*)e); return (struct VkExtensionProperties*)0; }
+        if (vkEnumerateDeviceExtensionProperties(pd, (const char*)0, n, e) != 0) { free((unsigned char*)e); return (struct VkExtensionProperties*)0; }
         return e;
     }
 }
@@ -438,7 +438,7 @@ static int dvk_instance_() {
         }
         int settings = dvk_has_ext_(exts, n, "VK_EXT_layer_settings");
         if (settings) { names[nn] = "VK_EXT_layer_settings"; nn = nn + 1U; }
-        free((void*)exts);
+        free((unsigned char*)exts);
 
         unsigned int never = 0U;   // MVK_CONFIG_FAST_MATH_NEVER
         struct VkLayerSettingEXT s;
@@ -563,9 +563,9 @@ static int dvk_ensure_() {
             if (r > bestRank) { bestRank = r; best = i; }
             i = i + 1U;
         }
-        if (bestRank == 0) { free((void*)pds); return 0; }
+        if (bestRank == 0) { free((unsigned char*)pds); return 0; }
         g_dvk_pd = pds[best];
-        free((void*)pds);
+        free((unsigned char*)pds);
         dvk_qualifies_(g_dvk_pd, &f2, &f16, &bda, &atom, &sgc);   // its features to enable
 
         // a queue family with compute
@@ -585,11 +585,11 @@ static int dvk_ensure_() {
         if (exts == (struct VkExtensionProperties*)0) return 0;
         const char* names[4];
         unsigned int nn = 0U;
-        if (!dvk_has_ext_(exts, ne, "VK_EXT_shader_atomic_float")) { free((void*)exts); return 0; }
+        if (!dvk_has_ext_(exts, ne, "VK_EXT_shader_atomic_float")) { free((unsigned char*)exts); return 0; }
         names[nn] = "VK_EXT_shader_atomic_float"; nn = nn + 1U;
         if (dvk_has_ext_(exts, ne, "VK_EXT_subgroup_size_control")) { names[nn] = "VK_EXT_subgroup_size_control"; nn = nn + 1U; }
         if (dvk_has_ext_(exts, ne, "VK_KHR_portability_subset")) { names[nn] = "VK_KHR_portability_subset"; nn = nn + 1U; }
-        free((void*)exts);
+        free((unsigned char*)exts);
 
         float prio = 1.0f;
         struct VkDeviceQueueCreateInfo q;
@@ -811,7 +811,7 @@ static int dvk_grow_(void** arr, unsigned long* cap, unsigned long n, unsigned l
         unsigned long nc = *cap == 0UL ? 16UL : *cap * 2UL;
         void* na = malloc(size * nc);
         if (na == (void*)0) return 0;
-        if (n > 0UL) memcpy(na, (const void*)*arr, size * n);
+        if (n > 0UL) memcpy(na, (const unsigned char*)*arr, size * n);
         if (*arr != (void*)0) free(*arr);
         *arr = na;
         *cap = nc;
@@ -1173,7 +1173,7 @@ void VulkanBackend::release(unsigned long handle) {
         if (dvk_busy_()) dvk_wait_();
         vkDestroyBuffer(g_dvk_dev, g_dvk_blocks[k].b.buf, (const void*)0);
         vkFreeMemory(g_dvk_dev, g_dvk_blocks[k].b.mem, (const void*)0);
-        if (g_dvk_blocks[k].free != (struct DvkRange_*)0) free((void*)g_dvk_blocks[k].free);
+        if (g_dvk_blocks[k].free != (struct DvkRange_*)0) free((unsigned char*)g_dvk_blocks[k].free);
         g_dvk_blocks[k] = g_dvk_blocks[g_dvk_nblocks - 1UL];
         g_dvk_nblocks = g_dvk_nblocks - 1UL;
     }
@@ -1188,7 +1188,7 @@ int VulkanBackend::upload(unsigned long dst, const &float src, unsigned long n) 
     unsigned char* p = dvk_host_(dst);
     if (g_dvk_mapped && p == (unsigned char*)0) return 0;
     if (g_dvk_mapped && !dvk_busy_()) {
-        unsafe { memcpy((void*)p, (const void*)src, n * 4UL); }
+        unsafe { memcpy((unsigned char*)p, (const unsigned char*)src, n * 4UL); }
         return 1;
     }
     unsigned long done = 0UL;
@@ -1198,7 +1198,7 @@ int VulkanBackend::upload(unsigned long dst, const &float src, unsigned long n) 
         unsigned long at = dvk_stage_(k * 4UL);
         if (at == 0UL) return 0;
         unsafe {
-            memcpy((void*)(g_dvk_stage.cpu + (at - g_dvk_stage.addr)), (const void*)((const float*)src + done), k * 4UL);
+            memcpy((unsigned char*)(g_dvk_stage.cpu + (at - g_dvk_stage.addr)), (const unsigned char*)((const float*)src + done), k * 4UL);
         }
         if (!dvk_copy_words_(dst + done * 4UL, at, k)) return 0;
         done = done + k;
@@ -1212,7 +1212,7 @@ int VulkanBackend::download(&float dst, unsigned long src, unsigned long n) {
     if (g_dvk_mapped) {
         unsigned char* p = dvk_host_(src);
         if (p == (unsigned char*)0 || !dvk_wait_()) return 0;
-        unsafe { memcpy((void*)dst, (const void*)p, n * 4UL); }
+        unsafe { memcpy((unsigned char*)dst, (const unsigned char*)p, n * 4UL); }
         return 1;
     }
     // through the staging arena, a piece at a time
@@ -1222,7 +1222,7 @@ int VulkanBackend::download(&float dst, unsigned long src, unsigned long n) {
         unsigned long k = n - done < piece ? n - done : piece;
         unsigned long at = dvk_stage_(k * 4UL);
         if (at == 0UL || !dvk_copy_words_(at, src + done * 4UL, k) || !dvk_wait_()) return 0;
-        unsafe { memcpy((void*)((float*)dst + done), (const void*)(g_dvk_stage.cpu + (at - g_dvk_stage.addr)), k * 4UL); }
+        unsafe { memcpy((unsigned char*)((float*)dst + done), (const unsigned char*)(g_dvk_stage.cpu + (at - g_dvk_stage.addr)), k * 4UL); }
         done = done + k;
     }
     return 1;

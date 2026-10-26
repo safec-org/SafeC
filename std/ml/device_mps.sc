@@ -49,9 +49,9 @@
 
 namespace std {
 
-extern void* malloc(size_t size);
-extern void  free(void* ptr);
-extern void* memcpy(void* dst, const void* src, size_t n);
+extern unsigned char* malloc(size_t size);
+extern void  free(unsigned char* ptr);
+extern unsigned char* memcpy(unsigned char* dst, const unsigned char* src, size_t n);
 extern long  write(int fd, const void* buf, unsigned long n);
 
 #if defined(__APPLE__)
@@ -253,8 +253,8 @@ static int dmps_library_(int b) {
             while (src[ns] != (char)0) ns = ns + 1UL;
             text = (char*)malloc(np + ns + 1UL);
             if (text == (char*)0) return 0;
-            memcpy((void*)text, (const void*)pre, np);
-            memcpy((void*)(text + np), (const void*)src, ns + 1UL);
+            memcpy((unsigned char*)text, (const unsigned char*)pre, np);
+            memcpy((unsigned char*)(text + np), (const unsigned char*)src, ns + 1UL);
             src = (const char*)text;
         }
         void* pool = objc_autoreleasePoolPush();
@@ -279,7 +279,7 @@ static int dmps_library_(int b) {
         dmps_release_obj_(str);
         dmps_release_obj_(opts);
         objc_autoreleasePoolPop(pool);
-        if (text != (char*)0) free((void*)text);
+        if (text != (char*)0) free((unsigned char*)text);
         if (lib == (void*)0) return 0;
         g_dmps_lib[b] = lib;
     }
@@ -400,7 +400,7 @@ static void dmps_use_all_() {
         while (i < g_dmps_nbufs) { list[i] = g_dmps_bufs[i].buf; i = i + 1UL; }
         DmpsMsgBytes use = (DmpsMsgBytes)objc_msgSend;
         use(g_dmps_enc, sel_registerName("useResources:count:usage:"), (const void*)list, g_dmps_nbufs, 3UL);
-        free((void*)list);
+        free((unsigned char*)list);
     }
 }
 
@@ -671,8 +671,8 @@ unsigned long MpsBackend::alloc(unsigned long bytes) {
             unsigned long cap = g_dmps_capbufs == 0UL ? 256UL : g_dmps_capbufs * 2UL;
             struct DmpsBuf_* bufs = (struct DmpsBuf_*)malloc(sizeof(struct DmpsBuf_) * cap);
             if (bufs == (struct DmpsBuf_*)0) return 0UL;
-            if (g_dmps_nbufs > 0UL) memcpy((void*)bufs, (const void*)g_dmps_bufs, sizeof(struct DmpsBuf_) * g_dmps_nbufs);
-            if (g_dmps_bufs != (struct DmpsBuf_*)0) free((void*)g_dmps_bufs);
+            if (g_dmps_nbufs > 0UL) memcpy((unsigned char*)bufs, (const unsigned char*)g_dmps_bufs, sizeof(struct DmpsBuf_) * g_dmps_nbufs);
+            if (g_dmps_bufs != (struct DmpsBuf_*)0) free((unsigned char*)g_dmps_bufs);
             g_dmps_bufs = bufs;
             g_dmps_capbufs = cap;
         }
@@ -744,7 +744,7 @@ int MpsBackend::upload(unsigned long dst, const &float src, unsigned long n) {
         }
     }
     if (dmps_busy_() && !dmps_wait_()) return 0;   // queued work may still read or write dst
-    unsafe { memcpy((void*)p, (const void*)src, n * 4UL); }
+    unsafe { memcpy((unsigned char*)p, (const unsigned char*)src, n * 4UL); }
     return 1;
 }
 
@@ -752,7 +752,7 @@ int MpsBackend::download(&float dst, unsigned long src, unsigned long n) {
     if (n == 0UL) return 1;
     unsigned char* p = dmps_host_(src);
     if (p == (unsigned char*)0 || !dmps_wait_()) return 0;
-    unsafe { memcpy((void*)dst, (const void*)p, n * 4UL); }
+    unsafe { memcpy((unsigned char*)dst, (const unsigned char*)p, n * 4UL); }
     return 1;
 }
 
