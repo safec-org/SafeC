@@ -2,8 +2,9 @@
 // Implements the TLS 1.3 record protocol (RFC 8446 §5).
 // Crypto operations are delegated to std/crypto/aes.h and std/crypto/sha256.h.
 // This module handles record framing, the inner content type and alerts.
-// There is no handshake or key exchange (it needs ECDH, not in std): keys
-// come from install_keys().
+// There is no handshake here: keys come from install_keys(). For complete
+// TLS connections (handshake, certificates, every TLS 1.3 cipher suite, the
+// OS's TLS library when there is one) use std/tls/tls.h.
 //
 // Record protection is the AES-256-GCM AEAD of RFC 8446 §5.2 (the
 // TLS_AES_256_GCM_SHA384 cipher suite's record layer), so protected records

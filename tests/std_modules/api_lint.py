@@ -13,8 +13,9 @@ except:
   * 'extern' declarations of real C/OS/JS functions (FFI);
   * std-private names: functions, methods and typedefs whose name ends in
     '_raw_' (the type-erased half of a generic wrapper), 'static'
-    header-local helpers whose name starts with '__' or ends with '_', and
-    the members of structs so named;
+    header-local helpers whose name starts with '__', any function whose
+    name ends in '_' (std's cross-file internals, e.g. bn_add_), and the
+    members of structs so named;
   * internal headers: a header whose leading comment says it is internal
     ("Internal:", "std-private", "Not a public header", "do not edit"),
     and the FFI binding headers listed in INTERNAL below.
@@ -201,6 +202,10 @@ def classify(rel, d):
         return "raw-wrapper"
     if re.match(r"\s*(generic\s*<[^>]*>\s*)?(static|inline|static\s+inline)\b", d) and (name.startswith("__") or name.endswith("_")):
         return "static-helper"
+    if name.endswith("_"):
+        # std's naming convention for cross-file internals (bn_add_, asn1_view_):
+        # a trailing underscore is never public API.
+        return "internal-helper"
     return "PUBLIC"
 
 

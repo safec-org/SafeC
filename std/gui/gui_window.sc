@@ -6,6 +6,7 @@
 #include <std/stddef.h>
 #include <std/gui/gui.h>
 #include <std/gui/gui_backend.h>
+#include <std/gui/gui_gpu.h>
 #include <std/mem.h>
 #include <std/collections/vec.h>
 #include <std/collections/string.h>
@@ -198,6 +199,7 @@ struct GuiWindowOptions GuiWindowOptions::new(const &char title, int width, int 
     o.visible = 1;
     o.hiDpi = 1;
     o.topmost = 0;
+    o.present = GUI_PRESENT_DEFAULT;
     return o;
 }
 
@@ -297,6 +299,7 @@ struct GuiWindow GuiWindow::create_with(const &GuiWindowOptions opts) {
     win.height = st.pixelH;
     win.pixels = __gui_alloc_pixels(win.width, win.height);
     unsafe { win.platform = (void*)st; }
+    if (gui_gpu_wanted(opts.present)) { gui_window_use_gpu(&win); }
     return win;
 }
 

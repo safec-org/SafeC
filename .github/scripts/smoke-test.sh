@@ -810,6 +810,38 @@ else
     echo "  [SKIP] node or wasm-ld not available"
 fi
 
+# ── 5f. std/gui on WebAssembly under Node ────────────────────────────────────
+# tests/stdlib/wasm_gui: a wasm32 std/gui module (three windows, widgets)
+# driven through std/gui/gui_web.js against a fake canvas DOM — frames,
+# WebGL2/1 presentation with context loss, IME text, the clipboard. Same
+# requirements as 5e. (tests/stdlib/wasm_gui/browser.sh does the same in
+# headless Chromium where Playwright is installed.)
+section "std/gui on WebAssembly (Node)"
+if command -v node >/dev/null 2>&1 && { [[ -x "$WASM_LD_PROG" ]] || command -v "$WASM_LD_PROG" >/dev/null 2>&1; }; then
+    rm -rf "$SAFEC_HOME/tests/stdlib/wasm_gui/build"
+    if SAFEGUARD="$SAFEGUARD_BIN" SAFEC="$SAFEC_BIN" SAFEC_CLANG="$CLANG_BIN" \
+            bash "$SAFEC_HOME/tests/stdlib/wasm_gui/run.sh" >/tmp/wasm_gui.txt 2>&1; then
+        pass "$(tail -1 /tmp/wasm_gui.txt)"
+    else
+        fail "std/gui on WebAssembly"
+        cat /tmp/wasm_gui.txt
+    fi
+    # safeguard bundle --target wasm32: the page and its glue
+    WEBDIR="$(mktemp -d)"
+    cp -R "$SAFEC_HOME/examples/gui_web" "$WEBDIR/gui_web" && rm -rf "$WEBDIR/gui_web/build"
+    WB="$WEBDIR/gui_web/build/GuiWeb.web"
+    if sg_in "$WEBDIR/gui_web" /tmp/sg_web.txt bundle --target wasm32 &&
+       [[ -f "$WB/index.html" && -f "$WB/gui_web.js" && -f "$WB/gui_web.wasm" ]] && grep -q loadSafeCGui "$WB/index.html"; then
+        pass "safeguard bundle --target wasm32: build/GuiWeb.web (index.html, gui_web.js, gui_web.wasm)"
+    else
+        fail "safeguard bundle --target wasm32"
+        cat /tmp/sg_web.txt
+    fi
+    rm -rf "$WEBDIR"
+else
+    echo "  [SKIP] node or wasm-ld not available"
+fi
+
 # ── 6. sc-lsp wire-protocol smoke test ────────────────────────────────────────
 section "sc-lsp initialize handshake"
 REQUEST='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"rootUri":null,"capabilities":{}}}'

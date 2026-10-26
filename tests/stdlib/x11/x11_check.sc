@@ -11,6 +11,7 @@
 #include <std/gui/gui_backend.h>
 #include <std/gui/gui_widget.h>
 #include <std/gui/gui_app.h>
+#include <std/gui/gui_gpu.h>
 #include <std/collections/string.h>
 
 extern void* XOpenDisplay(const char* name);
@@ -47,6 +48,7 @@ extern void _exit(int code);
 extern int waitpid(int pid, int* status, int options);
 extern int usleep(unsigned int us);
 extern int strcmp(const char* a, const char* b);
+extern int printf(const char* fmt, ...);
 extern unsigned long strlen(const char* s);
 
 
@@ -414,11 +416,94 @@ void t_x11_multi() {
     }
 }
 
+// ── the OpenGL ES (EGL) presenter on the same window system ─────────────
+
+void t_x11_gpu() {
+    unsafe {
+        struct GuiWindowOptions o = GuiWindowOptions::new("x11 gpu", 96, 64);
+        o.present = GUI_PRESENT_GPU;
+        o.hiDpi = 0;
+        struct GuiWindow win = GuiWindow::create_with(&o);
+        ASSERT_FALSE(win.platform.is_null());
+        if (win.platform.is_null()) return;
+        if (!gui_window_uses_gpu(&win)) {
+            // No EGL/OpenGL ES driver on this machine: the CPU path took over.
+            printf("  (no EGL/OpenGL ES here: GPU presentation skipped)\n");
+            ASSERT_EQ(strcmp(gui_window_presenter_name(&win), "cpu"), 0);
+            win.destroy();
+            return;
+        }
+        ASSERT_EQ(strcmp(gui_window_presenter_name(&win), "gl"), 0);
+        g_dpy = XOpenDisplay((const char*)0);
+        g_win = (unsigned long)win.native_handle();
+        win.fill_rect(0, 0, 96, 64, GuiColor::rgb((unsigned char)0, (unsigned char)0, (unsigned char)0));
+        win.fill_rect(10, 10, 20, 10, GuiColor::rgb((unsigned char)255, (unsigned char)0, (unsigned char)0));
+        win.fill_rect(60, 40, 5, 5, GuiColor::rgb((unsigned char)0, (unsigned char)128, (unsigned char)255));
+        win.present();
+        XSync(g_dpy, 0);
+        test_assert_eq_u(read_pixel(15, 15, 96, 64), 0xFF0000ULL, "gl: red rectangle on screen", __FILE__, __LINE__);
+        test_assert_eq_u(read_pixel(62, 42, 96, 64), 0x0080FFULL, "gl: R/G/B order", __FILE__, __LINE__);
+        test_assert_eq_u(read_pixel(2, 2, 96, 64), 0x000000ULL, "gl: background", __FILE__, __LINE__);
+        test_assert_eq_u(read_pixel(95, 0, 96, 64), 0x000000ULL, "gl: not flipped (top right)", __FILE__, __LINE__);
+        win.fill_rect(0, 60, 4, 4, GuiColor::rgb((unsigned char)0, (unsigned char)255, (unsigned char)0));
+        win.present();
+        XSync(g_dpy, 0);
+        test_assert_eq_u(read_pixel(1, 62, 96, 64), 0x00FF00ULL, "gl: bottom-left is the buffer's bottom-left", __FILE__, __LINE__);
+        // partial updates: the damaged rectangle only
+        win.fill_rect(40, 20, 8, 8, GuiColor::rgb((unsigned char)255, (unsigned char)255, (unsigned char)0));
+        win.present_rect(40, 20, 8, 8);
+        win.fill_rect(80, 5, 4, 4, GuiColor::rgb((unsigned char)255, (unsigned char)0, (unsigned char)255));
+        win.present_rect(80, 5, 4, 4);
+        XSync(g_dpy, 0);
+        test_assert_eq_u(read_pixel(43, 23, 96, 64), 0xFFFF00ULL, "gl: partial update 1", __FILE__, __LINE__);
+        test_assert_eq_u(read_pixel(81, 6, 96, 64), 0xFF00FFULL, "gl: partial update 2", __FILE__, __LINE__);
+        test_assert_eq_u(read_pixel(15, 15, 96, 64), 0xFF0000ULL, "gl: the rest kept", __FILE__, __LINE__);
+        int frame = 0;
+        while (frame < 100) { win.present(); frame = frame + 1; }
+        // a resize: a new texture of the new size
+        struct GuiEvent ev;
+        XResizeWindow(g_dpy, g_win, 120u, 70u);
+        XSync(g_dpy, 0);
+        ASSERT_TRUE(wait_event(&win, GUI_EVENT_RESIZE, &ev));
+        ASSERT_EQ(win.width, 120);
+        win.fill_rect(0, 0, 120, 70, GuiColor::rgb((unsigned char)0, (unsigned char)0, (unsigned char)255));
+        win.fill_rect(110, 60, 5, 5, GuiColor::rgb((unsigned char)0, (unsigned char)255, (unsigned char)0));
+        win.present();
+        XSync(g_dpy, 0);
+        test_assert_eq_u(read_pixel(112, 62, 120, 70), 0x00FF00ULL, "gl: drawn after resize", __FILE__, __LINE__);
+        test_assert_eq_u(read_pixel(5, 5, 120, 70), 0x0000FFULL, "gl: whole new size", __FILE__, __LINE__);
+        // back to the CPU path and to the GPU again, on the live window
+        gui_window_use_cpu(&win);
+        ASSERT_FALSE(gui_window_uses_gpu(&win));
+        win.fill_rect(0, 0, 10, 10, GuiColor::rgb((unsigned char)255, (unsigned char)255, (unsigned char)255));
+        win.present();
+        XSync(g_dpy, 0);
+        test_assert_eq_u(read_pixel(5, 5, 120, 70), 0xFFFFFFULL, "cpu again after gl", __FILE__, __LINE__);
+        ASSERT_TRUE(gui_window_use_gpu(&win));
+        win.fill_rect(0, 0, 10, 10, GuiColor::rgb((unsigned char)255, (unsigned char)0, (unsigned char)0));
+        win.present();
+        XSync(g_dpy, 0);
+        test_assert_eq_u(read_pixel(5, 5, 120, 70), 0xFF0000ULL, "gl again", __FILE__, __LINE__);
+        // a second GL window at the same time
+        struct GuiWindow w2 = GuiWindow::create_with(&o);
+        ASSERT_TRUE(gui_window_uses_gpu(&w2));
+        w2.fill_rect(0, 0, 96, 64, GuiColor::rgb((unsigned char)0, (unsigned char)255, (unsigned char)0));
+        w2.present();
+        win.present();
+        XSync(g_dpy, 0);
+        test_assert_eq_u(read_pixel_of((unsigned long)w2.native_handle(), 50, 30, 96, 64), 0x00FF00ULL, "gl: second window", __FILE__, __LINE__);
+        w2.destroy();
+        win.destroy();
+        XCloseDisplay(g_dpy);
+    }
+}
+
 int main() {
     struct TestSuite t = TestSuite::new();
     unsafe {
         t.add("x11 backend: draw/present/events", t_x11);
         t.add("x11: two windows under GuiApp, titles, sizes, clipboard", t_x11_multi);
+        t.add("x11: OpenGL ES presenter (EGL)", t_x11_gpu);
     }
     t.run();
     t.print_summary();

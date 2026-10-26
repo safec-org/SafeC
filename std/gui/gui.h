@@ -12,16 +12,24 @@
 //                  timers, animation frames
 //   gui_backend.h  the interface a windowing backend implements
 //   gui_headless.h an in-memory backend (tests, CI, offscreen rendering)
+//   gui_gpu.h      GPU presentation (OpenGL ES/EGL, Metal, Direct3D 11, WebGL)
+//   gui_wayland.h  the Wayland backend (Linux)
+//   gui_web.h      the WebAssembly <canvas> backend
 //
 // Exactly one platform backend is linked — safeguard picks it by the
 // file's suffix for the target (see gui_backend.h for the contract):
 //   std/gui/gui_cocoa.sc   macOS, via the Objective-C runtime + Core Graphics
 //   std/gui/gui_win32.sc   Windows, via the Win32 API
-//   std/gui/gui_x11.sc     Linux/BSD/Unix, via Xlib
+//   std/gui/gui_x11.sc     Linux/BSD/Unix, via Xlib — and on Linux the
+//                          Wayland backend next to it, chosen at run time
+//                          when there is a compositor (gui_wayland.h)
+//   std/gui/gui_web_wasm.sc  WebAssembly: <canvas> elements of a web page
+//                          (gui_web.h, with std/gui/gui_web.js)
 //   std/gui/gui_fb.sc      bare metal, via a linear framebuffer (see gui_fb.h)
 // A program can also install another backend at run time before its first
 // window (gui_set_backend(), gui_backend.h) — gui_headless.h's in-memory
-// one, or a later Wayland/WebAssembly one.
+// one (or any program: SAFEC_GUI_BACKEND=headless). Presenting can go
+// through the GPU instead of a software blit: gui_gpu.h.
 //
 // Every backend presents the same model: a window owns a CPU-side pixel
 // buffer, 'pixels' — RGBA8888, premultiplied alpha, top-left origin,
@@ -122,6 +130,12 @@
 // GuiWindowOptions.x/y: let the window system place the window.
 #define GUI_POS_DEFAULT (-2147483647)
 
+// GuiWindowOptions.present: how win.present() gets the buffer on screen
+// (see gui_gpu.h). Either way rendering stays on the CPU.
+#define GUI_PRESENT_DEFAULT 0   // CPU, unless $SAFEC_GUI_PRESENT=gpu
+#define GUI_PRESENT_GPU     1   // through the GPU (OpenGL ES/EGL, Metal, Direct3D 11); CPU if that fails
+#define GUI_PRESENT_CPU     2   // the backend's software blit, whatever the environment says
+
 #include <std/collections/string.h>
 #include <std/gui/gui_utf8.h>
 
@@ -206,6 +220,7 @@ struct GuiWindowOptions {
     int visible;           // shown on creation; default 1
     int hiDpi;             // buffer in physical pixels (scale > 1 on high-DPI displays); default 1
     int topmost;           // stays above other windows (tool windows, popups); default 0
+    int present;           // GUI_PRESENT_*; default GUI_PRESENT_DEFAULT
 
     static struct GuiWindowOptions new(const &char title, int width, int height);
 };
