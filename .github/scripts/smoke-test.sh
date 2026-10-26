@@ -699,6 +699,13 @@ if bash "$SAFEC_HOME/.github/scripts/package.sh" "$PRE/inst" "$SAFEC_BIN" "$SAFE
     PKG_OK=1
     PRE_STD="$(dirname "$(ls "$PRE"/inst/lib/*/std/core.a)")"
     pass "package.sh lays out an install with lib/$(basename "$(dirname "$PRE_STD")")/std/: $(ls "$PRE_STD" | grep -c '\.units$') sections ($(ls "$PRE_STD" | sed -n 's/\.units$//p' | tr '\n' ' '))"
+    if ls "$PRE"/inst/bin/safec-doc* >/dev/null 2>&1 && [[ -f "$PRE/inst/share/safec/doctool/theme/style.css" &&
+          -f "$PRE/inst/share/safec/doctool/src/main.sc" && -f "$PRE/inst/share/safec/doctool/theme/safec_dom.js" ]]; then
+        pass "package.sh ships safec-doc: bin/safec-doc, share/safec/doctool (sources, theme$([[ -f "$PRE/inst/share/safec/doctool/theme/doc.wasm" ]] && echo ', doc.wasm'))"
+    else
+        fail "package.sh: safec-doc missing from the install"
+        ls -R "$PRE/inst/bin" "$PRE/inst/share" 2>&1 | head -20
+    fi
 else
     fail "package.sh"
     cat /tmp/sg_pkg.txt

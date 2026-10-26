@@ -331,6 +331,7 @@ echo -e "  ${BOLD}SAFEC_HOME${RESET}  ${PREFIX}"
 echo -e "  ${BOLD}safec${RESET}       ${PREFIX}/bin/safec"
 echo -e "  ${BOLD}safeguard${RESET}   ${PREFIX}/bin/safeguard"
 echo -e "  ${BOLD}sc-lsp${RESET}      ${PREFIX}/bin/sc-lsp"
+if [[ -x "${PREFIX}/bin/safec-doc" ]]; then echo -e "  ${BOLD}safec-doc${RESET}   ${PREFIX}/bin/safec-doc (run by 'safeguard doc')"; fi
 echo ""
 echo "Try it:"
 echo "  source ${rc_file:-your shell rc file} (or restart your shell)"
