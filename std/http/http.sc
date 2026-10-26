@@ -383,12 +383,18 @@ struct HttpResponse HttpResponse::new(int status) {
     return r;
 }
 
-struct HttpResponse HttpResponse::bytes(int status, const &char content_type,
+struct HttpResponse HttpResponse::bytes_n_(int status, const &char content_type,
                                         const ?&unsigned char data, unsigned long len) {
     struct HttpResponse r = HttpResponse::new(status);
     http_headers_add(&r.headers, "Content-Type", content_type);
     if (len > 0UL) { unsafe { r.body.push_n((const char*)data, len); } }
     return r;
+}
+
+struct HttpResponse HttpResponse::bytes(int status, const &char content_type, []const unsigned char data_s) {
+    unsigned long len = data_s.len;
+    const ?&unsigned char data = crypto_opt_(data_s);
+    return HttpResponse::bytes_n_(status, content_type, data, len);
 }
 
 struct HttpResponse HttpResponse::text(int status, const &char body) {
@@ -462,9 +468,15 @@ void HttpResponse::set_body(const &char body) {
     self.body.push(body);
 }
 
-void HttpResponse::set_body_bytes(const &unsigned char data, unsigned long len) {
+void HttpResponse::set_body_bytes_n_(const &unsigned char data, unsigned long len) {
     self.body.clear();
     unsafe { self.body.push_n((const char*)data, len); }
+}
+
+void HttpResponse::set_body_bytes([]const unsigned char data_s) {
+    unsigned long len = data_s.len;
+    const &unsigned char data = crypto_in_(data_s, 0UL);
+    self.set_body_bytes_n_(data, len);
 }
 
 struct HttpRequest HttpRequest::new(const &char method, const &char path) {
@@ -851,7 +863,7 @@ static int http_status_has_body_(int status) {
     return !(status < 200 || status == 204 || status == 304);
 }
 
-struct String http_build_response(int status, const &char content_type,
+struct String http_build_response_n_(int status, const &char content_type,
                                    const ?&unsigned char body, unsigned long body_len) {
     const char* ctype;
     if (content_type) { ctype = content_type; } else { ctype = "text/plain"; }
@@ -869,6 +881,12 @@ struct String http_build_response(int status, const &char content_type,
         if (body_len > 0UL) { out.push_n((const char*)body, body_len); }
     }
     return out;
+}
+
+struct String http_build_response(int status, const &char content_type, []const unsigned char body_s) {
+    unsigned long body_len = body_s.len;
+    const ?&unsigned char body = crypto_opt_(body_s);
+    return http_build_response_n_(status, content_type, body, body_len);
 }
 
 // Serializes a handler's HttpResponse: status line, every header the
@@ -961,12 +979,18 @@ static void http_push_hex_(&String out, unsigned long v) {
     }
 }
 
-void http_chunked_encode(&String out, const ?&unsigned char data, unsigned long len) {
+void http_chunked_encode_n_(&String out, const ?&unsigned char data, unsigned long len) {
     if (len == 0UL) { return; }
     http_push_hex_(out, len);
     out.push("\r\n");
     unsafe { out.push_n((const char*)data, len); }
     out.push("\r\n");
+}
+
+void http_chunked_encode(&String out, []const unsigned char data_s) {
+    unsigned long len = data_s.len;
+    const ?&unsigned char data = crypto_opt_(data_s);
+    http_chunked_encode_n_(out, data, len);
 }
 
 void http_chunked_end(&String out) { out.push("0\r\n\r\n"); }
@@ -1000,7 +1024,7 @@ static long long http_parse_chunk_size_(const char* s, unsigned long n) {
     return v;
 }
 
-int http_chunked_decode(const &unsigned char data, unsigned long len, &String out,
+int http_chunked_decode_n_(const &unsigned char data, unsigned long len, &String out,
                         ?&unsigned long consumed) {
     const char* s;
     unsafe { s = (const char*)data; }
@@ -1040,6 +1064,12 @@ int http_chunked_decode(const &unsigned char data, unsigned long len, &String ou
         }
     }
     return 0;
+}
+
+int http_chunked_decode([]const unsigned char data_s, &String out, ?&unsigned long consumed) {
+    unsigned long len = data_s.len;
+    const &unsigned char data = crypto_in_(data_s, 0UL);
+    return http_chunked_decode_n_(data, len, out, consumed);
 }
 
 // ── Reading heads and bodies from a connection ────────────────────────────
@@ -1345,16 +1375,22 @@ static struct HttpResponse http_exchange_(const &char host, unsigned short port,
     return resp;
 }
 
-struct HttpResponse http_request(const &char host, unsigned short port,
+struct HttpResponse http_request_n_(const &char host, unsigned short port,
                                   const &char method, const &char path,
                                   const ?&char extra_headers,
                                   const ?&unsigned char body, unsigned long body_len,
                                   ?&int ok) {
-    return http_request_timeout(host, port, method, path, extra_headers, body, body_len,
+    return http_request_timeout_n_(host, port, method, path, extra_headers, body, body_len,
                                 HTTP_DEFAULT_CONNECT_TIMEOUT_MS, 0, ok);
 }
 
-struct HttpResponse http_request_timeout(const &char host, unsigned short port,
+struct HttpResponse http_request(const &char host, unsigned short port, const &char method, const &char path, const ?&char extra_headers, []const unsigned char body_s, ?&int ok) {
+    unsigned long body_len = body_s.len;
+    const ?&unsigned char body = crypto_opt_(body_s);
+    return http_request_n_(host, port, method, path, extra_headers, body, body_len, ok);
+}
+
+struct HttpResponse http_request_timeout_n_(const &char host, unsigned short port,
                                           const &char method, const &char path,
                                           const ?&char extra_headers,
                                           const ?&unsigned char body, unsigned long body_len,
@@ -1371,13 +1407,19 @@ struct HttpResponse http_request_timeout(const &char host, unsigned short port,
     return r;
 }
 
+struct HttpResponse http_request_timeout(const &char host, unsigned short port, const &char method, const &char path, const ?&char extra_headers, []const unsigned char body_s, int connect_timeout_ms, int io_timeout_ms, ?&int ok) {
+    unsigned long body_len = body_s.len;
+    const ?&unsigned char body = crypto_opt_(body_s);
+    return http_request_timeout_n_(host, port, method, path, extra_headers, body, body_len, connect_timeout_ms, io_timeout_ms, ok);
+}
+
 struct HttpResponse http_get(const &char host, unsigned short port,
                               const &char path, ?&int ok) {
-    return http_request(host, port, "GET", path, null,
+    return http_request_n_(host, port, "GET", path, null,
                          null, 0UL, ok);
 }
 
-struct HttpResponse http_post(const &char host, unsigned short port, const &char path,
+struct HttpResponse http_post_n_(const &char host, unsigned short port, const &char path,
                                const &char content_type,
                                const ?&unsigned char body, unsigned long body_len,
                                ?&int ok) {
@@ -1389,10 +1431,16 @@ struct HttpResponse http_post(const &char host, unsigned short port, const &char
         hdr.push(ctype);
         hdr.push("\r\n");
     }
-    struct HttpResponse r = http_request(host, port, "POST", path, hdr.as_ptr(),
+    struct HttpResponse r = http_request_n_(host, port, "POST", path, hdr.as_ptr(),
                                           body, body_len, ok);
     hdr.free();
     return r;
+}
+
+struct HttpResponse http_post(const &char host, unsigned short port, const &char path, const &char content_type, []const unsigned char body_s, ?&int ok) {
+    unsigned long body_len = body_s.len;
+    const ?&unsigned char body = crypto_opt_(body_s);
+    return http_post_n_(host, port, path, content_type, body, body_len, ok);
 }
 
 struct HttpClientOptions HttpClientOptions::defaults() {
@@ -1448,7 +1496,7 @@ int http_decode_body(&HttpResponse resp, unsigned long max_out) {
     return result;
 }
 
-struct HttpResponse http_fetch(const &char method, const &char url,
+struct HttpResponse http_fetch_n_(const &char method, const &char url,
                                const ?&char extra_headers,
                                const ?&unsigned char body, unsigned long body_len,
                                const ?&HttpClientOptions optsIn, ?&String final_url,
@@ -1539,18 +1587,30 @@ struct HttpResponse http_fetch(const &char method, const &char url,
     return resp;
 }
 
-struct HttpResponse http_get_url(const &char url, ?&int ok) {
-    return http_fetch("GET", url, null, null, 0UL, null, null, ok);
+struct HttpResponse http_fetch(const &char method, const &char url, const ?&char extra_headers, []const unsigned char body_s, const ?&HttpClientOptions opts, ?&String final_url, ?&int ok) {
+    unsigned long body_len = body_s.len;
+    const ?&unsigned char body = crypto_opt_(body_s);
+    return http_fetch_n_(method, url, extra_headers, body, body_len, opts, final_url, ok);
 }
 
-struct HttpResponse http_post_url(const &char url, const &char content_type,
+struct HttpResponse http_get_url(const &char url, ?&int ok) {
+    return http_fetch_n_("GET", url, null, null, 0UL, null, null, ok);
+}
+
+struct HttpResponse http_post_url_n_(const &char url, const &char content_type,
                                   const ?&unsigned char body, unsigned long body_len, ?&int ok) {
     struct String hdr = String::from("Content-Type: ");
     hdr.push(content_type);
     hdr.push("\r\n");
-    struct HttpResponse r = http_fetch("POST", url, hdr.as_ptr(), body, body_len, null, null, ok);
+    struct HttpResponse r = http_fetch_n_("POST", url, hdr.as_ptr(), body, body_len, null, null, ok);
     hdr.free();
     return r;
+}
+
+struct HttpResponse http_post_url(const &char url, const &char content_type, []const unsigned char body_s, ?&int ok) {
+    unsigned long body_len = body_s.len;
+    const ?&unsigned char body = crypto_opt_(body_s);
+    return http_post_url_n_(url, content_type, body, body_len, ok);
 }
 
 // ── Server: request parsing ───────────────────────────────────────────────
@@ -2161,7 +2221,7 @@ int HttpChunkedWriter::write([]const unsigned char data_s) {
     if (!self.ok) { return 0; }
     if (len == 0UL) { return 1; }
     struct String t = String::new();
-    http_chunked_encode(&t, data, len);
+    http_chunked_encode_n_(&t, data, len);
     unsafe { self.ok = write_all(&self.s, t.as_bytes()); }
     t.free();
     return self.ok;
@@ -2368,7 +2428,7 @@ static int http_conn_task_(?&HttpConnState_ argPtr, int resume_point) {
                 st->respText = http_render_response_(&resp, req.method.eq_cstr("HEAD"), 0);
                 resp.free();
             } else {
-                st->respText = http_build_response(400, "text/plain", (const unsigned char*)"", 0UL);
+                st->respText = http_build_response_n_(400, "text/plain", (const unsigned char*)"", 0UL);
             }
             req.free();
             st->sent = 0UL;

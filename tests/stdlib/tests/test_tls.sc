@@ -718,7 +718,7 @@ static struct HttpResponse route_handler(&HttpRequest req, &HttpCtx ctx) {
             struct WsMessage m;
             if (c.recv_message(&m, 0UL)) {
                 match (m.data) {
-                    case some(d): { c.send_binary(d, m.len); }
+                    case some(d): { unsafe { c.send_binary(((const unsigned char*)d)[0..m.len]); } }
                     case null: { }
                 }
                 m.free();
@@ -763,7 +763,7 @@ void t_https() {
             sprintf(url, "https://localhost:%d/redirect", (int)srv.port);
             int fok = 0;
             struct String fin = String::new();
-            struct HttpResponse r = http_fetch("GET", url, null, null, 0UL, &o, &fin, &fok);
+            struct HttpResponse r = http_fetch("GET", url, null, str_bytes(""), &o, &fin, &fok);
             ASSERT_TRUE(fok);
             ASSERT_EQ(r.status, 200);
             ASSERT_STR_EQ(r.body.as_ptr(), "hello over tls");
@@ -771,13 +771,13 @@ void t_https() {
             r.free();
             fin.free();
             sprintf(url, "https://127.0.0.1:%d/echo", (int)srv.port);
-            r = http_fetch("POST", url, "Content-Type: text/plain\r\n", (const unsigned char*)"posted body", 11UL, &o, null, &fok);
+            r = http_fetch("POST", url, "Content-Type: text/plain\r\n", str_bytes("posted body"), &o, null, &fok);
             ASSERT_TRUE(fok);
             ASSERT_STR_EQ(r.body.as_ptr(), "posted body");
             r.free();
             // a name the certificate doesn't have
             sprintf(url, "https://127.0.0.2:%d/hello", (int)srv.port);
-            r = http_fetch("GET", url, null, null, 0UL, &o, null, &fok);
+            r = http_fetch("GET", url, null, str_bytes(""), &o, null, &fok);
             ASSERT_FALSE(fok);
             ASSERT_EQ(te.code, TLS_ERR_CERT_HOSTNAME);
             r.free();
@@ -794,7 +794,7 @@ void t_https() {
         sprintf(url, "http://localhost:%d/hello", (int)srv.port);
         struct HttpClientOptions o2 = HttpClientOptions::defaults();
         o2.io_timeout_ms = 3000;
-        r = http_fetch("GET", url, null, null, 0UL, &o2, null, &fok);
+        r = http_fetch("GET", url, null, str_bytes(""), &o2, null, &fok);
         ASSERT_FALSE(fok && r.status == 200);
         r.free();
         srv.stop();

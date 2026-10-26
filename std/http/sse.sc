@@ -109,8 +109,14 @@ struct SseParser SseParser::new() {
     return p;
 }
 
-void SseParser::feed(const &unsigned char bytes, unsigned long len) {
+void SseParser::feed_n_(const &unsigned char bytes, unsigned long len) {
     unsafe { self.buf.push_n((const char*)bytes, len); }
+}
+
+void SseParser::feed([]const unsigned char bytes_s) {
+    unsigned long len = bytes_s.len;
+    const &unsigned char bytes = crypto_in_(bytes_s, 0UL);
+    self.feed_n_(bytes, len);
 }
 
 int SseParser::next(&SseEvent out) {
@@ -277,14 +283,14 @@ struct SseClient SseClient::connect_tls(const &char url, const ?&char last_event
 // Moves decoded bytes from 'raw' into the parser; 0 on malformed chunking.
 static int sse_drain_raw_(&SseClient c) {
     if (!c.chunked) {
-        unsafe { c.parser.feed((const &unsigned char)c.raw.as_ptr(), c.raw.length()); }
+        unsafe { c.parser.feed_n_((const &unsigned char)c.raw.as_ptr(), c.raw.length()); }
         c.raw.clear();
         return 1;
     }
     while (!c.raw.is_empty()) {
         if (c.chunk_left > 0UL) {
             unsigned long take = c.raw.length() < c.chunk_left ? c.raw.length() : c.chunk_left;
-            unsafe { c.parser.feed((const &unsigned char)c.raw.as_ptr(), take); }
+            unsafe { c.parser.feed_n_((const &unsigned char)c.raw.as_ptr(), take); }
             c.raw.remove_range(0UL, take);
             c.chunk_left = c.chunk_left - take;
             continue;

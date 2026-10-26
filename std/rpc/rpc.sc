@@ -89,7 +89,7 @@ struct RpcResult rpc_call(const &char host, unsigned short port, const &char pat
     int httpOk = 0;
     struct HttpResponse resp;
     unsafe {
-        resp = http_post(host, port, path, "application/grpc+safec",
+        resp = http_post_n_(host, port, path, "application/grpc+safec",
                           (const unsigned char*)frame.as_ptr(), frame.length(), &httpOk);
     }
     frame.free();

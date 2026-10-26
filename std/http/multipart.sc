@@ -207,7 +207,7 @@ void MultipartBuilder::add_field(const &char name, const &char value) {
     self.body.push("\r\n");
 }
 
-void MultipartBuilder::add_file(const &char name, const &char filename, const &char content_type,
+void MultipartBuilder::add_file_n_(const &char name, const &char filename, const &char content_type,
                                 const &unsigned char data, unsigned long len) {
     self.body.push("--");
     self.body.push_str(&self.boundary);
@@ -220,6 +220,12 @@ void MultipartBuilder::add_file(const &char name, const &char filename, const &c
     self.body.push("\r\n\r\n");
     unsafe { self.body.push_n((const char*)data, len); }
     self.body.push("\r\n");
+}
+
+void MultipartBuilder::add_file(const &char name, const &char filename, const &char content_type, []const unsigned char data_s) {
+    unsigned long len = data_s.len;
+    const &unsigned char data = crypto_in_(data_s, 0UL);
+    self.add_file_n_(name, filename, content_type, data, len);
 }
 
 struct String MultipartBuilder::content_type() const {

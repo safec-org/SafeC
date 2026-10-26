@@ -194,8 +194,7 @@ void t_http_roundtrip() {
         r.free();
 
         const &char body = "posted payload";
-        r = http_post("127.0.0.1", g_http_port, "/echo", "text/plain",
-                      (const unsigned char*)body, str_len(body), &ok);
+        r = http_post("127.0.0.1", g_http_port, "/echo", "text/plain", str_bytes(body), &ok);
         ASSERT_TRUE(ok);
         ASSERT_STR_EQ(r.body.as_ptr(), "posted payload");
         r.free();
@@ -203,8 +202,7 @@ void t_http_roundtrip() {
         // A body many reads long, both ways (server and client read it
         // after the header block through a BufReader<TcpStream>).
         struct String large = String::repeat_str("0123456789abcdef", 6250UL);   // 100000 bytes
-        r = http_post("127.0.0.1", g_http_port, "/echo", "text/plain",
-                      (const unsigned char*)large.as_ptr(), large.length(), &ok);
+        r = http_post("127.0.0.1", g_http_port, "/echo", "text/plain", large.as_bytes(), &ok);
         ASSERT_TRUE(ok);
         ASSERT_EQ(r.body.length(), 100000);
         ASSERT_TRUE(r.body.eq_cstr(large.as_ptr()));
@@ -224,7 +222,7 @@ void t_http_roundtrip() {
         r.free();
 
         ASSERT_STR_EQ(http_reason_phrase(404), "Not Found");
-        struct String raw = http_build_response(200, "text/plain", (const unsigned char*)"hi", 2UL);
+        struct String raw = http_build_response(200, "text/plain", str_bytes("hi"));
         ASSERT_TRUE(raw.starts_with("HTTP/1.1 200"));
         ASSERT_TRUE(raw.ends_with("\r\n\r\nhi"));
         raw.free();
@@ -607,8 +605,7 @@ void t_connect_timeout() {
         if (lfd < 0) return;
 
         t0 = time_mono_ns();
-        struct HttpResponse r = http_request_timeout("127.0.0.1", silentPort, "GET", "/",
-                                                     null, null, 0UL, 2000, 300, &ok);
+        struct HttpResponse r = http_request_timeout("127.0.0.1", silentPort, "GET", "/", null, str_bytes(""), 2000, 300, &ok);
         ASSERT_FALSE(ok);
         ASSERT_TRUE(ms_since(t0) < 2000LL);
         r.free();
@@ -621,8 +618,7 @@ void t_connect_timeout() {
         close(lfd);
 
         // The same limits don't get in the way of a server that answers.
-        r = http_request_timeout("127.0.0.1", g_http_port, "GET", "/echo",
-                                 null, null, 0UL, 2000, 2000, &ok);
+        r = http_request_timeout("127.0.0.1", g_http_port, "GET", "/echo", null, str_bytes(""), 2000, 2000, &ok);
         ASSERT_TRUE(ok);
         ASSERT_EQ(r.status, 200);
         r.free();
@@ -659,9 +655,7 @@ void t_write_to_closed_peer() {
         int tries = 0;
         // Retry while the closer thread comes up (connect refused until then).
         while (1) {
-            struct HttpResponse r = http_request_timeout("127.0.0.1", g_closer_port, "POST", "/",
-                                                         null, (const unsigned char*)body.as_ptr(), n,
-                                                         2000, 2000, &ok);
+            struct HttpResponse r = http_request_timeout("127.0.0.1", g_closer_port, "POST", "/", null, ((const unsigned char*)body.as_ptr())[0..n], 2000, 2000, &ok);
             r.free();
             tries = tries + 1;
             if (tries >= 20) break;

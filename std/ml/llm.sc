@@ -65,7 +65,7 @@ struct String LlmClient::chat(&Vec<struct LlmMessage> messages, ?&int ok) {
     struct HttpResponse resp;
     unsafe {
         resp = http_request(self.host.as_ptr(), self.port, "POST", "/v1/chat/completions",
-                             headers.as_ptr(), (const unsigned char*)body.data, body.len, &httpOk);
+                             headers.as_ptr(), body.as_bytes(), &httpOk);
     }
     unsafe { headers.free(); body.free(); }
 

@@ -419,7 +419,7 @@ static struct HttpResponse mw_gzip_(&HttpRequest req, &HttpCtx ctx, &HttpNext ne
     if (z.len > 0UL && z.len < resp.body.length()) {
         match (z.data) {
             case some(d): {
-                resp.set_body_bytes(d, z.len);
+                resp.set_body_bytes_n_(d, z.len);
                 resp.set_header("Content-Encoding", "gzip");
                 resp.remove_header("ETag");    // the representation changed
             }

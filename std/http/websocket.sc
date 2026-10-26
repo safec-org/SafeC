@@ -353,8 +353,14 @@ int WsConn::send_text(const &char text) {
     return ws_write_frame_(self, WS_OPCODE_TEXT, udata, len);
 }
 
-int WsConn::send_binary(const &unsigned char data, unsigned long len) {
+int WsConn::send_binary_n_(const &unsigned char data, unsigned long len) {
     return ws_write_frame_(self, WS_OPCODE_BINARY, data, len);
+}
+
+int WsConn::send_binary([]const unsigned char data_s) {
+    unsigned long len = data_s.len;
+    const &unsigned char data = crypto_in_(data_s, 0UL);
+    return self.send_binary_n_(data, len);
 }
 
 int WsConn::send_ping() {
