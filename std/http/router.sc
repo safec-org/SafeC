@@ -158,7 +158,7 @@ static int router_match_(&Router rr, &HttpRequest req, &HttpCtx ctx, &String all
                     best = (int)i;
                     http_route_params_clear(&ctx.params);
                     unsigned long k = 0UL;
-                    while (k < tmp.length()) { ctx.params.push(*tmp.at(k)); k = k + 1UL; }
+                    std::swap(&ctx.params, &tmp);   // ctx.params was just emptied
                     tmp.clear();
                 }
             } else {
@@ -396,9 +396,10 @@ static int router_accepts_gzip_(&HttpRequest req) {
             if (t.index_of("q=0.0") >= 0LL && t.index_of("q=0.0") == t.length() - 5UL) { ok = 0; }
         }
         t.free();
-        parts[i].free();
+        unsafe { parts[i].free(); }   // the first n slots hold Strings
         i = i + 1UL;
     }
+    unsafe { forget(parts); }        // each filled slot was freed above
     low.free();
     return ok;
 }

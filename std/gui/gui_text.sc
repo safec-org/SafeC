@@ -258,13 +258,13 @@ int GuiTypeface::load_memory_index(const &unsigned char bytes, unsigned long siz
     unsigned long dir = 0UL;
     if (__tt_tag(self, 0UL, "ttcf")) {
         unsigned int nfonts = __tt_u32(self, 8UL);
-        if (index < 0 || (unsigned int)index >= nfonts) { self.free(); return 0; }
+        if (index < 0 || (unsigned int)index >= nfonts) { unsafe { self.free(); } return 0; }   // free() leaves it empty
         dir = (unsigned long)__tt_u32(self, 12UL + (unsigned long)index * 4UL);
         self.faceIndex = index;
     }
     unsigned int version = __tt_u32(self, dir);
     int cff = __tt_tag(self, dir, "OTTO");
-    if (version != 0x00010000U && !__tt_tag(self, dir, "true") && !cff) { self.free(); return 0; }
+    if (version != 0x00010000U && !__tt_tag(self, dir, "true") && !cff) { unsafe { self.free(); } return 0; }   // free() leaves it empty
     unsigned int numTables = __tt_u16(self, dir + 4UL);
     unsigned int i = 0U;
     while (i < numTables) {
@@ -287,11 +287,11 @@ int GuiTypeface::load_memory_index(const &unsigned char bytes, unsigned long siz
         i = i + 1U;
     }
     if (self.tHead == 0U || self.tHhea == 0U || self.tHmtx == 0U || self.tMaxp == 0U || self.tCmap == 0U) {
-        self.free();
+        unsafe { self.free(); }   // drop in place: free() leaves it empty
         return 0;
     }
     self.hasOutlines = (self.tGlyf != 0U && self.tLoca != 0U) ? 1 : 0;
-    if (!self.hasOutlines && (flags & GUI_FONT_ALLOW_NO_OUTLINES) == 0) { self.free(); return 0; }
+    if (!self.hasOutlines && (flags & GUI_FONT_ALLOW_NO_OUTLINES) == 0) { unsafe { self.free(); } return 0; }   // free() leaves it empty
     unsigned long head = (unsigned long)self.tHead;
     self.unitsPerEm = (int)__tt_u16(self, head + 18UL);
     if (self.unitsPerEm < 16 || self.unitsPerEm > 16384) { self.unitsPerEm = 1000; }
@@ -325,7 +325,7 @@ int GuiTypeface::load_memory_index(const &unsigned char bytes, unsigned long siz
     }
     if (self.ascender <= 0 && self.descender >= 0) { self.ascender = self.unitsPerEm * 8 / 10; self.descender = -self.unitsPerEm / 5; }
     __tt_pick_cmap(self);
-    if (self.cmapSub == 0U) { self.free(); return 0; }
+    if (self.cmapSub == 0U) { unsafe { self.free(); } return 0; }   // free() leaves it empty
     __tt_find_kern(self);
     __tt_find_gpos(self);
     __tt_read_name(self);

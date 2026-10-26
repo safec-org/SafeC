@@ -69,7 +69,7 @@ static double __svg_attr_num(const char* text, unsigned long pos, unsigned long 
     return ok ? r : def;
 }
 
-static struct GuiColor __svg_color(struct String v, int* has) {
+static struct GuiColor __svg_color(const &String v, int* has) {
     unsafe { *has = 1; }
     unsigned long len; unsafe { len = v.len; }
     if (len == 0UL) { unsafe { *has = 0; } return GuiColor::rgba(0U, 0U, 0U, 255U); }
@@ -208,7 +208,7 @@ static void __svg_draw_shape(&GuiWindow win, int ox, int oy,
 
 // Parses a "points" attribute ("x1,y1 x2,y2 ...") into xs/ys arrays.
 // Returns the point count.
-static int __svg_parse_points(struct String pts, double* xs, double* ys, int maxPoints) {
+static int __svg_parse_points(const &String pts, double* xs, double* ys, int maxPoints) {
     int n = 0;
     unsigned long i = 0UL;
     unsigned long len; unsafe { len = pts.len; }
@@ -248,7 +248,7 @@ static void __bezier_flatten(double x0, double y0, double x1, double y1, double 
   }
 }
 
-static void __svg_draw_path(&GuiWindow win, int ox, int oy, struct String d,
+static void __svg_draw_path(&GuiWindow win, int ox, int oy, const &String d,
                              struct GuiColor fill, int hasFill, struct GuiColor stroke, int hasStroke) {
     unsigned long len; unsafe { len = d.len; }
     unsigned long i = 0UL;
@@ -369,9 +369,10 @@ int GuiWindow::draw_svg(int ox, int oy, const &char svgText) {
             double w = __svg_attr_num(svgText, nameEnd, tagEnd, "width", 0.0);
             double h = __svg_attr_num(svgText, nameEnd, tagEnd, "height", 0.0);
             struct String fillStr = __svg_attr(svgText, nameEnd, tagEnd, "fill");
-            int hasFill; struct GuiColor fill = __svg_color(fillStr, &hasFill);
-            unsafe { fillStr.free(); }
-            if (!hasFill && fillStr.len == 0UL) { hasFill = 1; fill = GuiColor::rgba(0U,0U,0U,255U); }
+            int hasFill; struct GuiColor fill = __svg_color(&fillStr, &hasFill);
+            int noFillAttr = fillStr.len == 0UL;   // read before the free (free() empties it)
+            fillStr.free();
+            if (!hasFill && noFillAttr) { hasFill = 1; fill = GuiColor::rgba(0U,0U,0U,255U); }
             if (hasFill) { self.fill_rect(ox + (int)x, oy + (int)y, (int)w, (int)h, fill); }
         }
         else if (__svg_tag_is(svgText, nameStart, nameLen, "circle", 6UL)) {
@@ -379,7 +380,7 @@ int GuiWindow::draw_svg(int ox, int oy, const &char svgText) {
             double cy = __svg_attr_num(svgText, nameEnd, tagEnd, "cy", 0.0);
             double r = __svg_attr_num(svgText, nameEnd, tagEnd, "r", 0.0);
             struct String fillStr = __svg_attr(svgText, nameEnd, tagEnd, "fill");
-            int hasFill; struct GuiColor fill = __svg_color(fillStr, &hasFill);
+            int hasFill; struct GuiColor fill = __svg_color(&fillStr, &hasFill);
             unsafe { hasFill = (fillStr.len == 0UL) ? 1 : hasFill; fillStr.free(); }
             if (hasFill) {
                 int yy = -(int)r;
@@ -403,7 +404,7 @@ int GuiWindow::draw_svg(int ox, int oy, const &char svgText) {
             double x2 = __svg_attr_num(svgText, nameEnd, tagEnd, "x2", 0.0);
             double y2 = __svg_attr_num(svgText, nameEnd, tagEnd, "y2", 0.0);
             struct String strokeStr = __svg_attr(svgText, nameEnd, tagEnd, "stroke");
-            int hasStroke; struct GuiColor stroke = __svg_color(strokeStr, &hasStroke);
+            int hasStroke; struct GuiColor stroke = __svg_color(&strokeStr, &hasStroke);
             unsafe { hasStroke = (strokeStr.len == 0UL) ? 1 : hasStroke; strokeStr.free(); }
             if (hasStroke) { self.draw_line(ox + (int)x1, oy + (int)y1, ox + (int)x2, oy + (int)y2, stroke); }
         }
@@ -412,13 +413,13 @@ int GuiWindow::draw_svg(int ox, int oy, const &char svgText) {
             int isPolygon = (nameLen == 7UL) ? 1 : 0;
             struct String ptsStr = __svg_attr(svgText, nameEnd, tagEnd, "points");
             double xs[GUI_SVG_MAX_POINTS]; double ys[GUI_SVG_MAX_POINTS];
-            int n = __svg_parse_points(ptsStr, xs, ys, GUI_SVG_MAX_POINTS);
+            int n = __svg_parse_points(&ptsStr, xs, ys, GUI_SVG_MAX_POINTS);
             unsafe { ptsStr.free(); }
             struct String fillStr = __svg_attr(svgText, nameEnd, tagEnd, "fill");
-            int hasFill; struct GuiColor fill = __svg_color(fillStr, &hasFill);
+            int hasFill; struct GuiColor fill = __svg_color(&fillStr, &hasFill);
             unsafe { if (isPolygon && fillStr.len == 0UL) { hasFill = 1; fill = GuiColor::rgba(0U,0U,0U,255U); } fillStr.free(); }
             struct String strokeStr = __svg_attr(svgText, nameEnd, tagEnd, "stroke");
-            int hasStroke; struct GuiColor stroke = __svg_color(strokeStr, &hasStroke);
+            int hasStroke; struct GuiColor stroke = __svg_color(&strokeStr, &hasStroke);
             unsafe { strokeStr.free(); }
             if (isPolygon) { __svg_draw_shape(self, ox, oy, xs, ys, n, fill, hasFill, stroke, hasStroke); }
             else { __svg_stroke_polyline(self, ox, oy, xs, ys, n, 0, hasStroke ? stroke : GuiColor::rgba(0U,0U,0U,255U)); }
@@ -426,12 +427,12 @@ int GuiWindow::draw_svg(int ox, int oy, const &char svgText) {
         else if (__svg_tag_is(svgText, nameStart, nameLen, "path", 4UL)) {
             struct String dStr = __svg_attr(svgText, nameEnd, tagEnd, "d");
             struct String fillStr = __svg_attr(svgText, nameEnd, tagEnd, "fill");
-            int hasFill; struct GuiColor fill = __svg_color(fillStr, &hasFill);
+            int hasFill; struct GuiColor fill = __svg_color(&fillStr, &hasFill);
             unsafe { if (fillStr.len == 0UL) { hasFill = 1; fill = GuiColor::rgba(0U,0U,0U,255U); } fillStr.free(); }
             struct String strokeStr = __svg_attr(svgText, nameEnd, tagEnd, "stroke");
-            int hasStroke; struct GuiColor stroke = __svg_color(strokeStr, &hasStroke);
+            int hasStroke; struct GuiColor stroke = __svg_color(&strokeStr, &hasStroke);
             unsafe { strokeStr.free(); }
-            __svg_draw_path(self, ox, oy, dStr, fill, hasFill, stroke, hasStroke);
+            __svg_draw_path(self, ox, oy, &dStr, fill, hasFill, stroke, hasStroke);
             unsafe { dStr.free(); }
         }
 

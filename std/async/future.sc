@@ -228,6 +228,15 @@ int WaitList::wake_all() {
 
 int WaitList::len() const { return self.count; }
 
+void WaitList::drop() {
+    int i = 0;
+    while (i < ASYNC_WAITERS) {
+        if (self.serial[i] != 0) { self.serial[i] = 0; self.w[i].drop(); }
+        i = i + 1;
+    }
+    self.count = 0;
+}
+
 // ── YieldNow ───────────────────────────────────────────────────────────────
 
 struct YieldNow YieldNow::new() {

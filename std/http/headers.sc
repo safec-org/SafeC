@@ -249,9 +249,7 @@ void HttpHeaders::set(const &char name, const &char value) {
                 f.value = String::from(value);
                 done = 1;
             } else {
-                f.name.free();
-                f.value.free();
-                self.fields.remove(i);
+                drop(self.fields.remove(i));
                 continue;
             }
         }
@@ -266,9 +264,7 @@ unsigned long HttpHeaders::remove(const &char name) {
     while (i < self.fields.length()) {
         &HttpHeaderField f = self.fields.at(i);
         if (http_name_eq(f.name.as_ptr(), name)) {
-            f.name.free();
-            f.value.free();
-            self.fields.remove(i);
+            drop(self.fields.remove(i));
             n = n + 1UL;
             continue;
         }

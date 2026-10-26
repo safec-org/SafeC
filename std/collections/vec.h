@@ -22,6 +22,7 @@
 #include <std/mem.h>
 #include <std/panic.h>
 #include <std/cmp.h>
+#include <std/ownership.h>
 
 namespace std {
 

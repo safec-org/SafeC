@@ -239,7 +239,7 @@ void ThreadPool::wait_idle() {
 void ThreadPool::shutdown() { self.drop(); }
 
 void ThreadPool::drop() {
-    if (self.nthreads == 0) return;
+    if (self.nthreads == 0) { self.timers.drop(); return; }
     mutex_lock(&self.mu);
     self.stopping = 1;
     cond_broadcast(&self.work_cv);
@@ -250,6 +250,7 @@ void ThreadPool::drop() {
     cond_destroy(&self.work_cv);
     cond_destroy(&self.done_cv);
     mutex_destroy(&self.mu);
+    self.timers.drop();
 }
 
 int ThreadPool::live_count() {

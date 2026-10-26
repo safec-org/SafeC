@@ -88,6 +88,7 @@ constexpr uint8_t kODrop   = 2;   // dropped (drop() or a 'consume' method)
 constexpr uint8_t kOMove   = 4;   // moved out (returned, passed by value, stored elsewhere, sent)
 constexpr uint8_t kOUninit = 8;   // declared without an initializer
 constexpr uint8_t kOBuild  = 16;  // with kOLive: being built field by field (its fields may be assigned)
+constexpr uint8_t kOSub    = 32;  // a field of a Drop value, dropped/moved out until it is assigned again
 constexpr uint8_t kOGone   = kODrop | kOMove;
 using OwnKey = std::pair<int, std::string>;
 
@@ -1148,6 +1149,9 @@ State Walker::join(const State &a, const State &b) {
     for (auto &kv : b.marks) sortedUnion(r.marks[kv.first], kv.second);
     r.own = a.own;
     for (auto &kv : b.own) r.own[kv.first] |= kv.second;
+    // A field split off on one side only is still in place on the other.
+    for (auto &kv : r.own)
+        if ((kv.second & kOSub) && (!a.own.count(kv.first) || !b.own.count(kv.first))) kv.second |= kOLive;
     r.tok = a.tok;
     for (auto &kv : b.tok) sortedUnion(r.tok[kv.first], kv.second);
     r.lent = a.lent;
@@ -2310,7 +2314,8 @@ void Walker::ownUse(const std::vector<CellRef> &cells, SourceLocation loc, bool 
             } else if (b & kOUninit) {
                 // Initialized in place: field by field, or through a
                 // reference ('init(&x)', 'x.reset()').
-                it->second = write ? (kOLive | kOBuild) : kOLive;
+                bool partial = c.path != it->first.second && underPrefix(c.path, it->first.second);
+                it->second = (write || partial) ? (kOLive | kOBuild) : kOLive;
             }
         }
     }
@@ -2325,19 +2330,38 @@ void Walker::ownConsumeKey(int obj, const std::string &path, uint8_t kind, Sourc
         dtorFields_.insert(path.substr(1, e == std::string::npos ? std::string::npos : e - 1));
         return;
     }
+    // 'x.f' dropped or moved out of a Drop value 'x': x is unusable as a
+    // whole until x.f is assigned again (then x owns a field again).
     for (auto it : ownOverlap(obj, path)) {
         const std::string &k = it->first.second;
-        if (k != path && underPrefix(path, k)) {
-            // 'x.f' moved/dropped where 'x' itself implements Drop.
-            reportN(loc, "cannot " + std::string(kind == kODrop ? "drop '" : "move '") + ownDesc(obj, path) +
-                             "' out of '" + ownDesc(obj, k) + "': '" +
-                             typeName(ov != ownVars_.end() ? ov->second.ty : nullptr) +
-                             "' implements Drop, so it must be dropped as a whole (borrow the field with '&', or "
-                             "take it out with std::replace)",
+        if (k == path || !underPrefix(path, k) || (it->second & kOSub)) continue;
+        if (it->second & kOGone) {
+            ownUse({{obj, path}}, loc, false);
+            return;
+        }
+        auto sub = cur_.own.find({obj, path});
+        if (sub != cur_.own.end() && (sub->second & kOGone)) {
+            reportN(loc, std::string(kind == kODrop ? "double drop: '" : "use of '") + ownDesc(obj, path) + "' " +
+                             (kind == kODrop ? "" : "after it ") + ((sub->second & kOLive) ? "may have been " : "was ") +
+                             goneWord(sub->second) + (kind == kODrop ? " already" : ""),
                     {});
+        }
+        cur_.own[{obj, path}] = kind | kOSub;
+        goneAt_[{obj, path}] = loc;
+        return;
+    }
+    for (auto it : ownOverlap(obj, path)) {
+        const std::string &k = it->first.second;
+        uint8_t b = it->second;
+        if (b & kOSub) {
+            if (b & kOGone)
+                reportN(loc, "'" + ownDesc(obj, path) + "' is " + (kind == kODrop ? "dropped" : "moved") + " while its field '" +
+                                 ownDesc(obj, k) + "' " + ((b & kOLive) ? "may be" : "is") + " " + goneWord(b) +
+                                 " (out of it): assign '" + ownDesc(obj, k) + "' a new value first",
+                        {});
+            it->second = kind | kOSub;
             continue;
         }
-        uint8_t b = it->second;
         if (b & kOGone) {
             std::vector<std::pair<SourceLocation, std::string>> notes;
             auto g = goneAt_.find(it->first);
@@ -2421,7 +2445,7 @@ void Walker::ownMove(Expr &e, const EV &v, uint8_t kind) {
     if (isPlaceExpr(&e)) {
         // A subscript with a run-time index on an owned array.
         for (auto &c : v.cells)
-            if (tracked(c.obj) && hasStar(c.path)) {
+            if (tracked(c.obj) && !ownVars_[c.obj].pseudo && hasStar(c.path)) {
                 reportN(e.loc, "ownership of an array element selected at run time can't be tracked; use "
                                "constant indices, or a Vec, for values of Drop type",
                         {});
@@ -2437,9 +2461,21 @@ void Walker::ownAssign(const std::vector<CellRef> &cells, SourceLocation loc) {
     if (!cur_.live) return;
     for (auto &c : cells) {
         if (!tracked(c.obj)) continue;
+        // Refilling a field dropped/moved out of a Drop value.
+        bool refill = false;
+        auto sub = cur_.own.find({c.obj, c.path});
+        if (sub != cur_.own.end() && (sub->second & kOSub)) {
+            if (sub->second & kOLive)
+                reportN(loc, "assigning to '" + ownDesc(c.obj, c.path) + "', which may still hold a value of Drop type "
+                             "(it was dropped or moved on some paths only): drop it on every path first",
+                        {});
+            cur_.own.erase(sub);
+            refill = true;
+        }
         for (auto it : ownOverlap(c.obj, c.path)) {
             const std::string &k = it->first.second;
             uint8_t b = it->second;
+            if (refill) continue;
             // An element picked at run time of an array kept as one unit:
             // which element it overwrites is unknown (not tracked).
             if (hasStar(c.path) && k != c.path) { it->second = kOLive; continue; }
@@ -2491,7 +2527,7 @@ void Walker::ownExitFrame(const Frame &f, SourceLocation loc, const char *how) {
         bool haveLive = false, haveMixed = false;
         std::string live, mixed;
         for (auto it = cur_.own.lower_bound({obj, ""}); it != cur_.own.end() && it->first.first == obj; ++it) {
-            if (!(it->second & kOLive)) continue;
+            if (!(it->second & kOLive) || (it->second & kOSub)) continue;
             if (it->second & kOGone) { if (!haveMixed) { haveMixed = true; mixed = it->first.second; } }
             else if (!haveLive) { haveLive = true; live = it->first.second; }
         }

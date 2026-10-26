@@ -12,7 +12,9 @@ extern void* malloc(size_t size);
 extern void  free(void* ptr);
 
 static void ssm_release_(&FloatTensor t) {
-    t->free();
+    // A heap tensor: destroyed in place through the reference, then its
+    // memory released (a Box the checker can't see).
+    unsafe { t->free(); }
     unsafe { free((void*)t); }
 }
 

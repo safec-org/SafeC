@@ -722,7 +722,7 @@ const &char Widget::node_text(int node) const {
         int r = 0;
         while (r < self.rowCount) {
             unsigned long c = 0UL;
-            while (c < oldCols) { cells.push(*self.cells.at((unsigned long)r * oldCols + c)); c = c + 1UL; }
+            while (c < oldCols) { cells.push(std::replace(self.cells.at((unsigned long)r * oldCols + c), String::new())); c = c + 1UL; }
             cells.push(String::new());
             r = r + 1;
         }
@@ -2102,7 +2102,7 @@ static void __w_mb_closed(&Widget dlg, int result, ?&void data) {
             user(dlg, result, dlg.userData);
         }
     }
-    dlg.free();
+    unsafe { dlg.free(); }   // a heap widget: destroyed in place, the UI no longer references it
 }
 
 void gui_message_box_raw_(&GuiUi ui, const &char title, const &char text, int buttons,

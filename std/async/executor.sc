@@ -133,6 +133,8 @@ struct Context local_context_(&LocalExecutor ex, struct Waker w) {
     return cx;
 }
 
+void LocalExecutor::drop() { self.timers.drop(); }
+
 struct LocalExecutor LocalExecutor::new() {
     struct LocalExecutor ex;
     ex.head = null;

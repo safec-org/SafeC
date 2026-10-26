@@ -136,7 +136,9 @@ static void norm_heap_end_(?&TensorArena cur) {
 }
 
 static void norm_drop_(&FloatTensor t) {
-    t->free();
+    // A heap tensor: destroyed in place through the reference, then its
+    // memory released (a Box the checker can't see).
+    unsafe { t->free(); }
     unsafe { free((void*)t); }
 }
 

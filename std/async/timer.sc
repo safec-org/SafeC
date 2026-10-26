@@ -72,6 +72,8 @@ int TimerQueue::advance(long long now_ms) {
 
 long long TimerQueue::now_ms() const { return self.now_ms_; }
 
+void TimerQueue::drop() { self.overflow.drop(); }
+
 long long TimerQueue::next_deadline() const {
     unsigned long next = timerq_next_tick_(&self.wheel);
     long long d = next == 0UL ? -1LL : self.origin_ms + (long long)next;

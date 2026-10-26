@@ -120,7 +120,9 @@ struct HttpRequest {
 struct TcpStream {
     int fd;
 
-    // Wraps an open socket fd (owned by the stream from then on: close()).
+    // Wraps an open socket fd. A TcpStream is a handle, not an owner (std
+    // makes short-lived streams over fds that something else closes), so
+    // it is not a Drop type: whoever owns the fd calls close() once.
     static struct TcpStream from_fd(int fd);
 
     // At most n bytes; the count read, 0 once the peer closed, -1 on error.
@@ -128,8 +130,7 @@ struct TcpStream {
     // At most n bytes; the count written, -1 on error.
     long long write(const &unsigned char buf, unsigned long n);
     // Closes the socket. 0 on success.
-    int close() consume;
-    void drop();   // close(), ignoring the result
+    int close();
 };
 
 // Resolves 'host' (a numeric IPv4 address or a hostname, via

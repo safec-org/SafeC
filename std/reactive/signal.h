@@ -67,8 +67,13 @@ void signal_subscribe(&Signal<T> s, fn void(?&U) listener, ?&U userdata) {
     s.subs.push(sub);
 }
 
+// A copy of the value. For a value that owns something (a String), a copy
+// would share it: use get_ref() (or clone what it refers to) instead.
 generic<T>
-T Signal::get() const { return self.value; }
+T Signal::get() const {
+    if const (needs_drop(T)) panic_at("Signal::get: the value owns resources; use get_ref()", "signal.h", 0);
+    unsafe { return self.value; }
+}
 
 generic<T>
 &T Signal::get_ref() {
@@ -77,7 +82,7 @@ generic<T>
 
 generic<T>
 void Signal::set(T val) {
-    self.value = val;
+    drop(std::replace(&self.value, val));   // the old value
     self.version = self.version + 1UL;
     self.notify();
 }
@@ -112,6 +117,9 @@ generic<T>
 void Signal::free() { self.drop(); }
 
 generic<T>
-void Signal::drop() { self.subs.free(); }
+void Signal::drop() {
+    self.subs.free();
+    drop(self.value);
+}
 
 } // namespace std

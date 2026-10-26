@@ -147,6 +147,9 @@ struct LocalExecutor {
 
     int  live_count() const;
     int  has_ready() const;       // some task is woken
+    // Releases the timer queue. Spawned tasks are owned by their AsyncTask
+    // storage, not by the executor: finish or abort them first.
+    void drop();
     // Internal: one round of run() with the Park hooks installed.
     void install_park_(void* unpark, void* park);
 };

@@ -194,6 +194,10 @@ struct WaitList {
     // Wake (and remove) every waiter. Returns how many.
     int  wake_all();
     int  len() const;
+    // Releases every registered waker (without waking it). A WaitList owns
+    // the waker clones registered in it, so whatever holds one (a mutex, a
+    // channel, a timer queue) drops it.
+    void drop();
 };
 
 // ── TimerQueue ─────────────────────────────────────────────────────────────
@@ -232,6 +236,9 @@ struct TimerQueue {
     // Internal, with 'lock' held: wait in 'overflow' for a free slot (0 =
     // that is full too), and leave it.
     int       overflow_locked_(long long deadline_ms, const &Waker w, int id);
+    // Releases the wakers of Sleeps still waiting for a wheel slot. Every
+    // Sleep must be dropped before its queue is.
+    void      drop();
 };
 
 // ── Context ────────────────────────────────────────────────────────────────

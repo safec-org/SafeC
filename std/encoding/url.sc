@@ -246,9 +246,7 @@ void QueryParams::set(const &char key, const &char value) {
                 p.value = String::from(value);
                 done = 1;
             } else {
-                p.key.free();
-                p.value.free();
-                self.pairs.remove(i);
+                drop(self.pairs.remove(i));
                 continue;
             }
         }
@@ -263,9 +261,7 @@ unsigned long QueryParams::remove(const &char key) {
     while (i < self.pairs.length()) {
         &UrlQueryPair p = self.pairs.at(i);
         if (url_cstr_eq_(p.key.as_ptr(), key)) {
-            p.key.free();
-            p.value.free();
-            self.pairs.remove(i);
+            drop(self.pairs.remove(i));
             n = n + 1UL;
             continue;
         }
@@ -284,9 +280,7 @@ void QueryParams::sort() {
             &UrlQueryPair a = self.pairs.at(j - 1UL);
             &UrlQueryPair b = self.pairs.at(j);
             if (a.key.cmp(&b.key) <= 0) { break; }
-            struct UrlQueryPair t = *a;
-            *a = *b;
-            *b = t;
+            std::swap(a, b);
             j = j - 1UL;
         }
         i = i + 1UL;

@@ -17,7 +17,9 @@ extern void  free(void* ptr);
 // ── Temporaries ──────────────────────────────────────────────────────────────
 void attn_release_(&FloatTensor t) {
     match (t->owner) { case some(a): { return; } case null: { } }   // its TensorArena owns it
-    t->free();
+    // A heap tensor: destroyed in place through the reference, then its
+    // memory released (a Box the checker can't see).
+    unsafe { t->free(); }
     unsafe { free((void*)t); }
 }
 

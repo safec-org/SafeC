@@ -333,8 +333,7 @@ static unsigned long http_headers_rewrite_(&String raw, const &char name, const 
             out.push(vp);
         }
     }
-    raw.free();
-    *raw = out;
+    std::replace(raw, out).drop();
     return removed;
 }
 
@@ -669,8 +668,6 @@ long long TcpStream::read(&unsigned char buf, unsigned long n) {
 long long TcpStream::write(const &unsigned char buf, unsigned long n) {
     unsafe { return (long long)sock_write_(self.fd, (const void*)buf, n); }
 }
-
-void TcpStream::drop() { self.close(); }
 
 int TcpStream::close() {
     unsafe { return sock_close_(self.fd); }
@@ -1440,8 +1437,7 @@ struct HttpResponse http_fetch(const &char method, const &char url,
     }
     match (final_url) {
         case some(fu): {
-            fu.free();
-            *fu = cur.to_string();
+            std::replace(fu, cur.to_string()).drop();
         }
         case null: { }
     }
@@ -1485,8 +1481,7 @@ static void http_origin_form_(&String path) {
     struct Url u = Url::parse(path.as_ptr(), &ok);
     if (ok) {
         struct String t = u.request_target();
-        path.free();
-        *path = t;
+        std::replace(path, t).drop();
     }
     u.free();
 }
@@ -1539,7 +1534,8 @@ static int http_read_request_(&BufReader<TcpStream> in, const &HttpServerConfig 
         http_origin_form_(&req.path);
     }
     unsigned long pi = 0UL;
-    while (pi < np) { parts[pi].free(); pi = pi + 1UL; }
+    while (pi < np) { unsafe { parts[pi].free(); } pi = pi + 1UL; }   // split filled the first np
+    unsafe { forget(parts); }                                          // ... all freed above
     requestLine.free();
     req.headers.free();
     req.headers = rest;

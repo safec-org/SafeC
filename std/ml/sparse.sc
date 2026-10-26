@@ -24,7 +24,9 @@ static void sp_heap_end_(?&TensorArena cur) {
 }
 
 static void sp_drop_(&FloatTensor t) {
-    t.free();
+    // A heap tensor: destroyed in place through the reference, then its
+    // memory released (a Box the checker can't see).
+    unsafe { t.free(); }
     unsafe { match (t->owner) { case some(a): { } case null: { free((void*)t); } } }
 }
 

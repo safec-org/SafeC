@@ -209,7 +209,7 @@ static &FloatTensor __row_cyclic_shift(&FloatTensor in, unsigned long shift) {
     }
 
     if (didShift) {
-        Qs->free(); Ks->free(); Vs->free();
+        unsafe { Qs->free(); Ks->free(); Vs->free(); }   // heap tensors, freed below
         unsafe { free((void*)Qs); free((void*)Ks); free((void*)Vs); }
         &FloatTensor out = __row_cyclic_shift(winOut, seqLen - shift);
         winOut->free();
