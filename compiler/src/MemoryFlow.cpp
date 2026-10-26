@@ -1736,23 +1736,24 @@ EV Walker::evalCall(CallExpr &e) {
     return applySummary(e, callee, *s, args);
 }
 
-// The site key of a fresh object (or mark) a call's summary names: the
-// callee's own key under this call site. Through a call back into the
-// current recursive component the key would grow by one call-site prefix
-// per fixpoint iteration, so there it keeps only the part after the last
-// recursive call site's 'rec/' — still one object per allocation site in
-// the callee (a Vec's new buffer and a map's new arrays stay apart, so
-// freeing one doesn't dangle the other), merged only across recursion
-// depths.
+// A call's fresh objects are named by the call site plus the callee's own
+// name for them, a chain of call sites ending in the allocation site. Within
+// a recursive component, and past a length cap, the chain is cut down to its
+// allocation site ('rec:<site>', 'deep:<site>') so names stay finite. Keeping
+// the site apart, rather than folding every object such a call makes into
+// one, keeps a free of one allocation (a map's rehash dropping its old
+// arrays) from tainting the unrelated ones the same call made (the buffer of
+// a Vec beside the map).
 std::string Walker::calleeSite(const Expr &call, FunctionDecl *callee, const std::string &key) {
-    std::string k = key;
-    if (drv_.sameScc(&fn_, callee)) {
-        size_t at = k.rfind("/rec/");
-        if (at != std::string::npos) k = k.substr(at + 5);
-        k = "rec/" + k;
-    }
+    auto leaf = [&]() {
+        std::string l = key.substr(key.rfind('/') + 1);
+        for (const char *pre : {"rec:", "deep:"})
+            if (l.compare(0, std::strlen(pre), pre) == 0) l = l.substr(std::strlen(pre));
+        return l;
+    };
+    std::string k = drv_.sameScc(&fn_, callee) ? "rec:" + leaf() : key;
     std::string s = "c" + ptrKey(&call) + "/" + k;
-    if (s.size() > 160) s = "c" + ptrKey(&call) + "/deep";
+    if (s.size() > 160) s = "c" + ptrKey(&call) + "/deep:" + leaf();
     return s;
 }
 

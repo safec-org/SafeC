@@ -7,15 +7,15 @@
 #
 #   // SAFEC-ARGS: <flags>  extra compiler flags; '%root' is the repository
 #                           root ('-I %root' for '#include <std/...>')
-#   // SAFEC-RUN            also link the IR with $CLANG_BIN and run it: the
-#                           program must exit 0 (skipped without a clang)
+#   // SAFEC-RUN            also build it with --emit-bin (safec finds a clang
+#                           new enough for its IR) and run it: the program
+#                           must exit 0
 #
-#   SAFEC_BIN=path/to/safec [CLANG_BIN=clang] compiler/tests/run.sh
+#   SAFEC_BIN=path/to/safec compiler/tests/run.sh
 set -uo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 SAFEC_BIN="${SAFEC_BIN:-$HERE/../build/safec}"
-CLANG_BIN="${CLANG_BIN:-clang}"
 ROOT="$(cd "$HERE/../.." && pwd)"
 OUT="$(mktemp -d)"
 trap 'rm -rf "$OUT"' EXIT
@@ -67,10 +67,11 @@ while IFS= read -r -d '' t; do
         echo "  [FAIL] $name"
         sed 's/^/      /' "$OUT/check.txt"
         FAIL=$((FAIL + 1))
-    elif grep -q '^// SAFEC-RUN' "$t" && command -v "$CLANG_BIN" >/dev/null 2>&1; then
-        # '// SAFEC-RUN': the linked program must also exit 0.
+    elif grep -q '^// SAFEC-RUN' "$t"; then
+        # '// SAFEC-RUN': the built program must also exit 0.
         exe="${ll%.ll}"
-        if ! "$CLANG_BIN" -Wno-override-module "$ll" -o "$exe" >"$OUT/err.txt" 2>&1; then
+        case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) exe="$exe.exe" ;; esac
+        if ! "$SAFEC_BIN" "$t" -O2 --emit-bin ${args[@]+"${args[@]}"} -o "$exe" >"$OUT/err.txt" 2>&1; then
             echo "  [FAIL] $name (link)"
             sed 's/^/      /' "$OUT/err.txt"
             FAIL=$((FAIL + 1))

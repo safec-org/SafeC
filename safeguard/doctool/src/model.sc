@@ -78,13 +78,12 @@ static int is_header(const &String rel) { return rel.ends_with(".h"); }
 
 // ── links ────────────────────────────────────────────────────────────────────
 
-// name -> index into c.link_urls; the first registration of a name wins.
-static struct StrMap<long long> gLinks;
-
+// The first link registered for a name wins.
 static void add_link(&Crate c, const &String key, const &String url) {
-    if (key.len == 0UL || gLinks.contains(key.as_ptr())) { return; }
+    if (key.len == 0UL) { return; }
+    if (c.links.contains(key.as_ptr())) { return; }
     c.link_urls.push(url.clone());
-    gLinks.insert(key.as_ptr(), (long long)c.link_urls.len - 1LL);
+    c.links.insert(key.as_ptr(), (long long)c.link_urls.len - 1LL);
 }
 
 static void add_link_cstr(&Crate c, const &char key, const &String url) {
@@ -94,7 +93,9 @@ static void add_link_cstr(&Crate c, const &char key, const &String url) {
 }
 
 long long crate_resolve(const &Crate c, const &char name) {
-    return gLinks.get(name).default(-1LL);
+    ?&long long e = c.links.get(name);
+    match (e) { case some(v): { return *v; } case null: { } }
+    return -1LL;
 }
 
 // Registers 'Name', 'ns::Name' and each member 'Name::m' / 'ns::Name::m'.
@@ -269,7 +270,7 @@ int crate_load(&Crate c, const &char config_path) {
     readme.free();
     int show_private = util_vbool(&c.cfg, "private");
 
-    gLinks = StrMap::new();
+    c.links = StrMap::new();
 
     struct String empty = String::new();
     ensure_module(c, &empty);

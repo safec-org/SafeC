@@ -1,0 +1,11 @@
+# Tests where scc and safec are known to disagree. difftest.py still runs
+# them, and fails if one starts passing (remove it here) or if a test not
+# listed here fails. Reasons are in SUBSET.md, "Not supported" and
+# "Differences".
+
+# SIMD vector types are not supported
+ctests/simd/vector_align.sc
+# element references into a container's buffer ('v.at(i)', 'm.get(k)')
+# are not tracked, so one held across a push or a rehashing insert is not
+# reported (SUBSET.md, "Memory-flow analysis")
+ctests/lifetimes/container_refs_err.sc

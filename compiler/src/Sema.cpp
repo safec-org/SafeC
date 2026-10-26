@@ -4145,13 +4145,12 @@ TypePtr Sema::checkMember(MemberExpr &e) {
 
     // Auto-dereference references for dot access (SafeC references are non-null
     // and always valid — dot access on a reference implicitly dereferences it)
-    bool viaRef = false, derefMut = false;
+    bool viaRef = false;
     if (!e.isArrow && baseTy->kind == TypeKind::Reference) {
+        viaRef = true;
         auto &rt = static_cast<ReferenceType &>(*baseTy);
         checkNullabilityDeref(baseTy, e.loc);
         e.isLValue = rt.mut;
-        viaRef = true;
-        derefMut = rt.mut;
         baseTy = rt.base;
     }
 
@@ -4182,7 +4181,7 @@ TypePtr Sema::checkMember(MemberExpr &e) {
         if (validIdx) {
             size_t idx = static_cast<size_t>(std::stoul(e.field));
             if (idx < tt.elementTypes.size()) {
-                e.isLValue = e.base->isLValue;
+                if (!viaRef) e.isLValue = e.base->isLValue; // see the struct case below
                 return tt.elementTypes[idx];
             }
         }
@@ -4214,12 +4213,13 @@ TypePtr Sema::checkMember(MemberExpr &e) {
         diag_.error(e.loc, "struct '" + st->name + "' has no field '" + e.field + "'");
         return makeError();
     }
-    // Through a reference the field is the referent's storage, writable
-    // exactly when the reference is mutable — whether the base is a
-    // variable ('r.x' with 'const &T r' is read-only even though 'r' itself
-    // is an lvalue) or a call ('v.at(i).field' designates the element's
-    // field, not a copy of it).
-    if (!e.isArrow) e.isLValue = viaRef ? derefMut : e.base->isLValue;
+    // A field reached through a reference names the referent's storage, so
+    // its lvalue-ness is the reference's mutability (set above), not the
+    // base expression's: 'v.at(i).items' is as much an lvalue as 'r.items'
+    // even though the call 'v.at(i)' itself isn't one. Taking it from the
+    // base made CodeGen copy the field into a temporary for a method call
+    // ('v.at(i).items.push(x)'), so the call mutated the copy.
+    if (!e.isArrow && !viaRef) e.isLValue = e.base->isLValue;
     return fd->type;
 }
 

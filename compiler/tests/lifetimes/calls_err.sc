@@ -76,6 +76,27 @@ int mutual_recursion() {
     return *p;                            // EXPECT-ERROR: use of 'p' (&heap reference) after std::dealloc() freed it
 }
 
+// Allocations a recursive call makes stay apart by allocation site: after
+// drop_p frees the one in h.p, the one in h.q is still live (all of a
+// recursive call's allocations used to be one object, so peek_q was
+// reported too). The second level's drop_p frees what the first one did.
+struct Pair { ?&heap int p; ?&heap int q; };
+void drop_p(&struct Pair h) { match (h.p) { case some(p): { dealloc(p); } case null: { } } }
+int peek_p(&struct Pair h) { match (h.p) { case some(p): { return *p; } case null: { } } return 0; }
+int peek_q(&struct Pair h) { match (h.q) { case some(q): { return *q; } case null: { } } return 0; }
+
+int recursive_fresh(&struct Pair h, int d) {
+    if (d == 0) {
+        h.p = new int;
+        h.q = new int;
+        return 0;
+    }
+    int x = recursive_fresh(h, d - 1);
+    drop_p(h);                            // EXPECT-ERROR: call to 'drop_p' frees memory after std::dealloc() freed it
+    x = x + peek_q(h);
+    return x + peek_p(h);                 // EXPECT-ERROR: call to 'peek_p' reads a &heap reference after std::dealloc() freed it
+}
+
 // Generic instance and method.
 generic<T> void drop_it(&heap T p) { dealloc((&heap int)p); }
 void Box::clear() { dealloc(self.v); }
