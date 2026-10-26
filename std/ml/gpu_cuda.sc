@@ -384,7 +384,7 @@ static const char* cuda_kernel_source_() {
     "// Up to 32 buffers per launch, blockIdx.y picking one. mode 0: fp32 -> 16-bit;\n"
     "// 1: 16-bit -> fp32 times scale; 2: fp32 -> fp32 times scale (in place allowed).\n"
     "// Modes 1 and 2 set *flag = 1 when a result is not finite.\n"
-    "struct CvtTab { const void* src[32]; void* dst[32]; unsigned n[32]; };\n"
+    "struct CvtTab { const unsigned char* src[32]; unsigned char* dst[32]; unsigned n[32]; };\n"
     "#define GTID (blockIdx.x * blockDim.x + threadIdx.x)\n"
     "#define GSTRIDE (gridDim.x * blockDim.x)\n"
     "__device__ __forceinline__ unsigned pack2(float lo, float hi, int bf) { return (unsigned)stx(lo, bf) | ((unsigned)stx(hi, bf) << 16); }\n"

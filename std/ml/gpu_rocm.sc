@@ -301,7 +301,7 @@ static const char* rocm_kernel_source_() {
     // Up to 32 buffers per launch, blockIdx.y picking one. mode 0: fp32 ->
     // 16-bit; 1: 16-bit -> fp32 times scale; 2: fp32 -> fp32 times scale (in
     // place allowed). Modes 1 and 2 set *flag = 1 when a result is not finite.
-    "struct CvtTab { const void* src[32]; void* dst[32]; unsigned n[32]; };\n"
+    "struct CvtTab { const unsigned char* src[32]; unsigned char* dst[32]; unsigned n[32]; };\n"
     "extern \"C\" __global__ void cvt_many(CvtTab t, int mode, int bf, float scale, float* flag) {\n"
     "    unsigned b = blockIdx.y, n = t.n[b];\n"
     "    int bad = 0;\n"
