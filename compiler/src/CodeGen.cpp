@@ -3073,7 +3073,7 @@ llvm::Value *CodeGen::genBinary(BinaryExpr &e, FnEnv &env) {
         // of failing through genLValue's "not addressable" default case.
         llvm::Value *lhs = e.left->isLValue ? genLValue(*e.left, env) : nullptr;
         if (!lhs) {
-            lhs = builder_.CreateAlloca(lowerType(e.left->type), nullptr, "opovl.lhs.tmp");
+            lhs = createEntryAlloca(env, lowerType(e.left->type), "opovl.lhs.tmp");
             builder_.CreateStore(genExpr(*e.left, env), lhs);
         }
         auto *rhs = genExpr(*e.right, env);
@@ -3707,7 +3707,7 @@ llvm::Value *CodeGen::genCall(CallExpr &e, FnEnv &env) {
             selfPtr = genLValue(*e.methodBase, env);
         } else {
             // Base is a value expression — allocate temp storage
-            selfPtr = builder_.CreateAlloca(lowerType(e.methodBase->type), nullptr, "self.tmp");
+            selfPtr = createEntryAlloca(env, lowerType(e.methodBase->type), "self.tmp");
             builder_.CreateStore(genExpr(*e.methodBase, env), selfPtr);
         }
         args.push_back(selfPtr);
@@ -3848,7 +3848,7 @@ llvm::Value *CodeGen::genCall(CallExpr &e, FnEnv &env) {
             auto *argTy = args[i]->getType();
             auto *st = llvm::dyn_cast<llvm::StructType>(argTy);
             if (st && dl.getTypeAllocSize(st) > 16 && !isHomogeneousFPAggregate(st)) {
-                auto *slot = builder_.CreateAlloca(st, nullptr, "indirect.tmp");
+                auto *slot = createEntryAlloca(env, st, "indirect.tmp");
                 builder_.CreateStore(args[i], slot);
                 args[i] = slot;
             }
@@ -4159,7 +4159,7 @@ llvm::Value *CodeGen::genSlice(SliceExpr &e, FnEnv &env) {
     auto *sliceLen = builder_.CreateSub(endVal, startVal, "slice.len");
 
     // Construct {T*, i64} struct
-    auto *alloca = builder_.CreateAlloca(sliceST, nullptr, "slice.tmp");
+    auto *alloca = createEntryAlloca(env, sliceST, "slice.tmp");
     builder_.CreateStore(slicePtr,
         builder_.CreateStructGEP(sliceST, alloca, 0));
     builder_.CreateStore(sliceLen,
