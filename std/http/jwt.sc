@@ -13,7 +13,7 @@
 namespace std {
 
 static struct String __b64url_encode(const unsigned char* data, unsigned long len) {
-    struct String s; unsafe { s = base64_encode(data, len); }
+    struct String s; unsafe { s = base64_encode(data[0..len]); }
     unsafe {
         s.replace_char('+', '-');
         s.replace_char('/', '_');

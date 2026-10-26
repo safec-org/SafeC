@@ -150,6 +150,10 @@ inline unsigned long str_len(const &char s) {
     unsafe { return strlen(s); }
 }
 
+inline []const char str_bytes(const &char s) {
+    unsafe { return ((const char*)s)[0..strlen(s)]; }
+}
+
 // Lexicographic comparison.  Returns <0, 0, or >0.
 inline int str_cmp(const &char a, const &char b) {
     unsafe { return strcmp(a, b); }

@@ -240,10 +240,10 @@ void t_rng() {
 
 void t_base64() {
     unsafe {
-        struct String e = base64_encode((const unsigned char*)"foobar", 6UL);
+        struct String e = base64_encode(str_bytes("foobar"));
         ASSERT_STR_EQ(e.as_ptr(), "Zm9vYmFy");
         e.free();
-        struct String e2 = base64_encode((const unsigned char*)"fo", 2UL);
+        struct String e2 = base64_encode(str_bytes("fo"));
         ASSERT_STR_EQ(e2.as_ptr(), "Zm8=");
         e2.free();
         int ok = 0;
@@ -548,8 +548,8 @@ void t_crypto_misc() {
         ASSERT_TRUE(ascii_is_print('~'));
         ASSERT_FALSE(ascii_is_print((char)9));
         ASSERT_EQ(ascii_to_lower('Q'), 'q');
-        ASSERT_TRUE(ascii_is_valid_n("ab\xC3", 2UL));
-        ASSERT_FALSE(ascii_is_valid_n("ab\xC3", 3UL));
+        ASSERT_TRUE(ascii_is_valid_bytes(str_bytes("ab\xC3")[0..2]));
+        ASSERT_FALSE(ascii_is_valid_bytes(str_bytes("ab\xC3")));
     }
 }
 

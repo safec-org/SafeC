@@ -141,7 +141,7 @@ void t_protobuf() {
         pb_write_string_field(&buf, 3, "hi");
         pb_write_double_field(&buf, 4, 2.25);
         pb_write_bool_field(&buf, 5, 1);
-        struct PbReader r = PbReader::new((const unsigned char*)buf.as_ptr(), buf.length());
+        struct PbReader r = PbReader::new(buf.as_bytes());
         int fn_ = 0;
         int wt = 0;
         long long iv = 0LL;
@@ -154,12 +154,10 @@ void t_protobuf() {
         ASSERT_EQ(iv, -3);
         r.read_tag(&fn_, &wt);
         ASSERT_EQ(wt, PB_WIRE_LEN);
-        unsigned char none = (unsigned char)0;
-        &const unsigned char sd = &none;
-        unsigned long sl = 0UL;
-        r.read_length_delimited(&sd, &sl);
-        ASSERT_EQ(sl, 2);
-        ASSERT_EQ(sd[0], 'h');
+        match (r.read_length_delimited()) {
+            case some(sd): { ASSERT_EQ(sd.len, 2); ASSERT_EQ(sd[0], 'h'); }
+            case none: ASSERT_TRUE(0);
+        }
         r.read_tag(&fn_, &wt);
         double dv = 0.0;
         r.read_double(&dv);
@@ -234,7 +232,7 @@ void t_writers_varint() {
         int i = 0;
         while (i < 6) { pb_write_varint(&buf, vals[i]); i = i + 1; }
         ASSERT_EQ(buf.length(), 1 + 1 + 2 + 2 + 10 + 10);
-        struct PbReader r = PbReader::new((const unsigned char*)buf.as_ptr(), buf.length());
+        struct PbReader r = PbReader::new(buf.as_bytes());
         int good = 1;
         i = 0;
         while (i < 6) {
@@ -246,7 +244,7 @@ void t_writers_varint() {
         ASSERT_FALSE(r.has_more());
         unsigned long long v = 0ULL;
         ASSERT_FALSE(r.read_varint(&v));                      // nothing left
-        struct PbReader trunc = PbReader::new((const unsigned char*)"\x80\x80", 2UL);
+        struct PbReader trunc = PbReader::new(str_bytes("\x80\x80"));
         ASSERT_FALSE(trunc.read_varint(&v));                  // unterminated
         buf.free();
 

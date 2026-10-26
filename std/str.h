@@ -5,6 +5,10 @@
 namespace std {
 
 unsigned long str_len(const &char s);
+// The bytes of a NUL-terminated string (without the NUL) as a slice — the
+// way to hand a literal or C string to an API taking []const char /
+// []const unsigned char:  base64_encode(str_bytes("foobar"))
+[]const char  str_bytes(const &char s);
 int           str_cmp(const &char a, const &char b);
 int           str_ncmp(const &char a, const &char b, unsigned long n);
 int           str_eq(const &char a, const &char b);

@@ -46,7 +46,7 @@ static struct String ws_compute_accept_(const char* key) {
         sha1((const unsigned char*)combined.as_ptr(), combined.length(), digest);
     }
     combined.free();
-    return base64_encode(digest, 20UL);
+    return base64_encode(digest[0..20]);
 }
 
 // ── Client handshake ───────────────────────────────────────────────────────
@@ -88,7 +88,7 @@ struct WsConn WsConn::connect_timeout(const &char host, unsigned short port,
             good = 0;
         } else {
             unsafe { rng.fill(&keyRaw[0], 16UL); }
-            struct String encoded = base64_encode(keyRaw, 16UL);
+            struct String encoded = base64_encode(keyRaw[0..16]);
             keyB64.free();
             keyB64 = encoded;
         }

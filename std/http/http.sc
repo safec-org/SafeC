@@ -499,13 +499,13 @@ struct String HttpRequest::query_string() const {
 
 struct QueryParams HttpRequest::query() const {
     struct String qs = self.query_string();
-    struct QueryParams q = QueryParams::parse_n(qs.as_ptr(), qs.length());
+    struct QueryParams q = QueryParams::parse_bytes(qs.as_bytes());
     qs.free();
     return q;
 }
 
 struct QueryParams HttpRequest::form() const {
-    return QueryParams::parse_n(self.body.as_ptr(), self.body.length());
+    return QueryParams::parse_bytes(self.body.as_bytes());
 }
 
 int HttpRequest::content_type_is(const &char mime) const {
@@ -1328,16 +1328,16 @@ int http_decode_body(&HttpResponse resp, unsigned long max_out) {
     struct Vec<unsigned char> out = Vec::new();
     int ok = 0;
     unsafe {
-        const &unsigned char data = (const &unsigned char)resp.body.as_ptr();
+        []const unsigned char data = resp.body.as_bytes();
         if (e.eq_cstr_ignore_case("gzip") || e.eq_cstr_ignore_case("x-gzip")) {
-            out = gzip_decompress(data, resp.body.length(), max_out, &ok);
+            out = gzip_decompress(data, max_out, &ok);
         } else if (e.eq_cstr_ignore_case("deflate")) {
             // "deflate" is meant to be zlib-wrapped, but some servers send
             // raw DEFLATE; accept both.
-            out = zlib_decompress(data, resp.body.length(), max_out, &ok);
+            out = zlib_decompress(data, max_out, &ok);
             if (!ok) {
                 out.free();
-                out = inflate_raw(data, resp.body.length(), max_out, null, &ok);
+                out = inflate_raw(data, max_out, null, &ok);
             }
         }
     }

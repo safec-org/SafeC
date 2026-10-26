@@ -414,7 +414,7 @@ static struct HttpResponse mw_gzip_(&HttpRequest req, &HttpCtx ctx, &HttpNext ne
     resp.add_header("Vary", "Accept-Encoding");
     if (!router_accepts_gzip_(req)) { return resp; }
     struct Vec<unsigned char> z;
-    unsafe { z = gzip_compress((const &unsigned char)resp.body.as_ptr(), resp.body.length(), DEFLATE_DEFAULT); }
+    z = gzip_compress(resp.body.as_bytes(), DEFLATE_DEFAULT);
     if (z.len > 0UL && z.len < resp.body.length()) {
         match (z.data) {
             case some(d): {

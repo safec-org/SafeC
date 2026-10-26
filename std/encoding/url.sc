@@ -149,7 +149,8 @@ struct QueryParams QueryParams::new() {
     return q;
 }
 
-struct QueryParams QueryParams::parse_n(const &char qs, unsigned long n) {
+struct QueryParams QueryParams::parse_bytes([]const char qs) {
+    unsigned long n = qs.len;
     struct QueryParams q = QueryParams::new();
     unsigned long i = 0UL;
     unsafe {
@@ -176,7 +177,9 @@ struct QueryParams QueryParams::parse_n(const &char qs, unsigned long n) {
 struct QueryParams QueryParams::parse(const &char qs) {
     unsigned long n = 0UL;
     unsafe { while (qs[n] != (char)0) { n = n + 1UL; } }
-    return QueryParams::parse_n(qs, n);
+    []const char bytes;
+    unsafe { bytes = ((const char*)qs)[0..n]; }
+    return QueryParams::parse_bytes(bytes);
 }
 
 unsigned long QueryParams::length() const { return self.pairs.length(); }
@@ -679,7 +682,7 @@ struct String Url::request_target() const {
 }
 
 struct QueryParams Url::query_params() const {
-    return QueryParams::parse_n(self.query.as_ptr(), self.query.length());
+    return QueryParams::parse_bytes(self.query.as_bytes());
 }
 
 void Url::set_query_params(const &QueryParams params) {

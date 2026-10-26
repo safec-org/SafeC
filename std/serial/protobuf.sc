@@ -85,19 +85,17 @@ void pb_write_string_field(&String out, int field_num, const &char s) {
     unsafe { out.push_n(s, len); }
 }
 
-void pb_write_bytes_field(&String out, int field_num,
-                           const &unsigned char data, unsigned long len) {
+void pb_write_bytes_field(&String out, int field_num, []const unsigned char data) {
     pb_write_tag(out, field_num, PB_WIRE_LEN);
-    pb_write_varint(out, (unsigned long long)len);
-    unsafe { out.push_n((const char*)data, len); }
+    pb_write_varint(out, (unsigned long long)data.len);
+    out.push_bytes(data);
 }
 
 // ── Reader ────────────────────────────────────────────────────────────────
 
-struct PbReader PbReader::new(const &unsigned char data, unsigned long len) {
+struct PbReader PbReader::new([]const unsigned char data) {
     struct PbReader r;
     r.data = data;
-    r.len  = len;
     r.pos  = 0UL;
     return r;
 }
@@ -105,7 +103,7 @@ struct PbReader PbReader::new(const &unsigned char data, unsigned long len) {
 int PbReader::has_more() const {
     unsigned long pos;
     unsigned long len;
-    unsafe { pos = self.pos; len = self.len; }
+    unsafe { pos = self.pos; len = self.data.len; }
     return pos < len;
 }
 
@@ -115,7 +113,7 @@ int PbReader::read_varint(&unsigned long long out) {
     while (1) {
         unsigned long pos;
         unsigned long len;
-        unsafe { pos = self.pos; len = self.len; }
+        unsafe { pos = self.pos; len = self.data.len; }
         if (pos >= len) { return 0; } // truncated
         if (shift >= 64) { return 0; } // malformed: too many continuation bytes
         unsigned char b;
@@ -168,7 +166,7 @@ int PbReader::read_bool(&int out) {
 int PbReader::read_double(&double out) {
     unsigned long pos;
     unsigned long len;
-    unsafe { pos = self.pos; len = self.len; }
+    unsafe { pos = self.pos; len = self.data.len; }
     if (pos + 8UL > len) { return 0; }
     unsigned long long bits = 0ULL;
     int i = 0;
@@ -188,7 +186,7 @@ int PbReader::read_double(&double out) {
 int PbReader::read_float(&float out) {
     unsigned long pos;
     unsigned long len;
-    unsafe { pos = self.pos; len = self.len; }
+    unsafe { pos = self.pos; len = self.data.len; }
     if (pos + 4UL > len) { return 0; }
     unsigned int bits = 0U;
     int i = 0;
@@ -205,21 +203,14 @@ int PbReader::read_float(&float out) {
     return 1;
 }
 
-int PbReader::read_length_delimited(&&const unsigned char dataOut,
-                                     &unsigned long lenOut) {
+?[]const unsigned char PbReader::read_length_delimited() {
     unsigned long long len64;
-    if (!self.read_varint(&len64)) { return 0; }
+    if (!self.read_varint(&len64)) { return null; }
     unsigned long fieldLen = (unsigned long)len64;
-    unsigned long pos;
-    unsigned long bufLen;
-    unsafe { pos = self.pos; bufLen = self.len; }
-    if (pos + fieldLen > bufLen) { return 0; } // declared length overruns the buffer
-    unsafe {
-        *dataOut = &self.data[pos];
-        *lenOut  = fieldLen;
-        self.pos   = pos + fieldLen;
-    }
-    return 1;
+    unsigned long pos = self.pos;
+    if (fieldLen > self.data.len - pos) { return null; } // declared length overruns the buffer
+    self.pos = pos + fieldLen;
+    return self.data[pos..pos + fieldLen];
 }
 
 int PbReader::skip_field(int wire_type) {
@@ -230,7 +221,7 @@ int PbReader::skip_field(int wire_type) {
     if (wire_type == PB_WIRE_FIXED64) {
         unsigned long pos;
         unsigned long len;
-        unsafe { pos = self.pos; len = self.len; }
+        unsafe { pos = self.pos; len = self.data.len; }
         if (pos + 8UL > len) { return 0; }
         unsafe { self.pos = pos + 8UL; }
         return 1;
@@ -238,16 +229,13 @@ int PbReader::skip_field(int wire_type) {
     if (wire_type == PB_WIRE_FIXED32) {
         unsigned long pos;
         unsigned long len;
-        unsafe { pos = self.pos; len = self.len; }
+        unsafe { pos = self.pos; len = self.data.len; }
         if (pos + 4UL > len) { return 0; }
         unsafe { self.pos = pos + 4UL; }
         return 1;
     }
     if (wire_type == PB_WIRE_LEN) {
-        unsigned char none = (unsigned char)0;
-        &const unsigned char d = &none;
-        unsigned long n;
-        return self.read_length_delimited(&d, &n);
+        return self.read_length_delimited().is_none() ? 0 : 1;
     }
     return 0; // wire type 3/4 (deprecated groups) — not supported
 }

@@ -1620,7 +1620,7 @@ void MdNode::plain_text(&String out) const {
 
 // ── HTML rendering ───────────────────────────────────────────────────────────
 
-typedef fn int(void*, const &MdNode, int, &String) MdHookFn_;
+typedef fn int(?&Erased, const &MdNode, int, &String) MdHookFn_;
 
 static void md_render_node_(const &MdNode n, struct String* out, const struct MdHookRaw_* hook, int tight);
 
@@ -1716,9 +1716,11 @@ static void md_close_(const &MdNode n, struct String* out, const &MdNode parent_
 static void md_render_node_(const &MdNode n, struct String* out, const struct MdHookRaw_* hook, int tight) {
     int mode = 0;
     unsafe {
-        if (hook != (const struct MdHookRaw_*)0 && hook->fn_ != (void*)0) {
-            MdHookFn_ f = (MdHookFn_)hook->fn_;
-            mode = f(hook->ctx, n, 1, out);
+        if (hook != (const struct MdHookRaw_*)0) {
+            match (hook->fn_) {
+                case some(f): mode = f(hook->ctx, n, 1, out);
+                case null: { }
+            }
         }
     }
     if (mode == 1) { return; }
@@ -1790,8 +1792,10 @@ static void md_render_node_(const &MdNode n, struct String* out, const struct Md
     if (mode == 2) {
         int closed = 0;
         unsafe {
-            MdHookFn_ f = (MdHookFn_)hook->fn_;
-            closed = f(hook->ctx, n, 0, out);
+            match (hook->fn_) {
+                case some(f): closed = f(hook->ctx, n, 0, out);
+                case null: { }
+            }
         }
         if (closed == 1) { return; }
     }

@@ -19,7 +19,7 @@
 //   struct Point Point::from_proto(const unsigned char* data, unsigned long len, int* ok) {
 //       struct Point p;
 //       p.x = 0; p.y = 0;
-//       struct PbReader r = PbReader::new(data, len);
+//       struct PbReader r = PbReader::new(data);
 //       int good = 1;
 //       while (r.has_more()) {
 //           int field; int wireType;
@@ -76,20 +76,18 @@ void pb_write_float_field(&String out, int field_num, float v);
 // already-encoded bytes (encode the submessage with its own to_proto()
 // first, then pass the result here).
 void pb_write_string_field(&String out, int field_num, const &char s);
-void pb_write_bytes_field(&String out, int field_num,
-                           const &unsigned char data, unsigned long len);
+void pb_write_bytes_field(&String out, int field_num, []const unsigned char data);
 
 // ── Reader ────────────────────────────────────────────────────────────────
 // A zero-copy cursor over an existing byte buffer — read_length_delimited
-// returns a pointer *into* that same buffer (valid only as long as it is).
+// returns a slice *of* that same buffer (valid only as long as it is).
 
 struct PbReader {
-    const &unsigned char data;
-    unsigned long        len;
-    unsigned long        pos;
+    []const unsigned char data;
+    unsigned long         pos;
 
-    // A reader positioned at the start of data[0..len).
-    static struct PbReader new(const &unsigned char data, unsigned long len);
+    // A reader positioned at the start of data.
+    static struct PbReader new([]const unsigned char data);
 
     int has_more() const;
 
@@ -104,10 +102,10 @@ struct PbReader {
     int read_bool(&int out);
     int read_double(&double out);
     int read_float(&float out);
-    // '*dataOut' aliases into the reader's own buffer (see the zero-copy
-    // note above) — copy it out (e.g. via String::from_n) if it needs to
-    // outlive that buffer.
-    int read_length_delimited(&&const unsigned char dataOut, &unsigned long lenOut);
+    // The field's bytes, a slice of the reader's own buffer (see the
+    // zero-copy note above) — copy it out (e.g. String::from_bytes) if it
+    // needs to outlive that buffer. null on a truncated encoding.
+    ?[]const unsigned char read_length_delimited();
 
     // Advances past one field's value without decoding it, given its wire
     // type from a just-read tag — the standard "ignore fields I don't

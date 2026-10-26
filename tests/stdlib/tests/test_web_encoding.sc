@@ -167,7 +167,7 @@ void t_query_params() {
     c.free();
     q.free();
 
-    struct QueryParams body = QueryParams::parse_n("k=v&rest=ignored", 3UL);
+    struct QueryParams body = QueryParams::parse_bytes(str_bytes("k=v&rest=ignored")[0..3]);
     ASSERT_EQ(body.length(), 1);
     ASSERT_STR_EQ(body.get_or("k", ""), "v");
     body.free();
@@ -239,25 +239,25 @@ static int same_bytes(&Vec<unsigned char> a, &Vec<unsigned char> b) {
 
 void t_checksums() {
     unsafe {
-        ASSERT_EQ(crc32((const &unsigned char)"123456789", 9UL), 0xCBF43926U);
-        ASSERT_EQ(adler32((const &unsigned char)"Wikipedia", 9UL), 0x11E60398U);
-        unsigned int c = crc32_update(0U, (const &unsigned char)"1234", 4UL);
-        c = crc32_update(c, (const &unsigned char)"56789", 5UL);
+        ASSERT_EQ(crc32(str_bytes("123456789")), 0xCBF43926U);
+        ASSERT_EQ(adler32(str_bytes("Wikipedia")), 0x11E60398U);
+        unsigned int c = crc32_update(0U, str_bytes("1234"));
+        c = crc32_update(c, str_bytes("56789"));
         ASSERT_EQ(c, 0xCBF43926U);
-        ASSERT_EQ(crc32((const &unsigned char)"", 0UL), 0U);
+        ASSERT_EQ(crc32(str_bytes("")), 0U);
     }
 }
 
 void t_inflate_reference() {
     int ok = 0;
-    struct Vec<unsigned char> out = zlib_decompress(&kZlibRef[0], 331UL, 0UL, &ok);
+    struct Vec<unsigned char> out = zlib_decompress(kZlibRef[0..331], 0UL, &ok);
     ASSERT_TRUE(ok);
     ASSERT_EQ(out.len, 1156);
     ASSERT_EQ(*out.at(0UL), 'T');
     ASSERT_EQ(*out.at(1155UL), 255);
     out.free();
     // A limit below the real size fails rather than truncating.
-    out = zlib_decompress(&kZlibRef[0], 331UL, 1000UL, &ok);
+    out = zlib_decompress(kZlibRef[0..331], 1000UL, &ok);
     ASSERT_FALSE(ok);
     out.free();
     // Corrupt the Adler-32 trailer.
@@ -265,19 +265,19 @@ void t_inflate_reference() {
     unsigned long i = 0UL;
     while (i < 331UL) { unsafe { bad[i] = kZlibRef[i]; } i = i + 1UL; }
     bad[330] = (unsigned char)(bad[330] ^ (unsigned char)1);
-    out = zlib_decompress(&bad[0], 331UL, 0UL, &ok);
+    out = zlib_decompress(bad[0..331], 0UL, &ok);
     ASSERT_FALSE(ok);
     out.free();
     // Truncated stream.
-    out = zlib_decompress(&kZlibRef[0], 100UL, 0UL, &ok);
+    out = zlib_decompress(kZlibRef[0..100], 0UL, &ok);
     ASSERT_FALSE(ok);
     out.free();
 
     // Python's gzip.compress(b"hello hello hello gzip", mtime=0).
     unsigned char gz[42] = { 0x1f,0x8b,0x08,0x00,0x00,0x00,0x00,0x00,0x02,0xff,0xcb,0x48,0xcd,0xc9,0xc9,0x57,
                              0xc8,0x40,0x22,0xd3,0xab,0x32,0x0b,0x00,0x47,0x3a,0x59,0x1c,0x16,0x00,0x00,0x00 };
-    ASSERT_TRUE(gzip_is_gzip(&gz[0], 32UL));
-    out = gzip_decompress(&gz[0], 32UL, 0UL, &ok);
+    ASSERT_TRUE(gzip_is_gzip(gz[0..32]));
+    out = gzip_decompress(gz[0..32], 0UL, &ok);
     ASSERT_TRUE(ok);
     ASSERT_EQ(out.len, 22);
     ASSERT_EQ(*out.at(18UL), 'g');
@@ -285,7 +285,7 @@ void t_inflate_reference() {
     // Two concatenated members decode to both payloads.
     i = 0UL;
     while (i < 10UL) { gz[32UL + i] = gz[i]; i = i + 1UL; }
-    out = gzip_decompress(&gz[0], 42UL, 0UL, &ok);
+    out = gzip_decompress(gz[0..42], 0UL, &ok);
     ASSERT_FALSE(ok);   // second member is truncated
     out.free();
 }
@@ -300,13 +300,10 @@ void t_deflate_roundtrip() {
             make_sample(&src, sizes[si], kind);
             int level = 0;
             while (level <= 9) {
-                const &unsigned char p = (const &unsigned char)"";
-                match (src.data) { case some(d): { p = d; } case null: { } }
-                struct Vec<unsigned char> raw = deflate_raw(p, src.len, level);
+                []unsigned char p = src.as_slice();
+                struct Vec<unsigned char> raw = deflate_raw(p, level);
                 int ok = 0;
-                const &unsigned char rp = (const &unsigned char)"";
-                match (raw.data) { case some(d): { rp = d; } case null: { } }
-                struct Vec<unsigned char> back = inflate_raw(rp, raw.len, 0UL, null, &ok);
+                struct Vec<unsigned char> back = inflate_raw(raw.as_slice(), 0UL, null, &ok);
                 ASSERT_TRUE(ok);
                 ASSERT_TRUE(same_bytes(&back, &src));
                 if (kind == 2 && sizes[si] == 200000UL && level > 0) {
@@ -318,19 +315,15 @@ void t_deflate_roundtrip() {
                 back.free();
                 raw.free();
 
-                struct Vec<unsigned char> z = zlib_compress(p, src.len, level);
-                const &unsigned char zp = (const &unsigned char)"";
-                match (z.data) { case some(d): { zp = d; } case null: { } }
-                back = zlib_decompress(zp, z.len, 0UL, &ok);
+                struct Vec<unsigned char> z = zlib_compress(p, level);
+                back = zlib_decompress(z.as_slice(), 0UL, &ok);
                 ASSERT_TRUE(ok);
                 ASSERT_TRUE(same_bytes(&back, &src));
                 back.free();
                 z.free();
 
-                struct Vec<unsigned char> g = gzip_compress(p, src.len, level);
-                const &unsigned char gp = (const &unsigned char)"";
-                match (g.data) { case some(d): { gp = d; } case null: { } }
-                back = gzip_decompress(gp, g.len, 0UL, &ok);
+                struct Vec<unsigned char> g = gzip_compress(p, level);
+                back = gzip_decompress(g.as_slice(), 0UL, &ok);
                 ASSERT_TRUE(ok);
                 ASSERT_TRUE(same_bytes(&back, &src));
                 back.free();

@@ -215,7 +215,7 @@ static void t_crypto() {
         hex(blk, 16UL, h);
         CHECK(str_is(h, "69c4e0d86a7b0430d8cdb78070b4c55a"));
 
-        struct String e = std::base64_encode((const unsigned char*)"bare-metal!", 11UL);
+        struct String e = std::base64_encode(std::str_bytes("bare-metal!"));
         CHECK(e.eq_cstr("YmFyZS1tZXRhbCE="));
         e.free();
         CHECK(std::utf8_len("h€llo") == 5UL);

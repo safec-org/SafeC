@@ -34,48 +34,45 @@ namespace std {
 
 // CRC-32 (IEEE 802.3, reflected, as gzip/zip/PNG use): crc32 of "123456789"
 // is 0xCBF43926. crc32_update continues a running value (start from 0).
-unsigned int crc32(const &unsigned char data, unsigned long len);
-unsigned int crc32_update(unsigned int crc, const &unsigned char data, unsigned long len);
+unsigned int crc32([]const unsigned char data);
+unsigned int crc32_update(unsigned int crc, []const unsigned char data);
 
 // Adler-32 (zlib): adler32_update continues a running value (start from 1).
-unsigned int adler32(const &unsigned char data, unsigned long len);
-unsigned int adler32_update(unsigned int adler, const &unsigned char data, unsigned long len);
+unsigned int adler32([]const unsigned char data);
+unsigned int adler32_update(unsigned int adler, []const unsigned char data);
 
 // ── Raw DEFLATE ────────────────────────────────────────────────────────────
 
-// Compresses data[0..len) at 'level' (0..9; out-of-range values are
+// Compresses data at 'level' (0..9; out-of-range values are
 // clamped). Always succeeds (an empty Vec only if allocation fails).
-struct Vec<unsigned char> deflate_raw(const &unsigned char data, unsigned long len, int level);
+struct Vec<unsigned char> deflate_raw([]const unsigned char data, int level);
 
 // Decompresses a raw DEFLATE stream. *ok = 0 on a malformed or truncated
 // stream or when the output would exceed max_out (0 = no limit). Bytes
 // after the final block are ignored; *consumed (if non-null) receives how
 // many input bytes the stream used.
-struct Vec<unsigned char> inflate_raw(const &unsigned char data, unsigned long len,
-                                      unsigned long max_out, ?&unsigned long consumed,
-                                      ?&int ok);
+struct Vec<unsigned char> inflate_raw([]const unsigned char data, unsigned long max_out,
+                                      ?&unsigned long consumed, ?&int ok);
 
 // ── zlib (RFC 1950) ────────────────────────────────────────────────────────
 
 // 2-byte header + raw DEFLATE + big-endian Adler-32 — HTTP's
 // "Content-Encoding: deflate".
-struct Vec<unsigned char> zlib_compress(const &unsigned char data, unsigned long len, int level);
+struct Vec<unsigned char> zlib_compress([]const unsigned char data, int level);
 // Checks the header and the Adler-32; *ok = 0 on any mismatch (a preset
 // dictionary, FDICT, is not supported).
-struct Vec<unsigned char> zlib_decompress(const &unsigned char data, unsigned long len,
-                                          unsigned long max_out, ?&int ok);
+struct Vec<unsigned char> zlib_decompress([]const unsigned char data, unsigned long max_out, ?&int ok);
 
 // ── gzip (RFC 1952) ────────────────────────────────────────────────────────
 
 // One gzip member (no file name, mtime 0) — "Content-Encoding: gzip".
-struct Vec<unsigned char> gzip_compress(const &unsigned char data, unsigned long len, int level);
+struct Vec<unsigned char> gzip_compress([]const unsigned char data, int level);
 // Decodes every concatenated member (as gunzip does), checking each
 // member's CRC-32 and length; optional header fields (FEXTRA, FNAME,
 // FCOMMENT, FHCRC) are skipped. *ok = 0 on any malformed member.
-struct Vec<unsigned char> gzip_decompress(const &unsigned char data, unsigned long len,
-                                          unsigned long max_out, ?&int ok);
+struct Vec<unsigned char> gzip_decompress([]const unsigned char data, unsigned long max_out, ?&int ok);
 
 // 1 if data starts with the gzip magic bytes (1f 8b).
-int gzip_is_gzip(const &unsigned char data, unsigned long len);
+int gzip_is_gzip([]const unsigned char data);
 
 } // namespace std
