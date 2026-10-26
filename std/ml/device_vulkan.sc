@@ -76,28 +76,59 @@
 
 namespace std {
 
-extern void* malloc(size_t size);
-extern void  free(void* ptr);
-extern void* memcpy(void* dst, const void* src, size_t n);
-extern long  write(int fd, const void* buf, unsigned long n);
+extern unsigned char* malloc(size_t size);
+extern void  free(unsigned char* ptr);
+extern unsigned char* memcpy(unsigned char* dst, const unsigned char* src, size_t n);
+extern long  write(int fd, const char* buf, unsigned long n);
 extern char* getenv(const char* name);
 extern int   strcmp(const char* a, const char* b);
 
 // ── Vulkan (vulkan_core.h's layouts; every handle as a pointer) ──────────────
+// Every Vulkan handle is a pointer to its own opaque marker (never
+// constructed or read; only the driver looks behind them).
+struct VkInstance_ { char opaque_; };
+struct VkPhysicalDevice_ { char opaque_; };
+struct VkDevice_ { char opaque_; };
+struct VkQueue_ { char opaque_; };
+struct VkBuffer_ { char opaque_; };
+struct VkDeviceMemory_ { char opaque_; };
+struct VkShaderModule_ { char opaque_; };
+struct VkPipelineLayout_ { char opaque_; };
+struct VkPipeline_ { char opaque_; };
+struct VkPipelineCache_ { char opaque_; };
+struct VkCommandPool_ { char opaque_; };
+struct VkCommandBuffer_ { char opaque_; };
+struct VkFence_ { char opaque_; };
+struct VkSemaphore_ { char opaque_; };
+struct VkDescriptorSetLayout_ { char opaque_; };
+// What std never passes (always null): VkAllocationCallbacks,
+// VkSpecializationInfo, VkPhysicalDeviceFeatures (the features go in a
+// VkPhysicalDeviceFeatures2 on the pNext chain), VkCommandBufferInheritanceInfo,
+// VkBufferMemoryBarrier, VkImageMemoryBarrier.
+struct VkAllocationCallbacks_ { char opaque_; };
+struct VkSpecializationInfo_ { char opaque_; };
+struct VkPhysicalDeviceFeatures_ { char opaque_; };
+struct VkInheritanceInfo_ { char opaque_; };
+struct VkBufferMemoryBarrier_ { char opaque_; };
+struct VkImageMemoryBarrier_ { char opaque_; };
+// A pNext chain's next structure: any Vk*Info / Vk*Features / ... starting
+// with { sType, pNext }, which the driver tells apart by its sType.
+struct VkNext_ { char opaque_; };
+
 struct VkApplicationInfo {
-    int sType; const void* pNext;
+    int sType; const VkNext_* pNext;
     const char* pApplicationName; unsigned int applicationVersion;
     const char* pEngineName; unsigned int engineVersion;
     unsigned int apiVersion;
 };
 struct VkLayerSettingEXT {
-    const char* pLayerName; const char* pSettingName; int type; unsigned int valueCount; const void* pValues;
+    const char* pLayerName; const char* pSettingName; int type; unsigned int valueCount; const unsigned char* pValues;   // valueCount values of 'type'
 };
 struct VkLayerSettingsCreateInfoEXT {
-    int sType; const void* pNext; unsigned int settingCount; const struct VkLayerSettingEXT* pSettings;
+    int sType; const VkNext_* pNext; unsigned int settingCount; const struct VkLayerSettingEXT* pSettings;
 };
 struct VkInstanceCreateInfo {
-    int sType; const void* pNext; unsigned int flags;
+    int sType; const VkNext_* pNext; unsigned int flags;
     const struct VkApplicationInfo* pApplicationInfo;
     unsigned int enabledLayerCount; const char** ppEnabledLayerNames;
     unsigned int enabledExtensionCount; const char** ppEnabledExtensionNames;
@@ -105,7 +136,7 @@ struct VkInstanceCreateInfo {
 struct VkExtensionProperties { char extensionName[256]; unsigned int specVersion; };
 // VkPhysicalDeviceProperties2, the limits as words (DVK_LIMIT_*)
 struct VkPhysicalDeviceProperties2 {
-    int sType; void* pNext;
+    int sType; VkNext_* pNext;
     unsigned int apiVersion; unsigned int driverVersion; unsigned int vendorID; unsigned int deviceID;
     int deviceType; char deviceName[256]; unsigned char pipelineCacheUUID[16];
     unsigned int pad_;
@@ -124,104 +155,104 @@ struct VkPhysicalDeviceMemoryProperties {
     unsigned long memoryHeaps[32];  // {size, flags} each
 };
 // VkPhysicalDeviceFeatures2: VkPhysicalDeviceFeatures as 55 VkBool32
-struct VkPhysicalDeviceFeatures2 { int sType; void* pNext; unsigned int f[55]; };
+struct VkPhysicalDeviceFeatures2 { int sType; VkNext_* pNext; unsigned int f[55]; };
 #define DVK_F_INT64 40
 #define DVK_F_INT16 41
 // The extension feature structs (VkPhysicalDevice16BitStorageFeatures, ...)
 // as their VkBool32s: a struct of the largest's size.
-struct DvkFeat_ { int sType; void* pNext; unsigned int b[16]; };
+struct DvkFeat_ { int sType; VkNext_* pNext; unsigned int b[16]; };
 // VkPhysicalDeviceSubgroupProperties / ...SubgroupSizeControlProperties
-struct DvkProp_ { int sType; void* pNext; unsigned int v[4]; };
+struct DvkProp_ { int sType; VkNext_* pNext; unsigned int v[4]; };
 struct VkPhysicalDeviceDriverProperties {
-    int sType; void* pNext; int driverID; char driverName[256]; char driverInfo[256]; unsigned char conformanceVersion[4];
+    int sType; VkNext_* pNext; int driverID; char driverName[256]; char driverInfo[256]; unsigned char conformanceVersion[4];
 };
 #define DVK_DRIVER_MOLTENVK 14
 struct VkDeviceQueueCreateInfo {
-    int sType; const void* pNext; unsigned int flags;
+    int sType; const VkNext_* pNext; unsigned int flags;
     unsigned int queueFamilyIndex; unsigned int queueCount; const float* pQueuePriorities;
 };
 struct VkDeviceCreateInfo {
-    int sType; const void* pNext; unsigned int flags;
+    int sType; const VkNext_* pNext; unsigned int flags;
     unsigned int queueCreateInfoCount; const struct VkDeviceQueueCreateInfo* pQueueCreateInfos;
     unsigned int enabledLayerCount; const char** ppEnabledLayerNames;
     unsigned int enabledExtensionCount; const char** ppEnabledExtensionNames;
-    const void* pEnabledFeatures;
+    const VkPhysicalDeviceFeatures_* pEnabledFeatures;
 };
 struct VkBufferCreateInfo {
-    int sType; const void* pNext; unsigned int flags; unsigned long size;
+    int sType; const VkNext_* pNext; unsigned int flags; unsigned long size;
     unsigned int usage; int sharingMode; unsigned int queueFamilyIndexCount; const unsigned int* pQueueFamilyIndices;
 };
 struct VkMemoryRequirements { unsigned long size; unsigned long alignment; unsigned int memoryTypeBits; };
-struct VkMemoryAllocateInfo { int sType; const void* pNext; unsigned long allocationSize; unsigned int memoryTypeIndex; };
-struct VkMemoryAllocateFlagsInfo { int sType; const void* pNext; unsigned int flags; unsigned int deviceMask; };
-struct VkBufferDeviceAddressInfo { int sType; const void* pNext; void* buffer; };
-struct VkShaderModuleCreateInfo { int sType; const void* pNext; unsigned int flags; unsigned long codeSize; const unsigned int* pCode; };
+struct VkMemoryAllocateInfo { int sType; const VkNext_* pNext; unsigned long allocationSize; unsigned int memoryTypeIndex; };
+struct VkMemoryAllocateFlagsInfo { int sType; const VkNext_* pNext; unsigned int flags; unsigned int deviceMask; };
+struct VkBufferDeviceAddressInfo { int sType; const VkNext_* pNext; VkBuffer_* buffer; };
+struct VkShaderModuleCreateInfo { int sType; const VkNext_* pNext; unsigned int flags; unsigned long codeSize; const unsigned int* pCode; };
 struct VkPushConstantRange { unsigned int stageFlags; unsigned int offset; unsigned int size; };
 struct VkPipelineLayoutCreateInfo {
-    int sType; const void* pNext; unsigned int flags;
-    unsigned int setLayoutCount; const void* pSetLayouts;
+    int sType; const VkNext_* pNext; unsigned int flags;
+    unsigned int setLayoutCount; VkDescriptorSetLayout_** pSetLayouts;
     unsigned int pushConstantRangeCount; const struct VkPushConstantRange* pPushConstantRanges;
 };
 struct VkPipelineShaderStageCreateInfo {
-    int sType; const void* pNext; unsigned int flags; unsigned int stage;
-    void* module; const char* pName; const void* pSpecializationInfo;
+    int sType; const VkNext_* pNext; unsigned int flags; unsigned int stage;
+    VkShaderModule_* module; const char* pName; const VkSpecializationInfo_* pSpecializationInfo;
 };
 struct VkComputePipelineCreateInfo {
-    int sType; const void* pNext; unsigned int flags;
+    int sType; const VkNext_* pNext; unsigned int flags;
     struct VkPipelineShaderStageCreateInfo stage;
-    void* layout; void* basePipelineHandle; int basePipelineIndex;
+    VkPipelineLayout_* layout; VkPipeline_* basePipelineHandle; int basePipelineIndex;
 };
-struct VkPipelineShaderStageRequiredSubgroupSizeCreateInfo { int sType; void* pNext; unsigned int requiredSubgroupSize; };
-struct VkCommandPoolCreateInfo { int sType; const void* pNext; unsigned int flags; unsigned int queueFamilyIndex; };
-struct VkCommandBufferAllocateInfo { int sType; const void* pNext; void* commandPool; int level; unsigned int commandBufferCount; };
-struct VkCommandBufferBeginInfo { int sType; const void* pNext; unsigned int flags; const void* pInheritanceInfo; };
+struct VkPipelineShaderStageRequiredSubgroupSizeCreateInfo { int sType; VkNext_* pNext; unsigned int requiredSubgroupSize; };
+struct VkCommandPoolCreateInfo { int sType; const VkNext_* pNext; unsigned int flags; unsigned int queueFamilyIndex; };
+struct VkCommandBufferAllocateInfo { int sType; const VkNext_* pNext; VkCommandPool_* commandPool; int level; unsigned int commandBufferCount; };
+struct VkCommandBufferBeginInfo { int sType; const VkNext_* pNext; unsigned int flags; const VkInheritanceInfo_* pInheritanceInfo; };
 struct VkSubmitInfo {
-    int sType; const void* pNext;
-    unsigned int waitSemaphoreCount; const void* pWaitSemaphores; const unsigned int* pWaitDstStageMask;
-    unsigned int commandBufferCount; void** pCommandBuffers;
-    unsigned int signalSemaphoreCount; const void* pSignalSemaphores;
+    int sType; const VkNext_* pNext;
+    unsigned int waitSemaphoreCount; VkSemaphore_** pWaitSemaphores; const unsigned int* pWaitDstStageMask;
+    unsigned int commandBufferCount; struct VkCommandBuffer_** pCommandBuffers;
+    unsigned int signalSemaphoreCount; VkSemaphore_** pSignalSemaphores;
 };
-struct VkFenceCreateInfo { int sType; const void* pNext; unsigned int flags; };
-struct VkMemoryBarrier { int sType; const void* pNext; unsigned int srcAccessMask; unsigned int dstAccessMask; };
+struct VkFenceCreateInfo { int sType; const VkNext_* pNext; unsigned int flags; };
+struct VkMemoryBarrier { int sType; const VkNext_* pNext; unsigned int srcAccessMask; unsigned int dstAccessMask; };
 
 extern int vkEnumerateInstanceExtensionProperties(const char* layer, unsigned int* count, struct VkExtensionProperties* props);
-extern int vkCreateInstance(const struct VkInstanceCreateInfo* info, const void* alloc, void** instance);
-extern int vkEnumeratePhysicalDevices(void* instance, unsigned int* count, void** devices);
-extern void vkGetPhysicalDeviceProperties2(void* pd, struct VkPhysicalDeviceProperties2* props);
-extern void vkGetPhysicalDeviceFeatures2(void* pd, struct VkPhysicalDeviceFeatures2* features);
-extern void vkGetPhysicalDeviceQueueFamilyProperties(void* pd, unsigned int* count, struct VkQueueFamilyProperties* props);
-extern void vkGetPhysicalDeviceMemoryProperties(void* pd, struct VkPhysicalDeviceMemoryProperties* props);
-extern int vkEnumerateDeviceExtensionProperties(void* pd, const char* layer, unsigned int* count, struct VkExtensionProperties* props);
-extern int vkCreateDevice(void* pd, const struct VkDeviceCreateInfo* info, const void* alloc, void** device);
-extern void vkGetDeviceQueue(void* device, unsigned int family, unsigned int index, void** queue);
-extern int vkCreateBuffer(void* device, const struct VkBufferCreateInfo* info, const void* alloc, void** buffer);
-extern void vkDestroyBuffer(void* device, void* buffer, const void* alloc);
-extern void vkGetBufferMemoryRequirements(void* device, void* buffer, struct VkMemoryRequirements* req);
-extern int vkAllocateMemory(void* device, const struct VkMemoryAllocateInfo* info, const void* alloc, void** memory);
-extern void vkFreeMemory(void* device, void* memory, const void* alloc);
-extern int vkBindBufferMemory(void* device, void* buffer, void* memory, unsigned long offset);
-extern int vkMapMemory(void* device, void* memory, unsigned long offset, unsigned long size, unsigned int flags, void** data);
-extern unsigned long vkGetBufferDeviceAddress(void* device, const struct VkBufferDeviceAddressInfo* info);
-extern int vkCreateShaderModule(void* device, const struct VkShaderModuleCreateInfo* info, const void* alloc, void** module);
-extern void vkDestroyShaderModule(void* device, void* module, const void* alloc);
-extern int vkCreatePipelineLayout(void* device, const struct VkPipelineLayoutCreateInfo* info, const void* alloc, void** layout);
-extern int vkCreateComputePipelines(void* device, void* cache, unsigned int count, const struct VkComputePipelineCreateInfo* infos,
-                                    const void* alloc, void** pipelines);
-extern int vkCreateCommandPool(void* device, const struct VkCommandPoolCreateInfo* info, const void* alloc, void** pool);
-extern int vkAllocateCommandBuffers(void* device, const struct VkCommandBufferAllocateInfo* info, void** buffers);
-extern int vkBeginCommandBuffer(void* cb, const struct VkCommandBufferBeginInfo* info);
-extern int vkEndCommandBuffer(void* cb);
-extern int vkResetCommandBuffer(void* cb, unsigned int flags);
-extern void vkCmdBindPipeline(void* cb, int bindPoint, void* pipeline);
-extern void vkCmdPushConstants(void* cb, void* layout, unsigned int stages, unsigned int offset, unsigned int size, const void* values);
-extern void vkCmdDispatch(void* cb, unsigned int x, unsigned int y, unsigned int z);
-extern void vkCmdPipelineBarrier(void* cb, unsigned int srcStages, unsigned int dstStages, unsigned int deps,
-                                 unsigned int memCount, const struct VkMemoryBarrier* mem, unsigned int bufCount, const void* bufs,
-                                 unsigned int imgCount, const void* imgs);
-extern int vkQueueSubmit(void* queue, unsigned int count, const struct VkSubmitInfo* submits, void* fence);
-extern int vkCreateFence(void* device, const struct VkFenceCreateInfo* info, const void* alloc, void** fence);
-extern int vkWaitForFences(void* device, unsigned int count, void** fences, unsigned int waitAll, unsigned long timeout);
-extern int vkResetFences(void* device, unsigned int count, void** fences);
+extern int vkCreateInstance(const struct VkInstanceCreateInfo* info, const VkAllocationCallbacks_* alloc, VkInstance_** instance);
+extern int vkEnumeratePhysicalDevices(VkInstance_* instance, unsigned int* count, VkPhysicalDevice_** devices);
+extern void vkGetPhysicalDeviceProperties2(VkPhysicalDevice_* pd, struct VkPhysicalDeviceProperties2* props);
+extern void vkGetPhysicalDeviceFeatures2(VkPhysicalDevice_* pd, struct VkPhysicalDeviceFeatures2* features);
+extern void vkGetPhysicalDeviceQueueFamilyProperties(VkPhysicalDevice_* pd, unsigned int* count, struct VkQueueFamilyProperties* props);
+extern void vkGetPhysicalDeviceMemoryProperties(VkPhysicalDevice_* pd, struct VkPhysicalDeviceMemoryProperties* props);
+extern int vkEnumerateDeviceExtensionProperties(VkPhysicalDevice_* pd, const char* layer, unsigned int* count, struct VkExtensionProperties* props);
+extern int vkCreateDevice(VkPhysicalDevice_* pd, const struct VkDeviceCreateInfo* info, const VkAllocationCallbacks_* alloc, VkDevice_** device);
+extern void vkGetDeviceQueue(VkDevice_* device, unsigned int family, unsigned int index, VkQueue_** queue);
+extern int vkCreateBuffer(VkDevice_* device, const struct VkBufferCreateInfo* info, const VkAllocationCallbacks_* alloc, VkBuffer_** buffer);
+extern void vkDestroyBuffer(VkDevice_* device, VkBuffer_* buffer, const VkAllocationCallbacks_* alloc);
+extern void vkGetBufferMemoryRequirements(VkDevice_* device, VkBuffer_* buffer, struct VkMemoryRequirements* req);
+extern int vkAllocateMemory(VkDevice_* device, const struct VkMemoryAllocateInfo* info, const VkAllocationCallbacks_* alloc, VkDeviceMemory_** memory);
+extern void vkFreeMemory(VkDevice_* device, VkDeviceMemory_* memory, const VkAllocationCallbacks_* alloc);
+extern int vkBindBufferMemory(VkDevice_* device, VkBuffer_* buffer, VkDeviceMemory_* memory, unsigned long offset);
+extern int vkMapMemory(VkDevice_* device, VkDeviceMemory_* memory, unsigned long offset, unsigned long size, unsigned int flags, unsigned char** data);
+extern unsigned long vkGetBufferDeviceAddress(VkDevice_* device, const struct VkBufferDeviceAddressInfo* info);
+extern int vkCreateShaderModule(VkDevice_* device, const struct VkShaderModuleCreateInfo* info, const VkAllocationCallbacks_* alloc, VkShaderModule_** module);
+extern void vkDestroyShaderModule(VkDevice_* device, VkShaderModule_* module, const VkAllocationCallbacks_* alloc);
+extern int vkCreatePipelineLayout(VkDevice_* device, const struct VkPipelineLayoutCreateInfo* info, const VkAllocationCallbacks_* alloc, VkPipelineLayout_** layout);
+extern int vkCreateComputePipelines(VkDevice_* device, VkPipelineCache_* cache, unsigned int count, const struct VkComputePipelineCreateInfo* infos,
+                                    const VkAllocationCallbacks_* alloc, VkPipeline_** pipelines);
+extern int vkCreateCommandPool(VkDevice_* device, const struct VkCommandPoolCreateInfo* info, const VkAllocationCallbacks_* alloc, VkCommandPool_** pool);
+extern int vkAllocateCommandBuffers(VkDevice_* device, const struct VkCommandBufferAllocateInfo* info, VkCommandBuffer_** buffers);
+extern int vkBeginCommandBuffer(VkCommandBuffer_* cb, const struct VkCommandBufferBeginInfo* info);
+extern int vkEndCommandBuffer(VkCommandBuffer_* cb);
+extern int vkResetCommandBuffer(VkCommandBuffer_* cb, unsigned int flags);
+extern void vkCmdBindPipeline(VkCommandBuffer_* cb, int bindPoint, VkPipeline_* pipeline);
+extern void vkCmdPushConstants(VkCommandBuffer_* cb, VkPipelineLayout_* layout, unsigned int stages, unsigned int offset, unsigned int size, const unsigned char* values);
+extern void vkCmdDispatch(VkCommandBuffer_* cb, unsigned int x, unsigned int y, unsigned int z);
+extern void vkCmdPipelineBarrier(VkCommandBuffer_* cb, unsigned int srcStages, unsigned int dstStages, unsigned int deps,
+                                 unsigned int memCount, const struct VkMemoryBarrier* mem, unsigned int bufCount, const VkBufferMemoryBarrier_* bufs,
+                                 unsigned int imgCount, const VkImageMemoryBarrier_* imgs);
+extern int vkQueueSubmit(VkQueue_* queue, unsigned int count, const struct VkSubmitInfo* submits, VkFence_* fence);
+extern int vkCreateFence(VkDevice_* device, const struct VkFenceCreateInfo* info, const VkAllocationCallbacks_* alloc, VkFence_** fence);
+extern int vkWaitForFences(VkDevice_* device, unsigned int count, VkFence_** fences, unsigned int waitAll, unsigned long timeout);
+extern int vkResetFences(VkDevice_* device, unsigned int count, VkFence_** fences);
 
 #define DVK_STYPE_APP 0
 #define DVK_STYPE_INSTANCE 1
@@ -290,8 +321,8 @@ extern int vkResetFences(void* device, unsigned int count, void** fences);
 struct DvkBuf_ {
     unsigned long addr;
     unsigned long bytes;
-    void* buf;
-    void* mem;
+    VkBuffer_* buf;
+    VkDeviceMemory_* mem;
     unsigned char* cpu;
 };
 
@@ -339,12 +370,12 @@ struct DvkConv_ {
 };
 
 static int   g_dvk_state = 0;          // 0 = not yet, 1 = ready, -1 = unusable
-static void* g_dvk_instance = (void*)0;
-static void* g_dvk_pd = (void*)0;
-static void* g_dvk_dev = (void*)0;
-static void* g_dvk_queue = (void*)0;
-static void* g_dvk_layout = (void*)0;
-static void* g_dvk_pool = (void*)0;
+static VkInstance_* g_dvk_instance = null;
+static VkPhysicalDevice_* g_dvk_pd = null;
+static VkDevice_* g_dvk_dev = null;
+static VkQueue_* g_dvk_queue = null;
+static VkPipelineLayout_* g_dvk_layout = null;
+static VkCommandPool_* g_dvk_pool = null;
 static unsigned int g_dvk_family = 0U;
 static unsigned int g_dvk_memtype = 0U;     // device buffers
 static unsigned int g_dvk_hosttype = 0U;    // the staging arena
@@ -355,7 +386,7 @@ static int g_dvk_serial = 0;                // dispatches run in order without b
 static int g_dvk_reported = 0;
 
 // Pipelines: one per module of device_kernels_spirv.h (0 = not yet, -1 = can't)
-static void* g_dvk_pipe[DK_SPIRV_MODULES];
+static VkPipeline_* g_dvk_pipe[DK_SPIRV_MODULES];
 static int   g_dvk_pipe_state[DK_SPIRV_MODULES];
 static int   g_dvk_kmod[4 * DK_COUNT];      // the module of (build, DK_* kernel): 0 = not looked up, -1 = none, else index + 1
 
@@ -368,12 +399,12 @@ static unsigned long g_dvk_npieces = 0UL;
 static unsigned long g_dvk_cappieces = 0UL;
 
 // The command buffer ring: slot i's fence is pending while its submission may run.
-static void* g_dvk_cb[DVK_RING];
-static void* g_dvk_fence[DVK_RING];
+static VkCommandBuffer_* g_dvk_cb[DVK_RING];
+static VkFence_* g_dvk_fence[DVK_RING];
 static int   g_dvk_pending[DVK_RING];
 static long  g_dvk_open = -1L;              // the slot being recorded, or -1
 static unsigned long g_dvk_next = 0UL;      // the slot the next command buffer takes
-static void* g_dvk_last_pipe = (void*)0;
+static VkPipeline_* g_dvk_last_pipe = null;
 static unsigned long g_dvk_count = 0UL;
 
 // The staging arena (host-visible, coherent): bump-allocated, reset when the GPU is idle.
@@ -384,11 +415,11 @@ static void dvk_log_(const char* what, const char* detail) {
     unsafe {
         unsigned long n = 0UL;
         while (what[n] != (char)0) n = n + 1UL;
-        write(2, (const void*)what, n);
+        write(2, (const char*)what, n);
         n = 0UL;
         while (detail[n] != (char)0) n = n + 1UL;
-        write(2, (const void*)detail, n);
-        write(2, (const void*)"\n", 1UL);
+        write(2, (const char*)detail, n);
+        write(2, (const char*)"\n", 1UL);
     }
 }
 
@@ -409,13 +440,13 @@ static int dvk_has_ext_(const struct VkExtensionProperties* exts, unsigned int n
 }
 
 // The extensions of physical device pd (malloc'd; *n entries), null on failure.
-static struct VkExtensionProperties* dvk_device_exts_(void* pd, unsigned int* n) {
+static struct VkExtensionProperties* dvk_device_exts_(VkPhysicalDevice_* pd, unsigned int* n) {
     unsafe {
         *n = 0U;
         if (vkEnumerateDeviceExtensionProperties(pd, (const char*)0, n, (struct VkExtensionProperties*)0) != 0) return (struct VkExtensionProperties*)0;
         struct VkExtensionProperties* e = (struct VkExtensionProperties*)malloc(sizeof(struct VkExtensionProperties) * ((unsigned long)*n + 1UL));
         if (e == (struct VkExtensionProperties*)0) return e;
-        if (vkEnumerateDeviceExtensionProperties(pd, (const char*)0, n, e) != 0) { free((void*)e); return (struct VkExtensionProperties*)0; }
+        if (vkEnumerateDeviceExtensionProperties(pd, (const char*)0, n, e) != 0) { free((unsigned char*)e); return (struct VkExtensionProperties*)0; }
         return e;
     }
 }
@@ -438,56 +469,56 @@ static int dvk_instance_() {
         }
         int settings = dvk_has_ext_(exts, n, "VK_EXT_layer_settings");
         if (settings) { names[nn] = "VK_EXT_layer_settings"; nn = nn + 1U; }
-        free((void*)exts);
+        free((unsigned char*)exts);
 
         unsigned int never = 0U;   // MVK_CONFIG_FAST_MATH_NEVER
         struct VkLayerSettingEXT s;
         s.pLayerName = "MoltenVK"; s.pSettingName = "MVK_CONFIG_FAST_MATH_ENABLED";
-        s.type = 3; s.valueCount = 1U; s.pValues = (const void*)&never;   // VK_LAYER_SETTING_TYPE_UINT32_EXT
+        s.type = 3; s.valueCount = 1U; s.pValues = (const unsigned char*)&never;   // VK_LAYER_SETTING_TYPE_UINT32_EXT
         struct VkLayerSettingsCreateInfoEXT ls;
-        ls.sType = DVK_STYPE_LAYER_SETTINGS; ls.pNext = (const void*)0; ls.settingCount = 1U; ls.pSettings = (const struct VkLayerSettingEXT*)&s;
+        ls.sType = DVK_STYPE_LAYER_SETTINGS; ls.pNext = null; ls.settingCount = 1U; ls.pSettings = (const struct VkLayerSettingEXT*)&s;
 
         struct VkApplicationInfo app;
-        app.sType = DVK_STYPE_APP; app.pNext = (const void*)0;
+        app.sType = DVK_STYPE_APP; app.pNext = null;
         app.pApplicationName = "safec"; app.applicationVersion = 1U;
         app.pEngineName = "std::ml"; app.engineVersion = 1U;
         app.apiVersion = DVK_API_1_3;
         struct VkInstanceCreateInfo ci;
-        ci.sType = DVK_STYPE_INSTANCE; ci.pNext = settings ? (const void*)&ls : (const void*)0; ci.flags = flags;
+        ci.sType = DVK_STYPE_INSTANCE; ci.pNext = settings ? (const VkNext_*)&ls : (const VkNext_*)0; ci.flags = flags;
         ci.pApplicationInfo = (const struct VkApplicationInfo*)&app;
         ci.enabledLayerCount = 0U; ci.ppEnabledLayerNames = (const char**)0;
         ci.enabledExtensionCount = nn; ci.ppEnabledExtensionNames = (const char**)&names[0];
-        if (vkCreateInstance(&ci, (const void*)0, &g_dvk_instance) != 0) return 0;
+        if (vkCreateInstance(&ci, null, &g_dvk_instance) != 0) return 0;
     }
     return 1;
 }
 
 // What physical device pd offers; 0 if it lacks something the kernels need.
 // Fills the feature structs to enable (chained from f2) when it qualifies.
-static int dvk_qualifies_(void* pd, struct VkPhysicalDeviceFeatures2* f2, struct DvkFeat_* f16, struct DvkFeat_* bda,
+static int dvk_qualifies_(VkPhysicalDevice_* pd, struct VkPhysicalDeviceFeatures2* f2, struct DvkFeat_* f16, struct DvkFeat_* bda,
                           struct DvkFeat_* atom, struct DvkFeat_* sgc) {
     unsafe {
         struct DvkProp_ sg;
         struct DvkProp_ sgs;
-        sg.sType = DVK_STYPE_SUBGROUP_PROPERTIES; sg.pNext = (void*)&sgs;
+        sg.sType = DVK_STYPE_SUBGROUP_PROPERTIES; sg.pNext = (VkNext_*)&sgs;
         struct VkPhysicalDeviceDriverProperties drv;
-        sgs.sType = DVK_STYPE_SUBGROUP_SIZE_PROPERTIES; sgs.pNext = (void*)&drv;
-        drv.sType = DVK_STYPE_DRIVER_PROPERTIES; drv.pNext = (void*)0; drv.driverID = 0;
+        sgs.sType = DVK_STYPE_SUBGROUP_SIZE_PROPERTIES; sgs.pNext = (VkNext_*)&drv;
+        drv.sType = DVK_STYPE_DRIVER_PROPERTIES; drv.pNext = null; drv.driverID = 0;
         sg.v[0] = 0U; sg.v[1] = 0U; sg.v[2] = 0U; sgs.v[0] = 0U; sgs.v[1] = 0U; sgs.v[3] = 0U;
         struct VkPhysicalDeviceProperties2 p;
-        p.sType = DVK_STYPE_PROPERTIES2; p.pNext = (void*)&sg;
+        p.sType = DVK_STYPE_PROPERTIES2; p.pNext = (VkNext_*)&sg;
         vkGetPhysicalDeviceProperties2(pd, &p);
         if (p.apiVersion < DVK_API_1_2) return 0;
         // subgroups: arithmetic and shuffles in compute shaders, 32 wide
         if ((sg.v[1] & DVK_STAGE_COMPUTE) == 0U || (sg.v[2] & DVK_SUBGROUP_NEEDS) != DVK_SUBGROUP_NEEDS) return 0;
 
         unsigned int i = 0U;
-        f16->sType = DVK_STYPE_16BIT_STORAGE; f16->pNext = (void*)bda;
-        bda->sType = DVK_STYPE_BDA_FEATURES; bda->pNext = (void*)atom;
-        atom->sType = DVK_STYPE_ATOMIC_FLOAT_FEATURES; atom->pNext = (void*)sgc;
-        sgc->sType = DVK_STYPE_SUBGROUP_SIZE_FEATURES; sgc->pNext = (void*)0;
+        f16->sType = DVK_STYPE_16BIT_STORAGE; f16->pNext = (VkNext_*)bda;
+        bda->sType = DVK_STYPE_BDA_FEATURES; bda->pNext = (VkNext_*)atom;
+        atom->sType = DVK_STYPE_ATOMIC_FLOAT_FEATURES; atom->pNext = (VkNext_*)sgc;
+        sgc->sType = DVK_STYPE_SUBGROUP_SIZE_FEATURES; sgc->pNext = null;
         while (i < 16U) { f16->b[i] = 0U; bda->b[i] = 0U; atom->b[i] = 0U; sgc->b[i] = 0U; i = i + 1U; }
-        f2->sType = DVK_STYPE_FEATURES2; f2->pNext = (void*)f16;
+        f2->sType = DVK_STYPE_FEATURES2; f2->pNext = (VkNext_*)f16;
         i = 0U;
         while (i < 55U) { f2->f[i] = 0U; i = i + 1U; }
         vkGetPhysicalDeviceFeatures2(pd, f2);
@@ -548,9 +579,9 @@ static int dvk_ensure_() {
     if (!dvk_instance_()) return 0;
     unsafe {
         unsigned int n = 0U;
-        if (vkEnumeratePhysicalDevices(g_dvk_instance, &n, (void**)0) != 0 || n == 0U) return 0;
-        void** pds = (void**)malloc(sizeof(void*) * (unsigned long)n);
-        if (pds == (void**)0) return 0;
+        if (vkEnumeratePhysicalDevices(g_dvk_instance, &n, null) != 0 || n == 0U) return 0;
+        struct VkPhysicalDevice_** pds = (struct VkPhysicalDevice_**)malloc(sizeof(VkPhysicalDevice_*) * (unsigned long)n);
+        if (pds == null) return 0;
         vkEnumeratePhysicalDevices(g_dvk_instance, &n, pds);
         // the best qualifying device: discrete, then integrated, then any
         struct VkPhysicalDeviceFeatures2 f2;
@@ -563,9 +594,9 @@ static int dvk_ensure_() {
             if (r > bestRank) { bestRank = r; best = i; }
             i = i + 1U;
         }
-        if (bestRank == 0) { free((void*)pds); return 0; }
+        if (bestRank == 0) { free((unsigned char*)pds); return 0; }
         g_dvk_pd = pds[best];
-        free((void*)pds);
+        free((unsigned char*)pds);
         dvk_qualifies_(g_dvk_pd, &f2, &f16, &bda, &atom, &sgc);   // its features to enable
 
         // a queue family with compute
@@ -585,23 +616,23 @@ static int dvk_ensure_() {
         if (exts == (struct VkExtensionProperties*)0) return 0;
         const char* names[4];
         unsigned int nn = 0U;
-        if (!dvk_has_ext_(exts, ne, "VK_EXT_shader_atomic_float")) { free((void*)exts); return 0; }
+        if (!dvk_has_ext_(exts, ne, "VK_EXT_shader_atomic_float")) { free((unsigned char*)exts); return 0; }
         names[nn] = "VK_EXT_shader_atomic_float"; nn = nn + 1U;
         if (dvk_has_ext_(exts, ne, "VK_EXT_subgroup_size_control")) { names[nn] = "VK_EXT_subgroup_size_control"; nn = nn + 1U; }
         if (dvk_has_ext_(exts, ne, "VK_KHR_portability_subset")) { names[nn] = "VK_KHR_portability_subset"; nn = nn + 1U; }
-        free((void*)exts);
+        free((unsigned char*)exts);
 
         float prio = 1.0f;
         struct VkDeviceQueueCreateInfo q;
-        q.sType = DVK_STYPE_DEVICE_QUEUE; q.pNext = (const void*)0; q.flags = 0U;
+        q.sType = DVK_STYPE_DEVICE_QUEUE; q.pNext = null; q.flags = 0U;
         q.queueFamilyIndex = g_dvk_family; q.queueCount = 1U; q.pQueuePriorities = (const float*)&prio;
         struct VkDeviceCreateInfo dc;
-        dc.sType = DVK_STYPE_DEVICE; dc.pNext = (const void*)&f2; dc.flags = 0U;
+        dc.sType = DVK_STYPE_DEVICE; dc.pNext = (const VkNext_*)&f2; dc.flags = 0U;
         dc.queueCreateInfoCount = 1U; dc.pQueueCreateInfos = (const struct VkDeviceQueueCreateInfo*)&q;
         dc.enabledLayerCount = 0U; dc.ppEnabledLayerNames = (const char**)0;
         dc.enabledExtensionCount = nn; dc.ppEnabledExtensionNames = (const char**)&names[0];
-        dc.pEnabledFeatures = (const void*)0;
-        if (vkCreateDevice(g_dvk_pd, &dc, (const void*)0, &g_dvk_dev) != 0) { dvk_log_("device_vulkan: ", "vkCreateDevice failed"); return 0; }
+        dc.pEnabledFeatures = null;
+        if (vkCreateDevice(g_dvk_pd, &dc, null, &g_dvk_dev) != 0) { dvk_log_("device_vulkan: ", "vkCreateDevice failed"); return 0; }
         vkGetDeviceQueue(g_dvk_dev, g_dvk_family, 0U, &g_dvk_queue);
 
         // memory: device-local and mapped where it can be (cached for the host's reads), else device-local
@@ -633,23 +664,23 @@ static int dvk_ensure_() {
         struct VkPushConstantRange pr;
         pr.stageFlags = DVK_STAGE_COMPUTE; pr.offset = 0U; pr.size = DVK_PUSH_BYTES;
         struct VkPipelineLayoutCreateInfo pl;
-        pl.sType = DVK_STYPE_PIPELINE_LAYOUT; pl.pNext = (const void*)0; pl.flags = 0U;
-        pl.setLayoutCount = 0U; pl.pSetLayouts = (const void*)0;
+        pl.sType = DVK_STYPE_PIPELINE_LAYOUT; pl.pNext = null; pl.flags = 0U;
+        pl.setLayoutCount = 0U; pl.pSetLayouts = null;
         pl.pushConstantRangeCount = 1U; pl.pPushConstantRanges = (const struct VkPushConstantRange*)&pr;
-        if (vkCreatePipelineLayout(g_dvk_dev, &pl, (const void*)0, &g_dvk_layout) != 0) return 0;
+        if (vkCreatePipelineLayout(g_dvk_dev, &pl, null, &g_dvk_layout) != 0) return 0;
 
         struct VkCommandPoolCreateInfo cp;
-        cp.sType = DVK_STYPE_COMMAND_POOL; cp.pNext = (const void*)0; cp.flags = DVK_POOL_RESET; cp.queueFamilyIndex = g_dvk_family;
-        if (vkCreateCommandPool(g_dvk_dev, &cp, (const void*)0, &g_dvk_pool) != 0) return 0;
+        cp.sType = DVK_STYPE_COMMAND_POOL; cp.pNext = null; cp.flags = DVK_POOL_RESET; cp.queueFamilyIndex = g_dvk_family;
+        if (vkCreateCommandPool(g_dvk_dev, &cp, null, &g_dvk_pool) != 0) return 0;
         struct VkCommandBufferAllocateInfo ca;
-        ca.sType = DVK_STYPE_COMMAND_BUFFER_ALLOCATE; ca.pNext = (const void*)0; ca.commandPool = g_dvk_pool;
+        ca.sType = DVK_STYPE_COMMAND_BUFFER_ALLOCATE; ca.pNext = null; ca.commandPool = g_dvk_pool;
         ca.level = 0; ca.commandBufferCount = (unsigned int)DVK_RING;
         if (vkAllocateCommandBuffers(g_dvk_dev, &ca, &g_dvk_cb[0]) != 0) return 0;
         struct VkFenceCreateInfo fc;
-        fc.sType = DVK_STYPE_FENCE; fc.pNext = (const void*)0; fc.flags = 0U;
+        fc.sType = DVK_STYPE_FENCE; fc.pNext = null; fc.flags = 0U;
         unsigned long r = 0UL;
         while (r < DVK_RING) {
-            if (vkCreateFence(g_dvk_dev, &fc, (const void*)0, &g_dvk_fence[r]) != 0) return 0;
+            if (vkCreateFence(g_dvk_dev, &fc, null, &g_dvk_fence[r]) != 0) return 0;
             g_dvk_pending[r] = 0;
             r = r + 1UL;
         }
@@ -663,30 +694,30 @@ static int dvk_ensure_() {
 static unsigned long dvk_alloc_buf_(unsigned long bytes, unsigned int type, struct DvkBuf_* out) {
     unsafe {
         struct VkBufferCreateInfo bc;
-        bc.sType = DVK_STYPE_BUFFER; bc.pNext = (const void*)0; bc.flags = 0U; bc.size = bytes;
+        bc.sType = DVK_STYPE_BUFFER; bc.pNext = null; bc.flags = 0U; bc.size = bytes;
         bc.usage = DVK_BUFFER_USAGE; bc.sharingMode = 0; bc.queueFamilyIndexCount = 0U; bc.pQueueFamilyIndices = (const unsigned int*)0;
-        void* buf = (void*)0;
-        if (vkCreateBuffer(g_dvk_dev, &bc, (const void*)0, &buf) != 0) return 0UL;
+        VkBuffer_* buf = null;
+        if (vkCreateBuffer(g_dvk_dev, &bc, null, &buf) != 0) return 0UL;
         struct VkMemoryRequirements req;
         vkGetBufferMemoryRequirements(g_dvk_dev, buf, &req);
         struct VkMemoryAllocateFlagsInfo af;
-        af.sType = DVK_STYPE_MEMORY_ALLOCATE_FLAGS; af.pNext = (const void*)0; af.flags = DVK_ALLOCATE_DEVICE_ADDRESS; af.deviceMask = 0U;
+        af.sType = DVK_STYPE_MEMORY_ALLOCATE_FLAGS; af.pNext = null; af.flags = DVK_ALLOCATE_DEVICE_ADDRESS; af.deviceMask = 0U;
         struct VkMemoryAllocateInfo ai;
-        ai.sType = DVK_STYPE_MEMORY_ALLOCATE; ai.pNext = (const void*)&af; ai.allocationSize = req.size; ai.memoryTypeIndex = type;
-        void* mem = (void*)0;
-        if ((req.memoryTypeBits & (1U << type)) == 0U || vkAllocateMemory(g_dvk_dev, &ai, (const void*)0, &mem) != 0) {
-            vkDestroyBuffer(g_dvk_dev, buf, (const void*)0);
+        ai.sType = DVK_STYPE_MEMORY_ALLOCATE; ai.pNext = (const VkNext_*)&af; ai.allocationSize = req.size; ai.memoryTypeIndex = type;
+        VkDeviceMemory_* mem = null;
+        if ((req.memoryTypeBits & (1U << type)) == 0U || vkAllocateMemory(g_dvk_dev, &ai, null, &mem) != 0) {
+            vkDestroyBuffer(g_dvk_dev, buf, null);
             return 0UL;
         }
-        void* cpu = (void*)0;
+        unsigned char* cpu = null;
         int ok = vkBindBufferMemory(g_dvk_dev, buf, mem, 0UL) == 0;
         if (ok && (type == g_dvk_hosttype || g_dvk_mapped)) ok = vkMapMemory(g_dvk_dev, mem, 0UL, req.size, 0U, &cpu) == 0;
         struct VkBufferDeviceAddressInfo bi;
-        bi.sType = DVK_STYPE_BDA_INFO; bi.pNext = (const void*)0; bi.buffer = buf;
+        bi.sType = DVK_STYPE_BDA_INFO; bi.pNext = null; bi.buffer = buf;
         unsigned long addr = ok ? vkGetBufferDeviceAddress(g_dvk_dev, &bi) : 0UL;
         if (addr == 0UL || dev_tag_(addr) != 0UL) {
-            vkDestroyBuffer(g_dvk_dev, buf, (const void*)0);
-            vkFreeMemory(g_dvk_dev, mem, (const void*)0);
+            vkDestroyBuffer(g_dvk_dev, buf, null);
+            vkFreeMemory(g_dvk_dev, mem, null);
             return 0UL;
         }
         out->addr = addr; out->bytes = bytes; out->buf = buf; out->mem = mem; out->cpu = (unsigned char*)cpu;
@@ -708,36 +739,36 @@ static int dvk_module_(int b, const char* name) {
 }
 
 // Module m's pipeline (built on first use), null if it can't be built.
-static void* dvk_pipe_at_(int m) {
-    if (m < 0) return (void*)0;
+static VkPipeline_* dvk_pipe_at_(int m) {
+    if (m < 0) return null;
     unsafe {
         if (g_dvk_pipe_state[m] != 0) return g_dvk_pipe[m];
         g_dvk_pipe_state[m] = -1;
         struct VkShaderModuleCreateInfo sm;
-        sm.sType = DVK_STYPE_SHADER_MODULE; sm.pNext = (const void*)0; sm.flags = 0U;
+        sm.sType = DVK_STYPE_SHADER_MODULE; sm.pNext = null; sm.flags = 0U;
         sm.codeSize = 4UL * (unsigned long)dk_spirv_index_[3 * m + 2];
         sm.pCode = &dk_spirv_words_[dk_spirv_index_[3 * m + 1]];
-        void* mod = (void*)0;
-        if (vkCreateShaderModule(g_dvk_dev, &sm, (const void*)0, &mod) != 0) {
+        VkShaderModule_* mod = null;
+        if (vkCreateShaderModule(g_dvk_dev, &sm, null, &mod) != 0) {
             dvk_log_("device_vulkan: a kernel's module failed: ", dk_spirv_name_(m));
-            return (void*)0;
+            return null;
         }
         struct VkPipelineShaderStageRequiredSubgroupSizeCreateInfo rs;
-        rs.sType = DVK_STYPE_REQUIRED_SUBGROUP_SIZE; rs.pNext = (void*)0; rs.requiredSubgroupSize = 32U;
+        rs.sType = DVK_STYPE_REQUIRED_SUBGROUP_SIZE; rs.pNext = null; rs.requiredSubgroupSize = 32U;
         struct VkComputePipelineCreateInfo pc;
-        pc.sType = DVK_STYPE_COMPUTE_PIPELINE; pc.pNext = (const void*)0; pc.flags = 0U;
-        pc.stage.sType = DVK_STYPE_SHADER_STAGE; pc.stage.pNext = g_dvk_req_sg ? (const void*)&rs : (const void*)0;
+        pc.sType = DVK_STYPE_COMPUTE_PIPELINE; pc.pNext = null; pc.flags = 0U;
+        pc.stage.sType = DVK_STYPE_SHADER_STAGE; pc.stage.pNext = g_dvk_req_sg ? (const VkNext_*)&rs : (const VkNext_*)0;
         pc.stage.flags = g_dvk_full_sg ? DVK_REQUIRE_FULL_SUBGROUPS : 0U;
         pc.stage.stage = DVK_STAGE_COMPUTE; pc.stage.module = mod; pc.stage.pName = dk_spirv_name_(m);
-        pc.stage.pSpecializationInfo = (const void*)0;
-        pc.layout = g_dvk_layout; pc.basePipelineHandle = (void*)0; pc.basePipelineIndex = -1;
-        void* pipe = (void*)0;
-        if (vkCreateComputePipelines(g_dvk_dev, (void*)0, 1U, &pc, (const void*)0, &pipe) != 0) {
+        pc.stage.pSpecializationInfo = null;
+        pc.layout = g_dvk_layout; pc.basePipelineHandle = null; pc.basePipelineIndex = -1;
+        VkPipeline_* pipe = null;
+        if (vkCreateComputePipelines(g_dvk_dev, null, 1U, &pc, null, &pipe) != 0) {
             dvk_log_("device_vulkan: a kernel's pipeline failed: ", dk_spirv_name_(m));
-            pipe = (void*)0;
+            pipe = null;
         }
-        vkDestroyShaderModule(g_dvk_dev, mod, (const void*)0);
-        if (pipe == (void*)0) return pipe;
+        vkDestroyShaderModule(g_dvk_dev, mod, null);
+        if (pipe == null) return pipe;
         g_dvk_pipe[m] = pipe;
         g_dvk_pipe_state[m] = 1;
         return pipe;
@@ -745,25 +776,25 @@ static void* dvk_pipe_at_(int m) {
 }
 
 // DK_* kernel k's pipeline in build b (bit 0 DK_TAGGED, bit 1 DK_ATTN64).
-static void* dvk_pipe_(int b, int k) {
+static VkPipeline_* dvk_pipe_(int b, int k) {
     unsafe {
         int slot = b * DK_COUNT + k;
         if (g_dvk_kmod[slot] == 0) {
             int m = dvk_module_(b, device_kernel_name_(k));
             g_dvk_kmod[slot] = m + 1 == 0 ? -1 : m + 1;
         }
-        return g_dvk_kmod[slot] < 0 ? (void*)0 : dvk_pipe_at_(g_dvk_kmod[slot] - 1);
+        return g_dvk_kmod[slot] < 0 ? (VkPipeline_*)0 : dvk_pipe_at_(g_dvk_kmod[slot] - 1);
     }
 }
 
 // The pipeline of a named (mk_*) kernel, cached in *cache (0 = not looked up).
-static void* dvk_named_pipe_(const char* name, int* cache) {
+static VkPipeline_* dvk_named_pipe_(const char* name, int* cache) {
     unsafe {
         if (*cache == 0) {
             int m = dvk_module_(0, name);
             *cache = m < 0 ? -1 : m + 1;
         }
-        return *cache < 0 ? (void*)0 : dvk_pipe_at_(*cache - 1);
+        return *cache < 0 ? (VkPipeline_*)0 : dvk_pipe_at_(*cache - 1);
     }
 }
 
@@ -805,14 +836,14 @@ static unsigned char* dvk_host_(unsigned long h) {
 }
 
 // Room for one more element in a malloc'd array (*arr of *cap elements of 'size' bytes, n used).
-static int dvk_grow_(void** arr, unsigned long* cap, unsigned long n, unsigned long size) {
+static int dvk_grow_(unsigned char** arr, unsigned long* cap, unsigned long n, unsigned long size) {
     unsafe {
         if (n < *cap) return 1;
         unsigned long nc = *cap == 0UL ? 16UL : *cap * 2UL;
-        void* na = malloc(size * nc);
-        if (na == (void*)0) return 0;
-        if (n > 0UL) memcpy(na, (const void*)*arr, size * n);
-        if (*arr != (void*)0) free(*arr);
+        unsigned char* na = malloc(size * nc);
+        if (na == null) return 0;
+        if (n > 0UL) memcpy(na, *arr, size * n);
+        if (*arr != null) free(*arr);
         *arr = na;
         *cap = nc;
     }
@@ -863,7 +894,7 @@ static int dvk_give_(unsigned long k, unsigned long off, unsigned long bytes) {
             bl->free[at].off = off;
             bl->free[at].bytes = bl->free[at].bytes + bytes;
         } else {
-            if (!dvk_grow_((void**)&bl->free, &bl->capfree, bl->nfree, sizeof(struct DvkRange_))) return 0;
+            if (!dvk_grow_((unsigned char**)&bl->free, &bl->capfree, bl->nfree, sizeof(struct DvkRange_))) return 0;
             unsigned long j = bl->nfree;
             while (j > at) { bl->free[j] = bl->free[j - 1UL]; j = j - 1UL; }
             bl->free[at].off = off;
@@ -904,11 +935,11 @@ static int dvk_begin_() {
         if (!dvk_wait_slot_(s)) return 0;
         vkResetCommandBuffer(g_dvk_cb[s], 0U);
         struct VkCommandBufferBeginInfo bi;
-        bi.sType = DVK_STYPE_COMMAND_BUFFER_BEGIN; bi.pNext = (const void*)0; bi.flags = DVK_ONE_TIME; bi.pInheritanceInfo = (const void*)0;
+        bi.sType = DVK_STYPE_COMMAND_BUFFER_BEGIN; bi.pNext = null; bi.flags = DVK_ONE_TIME; bi.pInheritanceInfo = null;
         if (vkBeginCommandBuffer(g_dvk_cb[s], &bi) != 0) return 0;
         g_dvk_open = (long)s;
     }
-    g_dvk_last_pipe = (void*)0;
+    g_dvk_last_pipe = null;
     g_dvk_count = 0UL;
     return 1;
 }
@@ -922,15 +953,15 @@ static int dvk_commit_() {
         g_dvk_next = (s + 1UL) % DVK_RING;
         // the host may read what this command buffer wrote once its fence signals
         struct VkMemoryBarrier mb;
-        mb.sType = DVK_STYPE_MEMORY_BARRIER; mb.pNext = (const void*)0;
+        mb.sType = DVK_STYPE_MEMORY_BARRIER; mb.pNext = null;
         mb.srcAccessMask = DVK_ACCESS_SHADER_WRITE; mb.dstAccessMask = DVK_ACCESS_HOST;
-        vkCmdPipelineBarrier(g_dvk_cb[s], DVK_STAGE_SHADER, DVK_STAGE_HOST, 0U, 1U, &mb, 0U, (const void*)0, 0U, (const void*)0);
+        vkCmdPipelineBarrier(g_dvk_cb[s], DVK_STAGE_SHADER, DVK_STAGE_HOST, 0U, 1U, &mb, 0U, null, 0U, null);
         if (vkEndCommandBuffer(g_dvk_cb[s]) != 0) return dvk_check_(-1);
         struct VkSubmitInfo si;
-        si.sType = DVK_STYPE_SUBMIT; si.pNext = (const void*)0;
-        si.waitSemaphoreCount = 0U; si.pWaitSemaphores = (const void*)0; si.pWaitDstStageMask = (const unsigned int*)0;
+        si.sType = DVK_STYPE_SUBMIT; si.pNext = null;
+        si.waitSemaphoreCount = 0U; si.pWaitSemaphores = null; si.pWaitDstStageMask = (const unsigned int*)0;
         si.commandBufferCount = 1U; si.pCommandBuffers = &g_dvk_cb[s];
-        si.signalSemaphoreCount = 0U; si.pSignalSemaphores = (const void*)0;
+        si.signalSemaphoreCount = 0U; si.pSignalSemaphores = null;
         int r = vkQueueSubmit(g_dvk_queue, 1U, &si, g_dvk_fence[s]);
         if (r == 0) g_dvk_pending[s] = 1;
         return dvk_check_(r);
@@ -960,10 +991,10 @@ static int dvk_wait_() {
 // One dispatch of (gx, gy, gz) workgroups with 'len' bytes of push
 // constants, then a barrier, so the next one sees its writes (none where
 // dispatches run in order: g_dvk_serial).
-static int dvk_dispatch_(void* pipe, const void* push, unsigned long len, unsigned long gx, unsigned long gy, unsigned long gz) {
+static int dvk_dispatch_(VkPipeline_* pipe, const unsigned char* push, unsigned long len, unsigned long gx, unsigned long gy, unsigned long gz) {
     if (!dvk_begin_()) return 0;
     unsafe {
-        void* cb = g_dvk_cb[g_dvk_open];
+        VkCommandBuffer_* cb = g_dvk_cb[g_dvk_open];
         if (pipe != g_dvk_last_pipe) {
             vkCmdBindPipeline(cb, 1, pipe);   // VK_PIPELINE_BIND_POINT_COMPUTE
             g_dvk_last_pipe = pipe;
@@ -972,9 +1003,9 @@ static int dvk_dispatch_(void* pipe, const void* push, unsigned long len, unsign
         vkCmdDispatch(cb, (unsigned int)gx, (unsigned int)gy, (unsigned int)gz);
         if (!g_dvk_serial) {
             struct VkMemoryBarrier mb;
-            mb.sType = DVK_STYPE_MEMORY_BARRIER; mb.pNext = (const void*)0;
+            mb.sType = DVK_STYPE_MEMORY_BARRIER; mb.pNext = null;
             mb.srcAccessMask = DVK_ACCESS_SHADER_WRITE; mb.dstAccessMask = DVK_ACCESS_SHADER;
-            vkCmdPipelineBarrier(cb, DVK_STAGE_SHADER, DVK_STAGE_SHADER, 0U, 1U, &mb, 0U, (const void*)0, 0U, (const void*)0);
+            vkCmdPipelineBarrier(cb, DVK_STAGE_SHADER, DVK_STAGE_SHADER, 0U, 1U, &mb, 0U, null, 0U, null);
         }
     }
     g_dvk_count = g_dvk_count + 1UL;
@@ -986,14 +1017,14 @@ static int g_dvk_copy_mod = 0;
 
 // dst[i] = src[i] for n 32-bit words on the GPU (mk_copy), in order with the queued work.
 static int dvk_copy_words_(unsigned long dst, unsigned long src, unsigned long n) {
-    void* pipe = dvk_named_pipe_("mk_copy", &g_dvk_copy_mod);
-    if (pipe == (void*)0) return 0;
+    VkPipeline_* pipe = dvk_named_pipe_("mk_copy", &g_dvk_copy_mod);
+    if (pipe == null) return 0;
     struct DevArgs a = dev_args_();
     unsafe {
         a.p[0] = src; a.p[2] = dst; a.u[7] = (unsigned int)n;
         unsigned long groups = (n + DVK_BLOCK - 1UL) / DVK_BLOCK;
         if (groups > DVK_MAX_GROUPS) groups = DVK_MAX_GROUPS;
-        return dvk_dispatch_(pipe, (const void*)&a, sizeof(struct DevArgs), groups, 1UL, 1UL);
+        return dvk_dispatch_(pipe, (const unsigned char*)&a, sizeof(struct DevArgs), groups, 1UL, 1UL);
     }
 }
 
@@ -1035,9 +1066,9 @@ static int dvk_gemm_(const &DvkGemm_ g, unsigned long batch) {
         unsigned long j = 0UL;
         while (sfx[j] != (char)0) { name[i] = sfx[j]; i = i + 1UL; j = j + 1UL; }
         name[i] = (char)0;
-        void* pipe = dvk_named_pipe_((const char*)&name[0], &g_dvk_gemm_mod[slot]);
-        if (pipe == (void*)0) { device_note_cpu_launch_(DEVICE_VULKAN); return 0; }   // the tensor op runs on the CPU
-        return dvk_dispatch_(pipe, (const void*)g, sizeof(struct DvkGemm_), (n + tile - 1UL) / tile, (m + tile - 1UL) / tile, batch);
+        VkPipeline_* pipe = dvk_named_pipe_((const char*)&name[0], &g_dvk_gemm_mod[slot]);
+        if (pipe == null) { device_note_cpu_launch_(DEVICE_VULKAN); return 0; }   // the tensor op runs on the CPU
+        return dvk_dispatch_(pipe, (const unsigned char*)g, sizeof(struct DvkGemm_), (n + tile - 1UL) / tile, (m + tile - 1UL) / tile, batch);
     }
 }
 
@@ -1059,7 +1090,7 @@ static int dvk_conv_shape_(int op, unsigned long m, unsigned long n) {
 }
 
 // The pipeline for conv kernel op (0 fwd, 1 bwd_x, 2 bwd_w), a shape, type t.
-static void* dvk_conv_pipe_(int op, int shape, int t) {
+static VkPipeline_* dvk_conv_pipe_(int op, int shape, int t) {
     unsigned long slot = ((unsigned long)op * 4UL + (unsigned long)shape) * 3UL + (unsigned long)t;
     unsafe {
         char name[40];
@@ -1119,7 +1150,7 @@ unsigned long VulkanBackend::alloc(unsigned long bytes) {
     if (!dvk_ensure_()) return 0UL;
     unsigned long need = ((bytes == 0UL ? 1UL : bytes) + DVK_ALIGN - 1UL) / DVK_ALIGN * DVK_ALIGN;
     unsafe {
-        if (!dvk_grow_((void**)&g_dvk_pieces, &g_dvk_cappieces, g_dvk_npieces, sizeof(struct DvkPiece_))) return 0UL;
+        if (!dvk_grow_((unsigned char**)&g_dvk_pieces, &g_dvk_cappieces, g_dvk_npieces, sizeof(struct DvkPiece_))) return 0UL;
         unsigned long k = 0UL;
         long off = -1L;
         while (k < g_dvk_nblocks && off < 0L) {
@@ -1127,14 +1158,14 @@ unsigned long VulkanBackend::alloc(unsigned long bytes) {
             if (off < 0L) k = k + 1UL;
         }
         if (off < 0L) {
-            if (!dvk_grow_((void**)&g_dvk_blocks, &g_dvk_capblocks, g_dvk_nblocks, sizeof(struct DvkBlock_))) return 0UL;
+            if (!dvk_grow_((unsigned char**)&g_dvk_blocks, &g_dvk_capblocks, g_dvk_nblocks, sizeof(struct DvkBlock_))) return 0UL;
             struct DvkBlock_* bl = &g_dvk_blocks[g_dvk_nblocks];
             unsigned long size = need > DVK_BLOCK_BYTES ? need : DVK_BLOCK_BYTES;
             if (dvk_alloc_buf_(size, g_dvk_memtype, &bl->b) == 0UL) return 0UL;
             bl->free = (struct DvkRange_*)0; bl->nfree = 0UL; bl->capfree = 0UL; bl->live = 1UL;
             off = 0L;
             if (size > need) {
-                if (!dvk_grow_((void**)&bl->free, &bl->capfree, 0UL, sizeof(struct DvkRange_))) return 0UL;
+                if (!dvk_grow_((unsigned char**)&bl->free, &bl->capfree, 0UL, sizeof(struct DvkRange_))) return 0UL;
                 bl->free[0].off = need; bl->free[0].bytes = size - need; bl->nfree = 1UL;
             }
             k = g_dvk_nblocks;
@@ -1171,9 +1202,9 @@ void VulkanBackend::release(unsigned long handle) {
         dvk_give_(k, pc.addr - pc.block, pc.bytes);
         if (g_dvk_blocks[k].live > 0UL) return;
         if (dvk_busy_()) dvk_wait_();
-        vkDestroyBuffer(g_dvk_dev, g_dvk_blocks[k].b.buf, (const void*)0);
-        vkFreeMemory(g_dvk_dev, g_dvk_blocks[k].b.mem, (const void*)0);
-        if (g_dvk_blocks[k].free != (struct DvkRange_*)0) free((void*)g_dvk_blocks[k].free);
+        vkDestroyBuffer(g_dvk_dev, g_dvk_blocks[k].b.buf, null);
+        vkFreeMemory(g_dvk_dev, g_dvk_blocks[k].b.mem, null);
+        if (g_dvk_blocks[k].free != (struct DvkRange_*)0) free((unsigned char*)g_dvk_blocks[k].free);
         g_dvk_blocks[k] = g_dvk_blocks[g_dvk_nblocks - 1UL];
         g_dvk_nblocks = g_dvk_nblocks - 1UL;
     }
@@ -1188,7 +1219,7 @@ int VulkanBackend::upload(unsigned long dst, const &float src, unsigned long n) 
     unsigned char* p = dvk_host_(dst);
     if (g_dvk_mapped && p == (unsigned char*)0) return 0;
     if (g_dvk_mapped && !dvk_busy_()) {
-        unsafe { memcpy((void*)p, (const void*)src, n * 4UL); }
+        unsafe { memcpy((unsigned char*)p, (const unsigned char*)src, n * 4UL); }
         return 1;
     }
     unsigned long done = 0UL;
@@ -1198,7 +1229,7 @@ int VulkanBackend::upload(unsigned long dst, const &float src, unsigned long n) 
         unsigned long at = dvk_stage_(k * 4UL);
         if (at == 0UL) return 0;
         unsafe {
-            memcpy((void*)(g_dvk_stage.cpu + (at - g_dvk_stage.addr)), (const void*)((const float*)src + done), k * 4UL);
+            memcpy((unsigned char*)(g_dvk_stage.cpu + (at - g_dvk_stage.addr)), (const unsigned char*)((const float*)src + done), k * 4UL);
         }
         if (!dvk_copy_words_(dst + done * 4UL, at, k)) return 0;
         done = done + k;
@@ -1212,7 +1243,7 @@ int VulkanBackend::download(&float dst, unsigned long src, unsigned long n) {
     if (g_dvk_mapped) {
         unsigned char* p = dvk_host_(src);
         if (p == (unsigned char*)0 || !dvk_wait_()) return 0;
-        unsafe { memcpy((void*)dst, (const void*)p, n * 4UL); }
+        unsafe { memcpy((unsigned char*)dst, (const unsigned char*)p, n * 4UL); }
         return 1;
     }
     // through the staging arena, a piece at a time
@@ -1222,7 +1253,7 @@ int VulkanBackend::download(&float dst, unsigned long src, unsigned long n) {
         unsigned long k = n - done < piece ? n - done : piece;
         unsigned long at = dvk_stage_(k * 4UL);
         if (at == 0UL || !dvk_copy_words_(at, src + done * 4UL, k) || !dvk_wait_()) return 0;
-        unsafe { memcpy((void*)((float*)dst + done), (const void*)(g_dvk_stage.cpu + (at - g_dvk_stage.addr)), k * 4UL); }
+        unsafe { memcpy((unsigned char*)((float*)dst + done), (const unsigned char*)(g_dvk_stage.cpu + (at - g_dvk_stage.addr)), k * 4UL); }
         done = done + k;
     }
     return 1;
@@ -1297,8 +1328,8 @@ int VulkanBackend::conv(const &DevConv c) {
             (((unsigned long)k.Wi + (unsigned long)k.sW - 1UL) / (unsigned long)k.sW);
     }
     int shape = dvk_conv_shape_(op, m, n * phases);
-    void* pipe = dvk_conv_pipe_(op, shape, c.dtype);
-    if (pipe == (void*)0) { device_note_cpu_launch_(DEVICE_VULKAN); return 0; }   // im2col + GEMM instead
+    VkPipeline_* pipe = dvk_conv_pipe_(op, shape, c.dtype);
+    if (pipe == null) { device_note_cpu_launch_(DEVICE_VULKAN); return 0; }   // im2col + GEMM instead
     unsigned long groupsX = (n + dvk_shape_cols_(shape) - 1UL) / dvk_shape_cols_(shape);
     unsigned long groupsY = (m + dvk_shape_rows_(shape) - 1UL) / dvk_shape_rows_(shape);
     unsigned long splits = phases;
@@ -1317,7 +1348,7 @@ int VulkanBackend::conv(const &DevConv c) {
         k.kSplit = (unsigned int)per;
         splits = (kTot + per - 1UL) / per;
     }
-    unsafe { return dvk_dispatch_(pipe, (const void*)&k, sizeof(struct DvkConv_), groupsX, groupsY, splits); }
+    unsafe { return dvk_dispatch_(pipe, (const unsigned char*)&k, sizeof(struct DvkConv_), groupsX, groupsY, splits); }
 }
 
 int VulkanBackend::storage16() { return dvk_ensure_(); }
@@ -1331,15 +1362,15 @@ int VulkanBackend::launch(int kernel, unsigned long n, const &DevArgs args) {
     }
     int attn = kernel == DK_ATTN_FWD || kernel == DK_ATTN_BWD_Q || kernel == DK_ATTN_BWD_KV;
     unsigned long tile = DVK_ATTN_T;
-    void* pipe = (void*)0;
+    VkPipeline_* pipe = null;
     unsafe {
         if (attn && args.u[3] <= 64U && args.u[4] <= 64U) {
             pipe = dvk_pipe_(2 + tagged, kernel);
             tile = DVK_ATTN64_T;
         }
     }
-    if (pipe == (void*)0) { pipe = dvk_pipe_(tagged, kernel); tile = DVK_ATTN_T; }
-    if (pipe == (void*)0) return dvk_cpu_launch_(kernel, n, args, tagged);
+    if (pipe == null) { pipe = dvk_pipe_(tagged, kernel); tile = DVK_ATTN_T; }
+    if (pipe == null) return dvk_cpu_launch_(kernel, n, args, tagged);
     unsigned long groups = ((dvk_rows_(kernel) ? 32UL * n : n) + DVK_BLOCK - 1UL) / DVK_BLOCK;
     if (groups > DVK_MAX_GROUPS) groups = DVK_MAX_GROUPS;
     if (groups == 0UL) groups = 1UL;
@@ -1352,7 +1383,7 @@ int VulkanBackend::launch(int kernel, unsigned long n, const &DevArgs args) {
         if (groups > 65535UL) groups = 65535UL;
         if (groups == 0UL) groups = 1UL;
     }
-    unsafe { return dvk_dispatch_(pipe, (const void*)args, sizeof(struct DevArgs), groups, 1UL, 1UL); }
+    unsafe { return dvk_dispatch_(pipe, (const unsigned char*)args, sizeof(struct DevArgs), groups, 1UL, 1UL); }
 }
 
 unsigned long VulkanBackend::offset(unsigned long handle, unsigned long bytes) { return handle + bytes; }

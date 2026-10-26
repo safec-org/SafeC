@@ -8,8 +8,8 @@
 #include <std/ml/ssm.h>
 #include <std/math.h>
 
-extern void* malloc(unsigned long size);
-extern void free(void* ptr);
+extern unsigned char* malloc(unsigned long size);
+extern void free(unsigned char* ptr);
 
 static int near(float a, float b, float tol) {
     float d = a - b;
@@ -192,7 +192,7 @@ static void check_gemv_(&W w, unsigned long n, unsigned long k) {
         v = v + 1UL;
     }
     ASSERT_TRUE(same);
-    unsafe { free((void*)x); free((void*)y); free((void*)xs); free((void*)ys); }
+    unsafe { free((unsigned char*)x); free((unsigned char*)y); free((unsigned char*)xs); free((unsigned char*)ys); }
 }
 
 void t_half_gemv() {
@@ -611,7 +611,7 @@ static &FloatTensor seeded_tensor_(unsigned long rows, unsigned long cols, unsig
 
 static void tensor_drop(&FloatTensor t) {
     unsafe { t->free(); }   // a heap tensor, freed below
-    unsafe { free((void*)t); }
+    unsafe { free((unsigned char*)t); }
 }
 
 // The selective scan against a naive double-precision recurrence.
@@ -650,7 +650,7 @@ void t_ssm_scan() {
             }
             d = d + 1UL;
         }
-        free((void*)h);
+        free((unsigned char*)h);
     }
     ASSERT_TRUE(worst < 1e-5);
     tensor_drop(x); tensor_drop(dl); tensor_drop(A); tensor_drop(B); tensor_drop(C); tensor_drop(Ds); tensor_drop(y);

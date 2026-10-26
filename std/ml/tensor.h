@@ -56,12 +56,8 @@ namespace std {
 // memory functions directly (see mem.sc, heap.sc, result.sc, etc., each
 // of which declares its own copy of these same externs rather than
 // including one another's .sc file for them).
-extern void* malloc(size_t size);
-extern void  free(void* ptr);
-
-// A node's backward function; its argument is the node (any element
-// type), erased (see std/erased.h).
-typedef fn void(?&Erased selfTensor) TensorBackwardFn;
+extern unsigned char* malloc(size_t size);
+extern void  free(unsigned char* ptr);
 
 // ── Tensor arenas ─────────────────────────────────────────────────────────────
 // Every op allocates its output. In a training loop that is a malloc (and,
@@ -105,13 +101,6 @@ struct TensorArena {
 
 void tensor_arena_end();                   // back to the heap
 
-// Internal (tensor.h's allocation helpers): the arena new tensors use on this
-// thread, or null; 64-byte-aligned memory from it; and registering a tensor
-// so a reset releases what it holds outside the arena.
-?&TensorArena tensor_arena_current_();
-void* tensor_arena_alloc_raw_(&TensorArena a, unsigned long bytes);
-void tensor_arena_track_raw_(&TensorArena a, void* t);
-
 // ── Tensors ──────────────────────────────────────────────────────────────────
 // A DenseTensor<E> stores its values as E (element.h) and computes in
 // float32; its gradient is always float32. FloatTensor (E = float) is the
@@ -131,10 +120,10 @@ struct DenseTensor {
     unsigned long size;        // product of shape
     int           requiresGrad;
     &heap float   grad;        // float32, length == size; only allocated if requiresGrad
-    // Autograd graph edges. 'gradFn' is the node's backward function,
-    // taking the node erased so a graph can mix element types; each
-    // function knows its own node's type. null for a leaf.
-    ?fn void(?&Erased) gradFn;
+    // Autograd graph edges. 'gradFn' is the node's backward function
+    // (TensorBackwardFn below), taking the node through its float32 layout
+    // so a graph can mix element types. null for a leaf.
+    ?fn void(&DenseTensor<float>) gradFn;
     struct Vec<&DenseTensor<E>> parents; // inputs this tensor was computed from
     int           visited;     // topological-sort scratch flag, used and cleared by backward()
     float         extraScalar; // op-specific constant (e.g. scale's k) the gradFn needs
@@ -204,6 +193,20 @@ typedef struct DenseTensor<float> FloatTensor;
 typedef struct DenseTensor<struct F16> HalfTensor;
 typedef struct DenseTensor<struct BF16> BF16Tensor;
 
+// A node's backward function. Its argument is the node viewed as a float32
+// tensor: the graph fields (and the float32 gradient) have one layout for
+// every element type, so one function serves a graph that mixes them, and
+// each function reads only those fields of its node (and its parents).
+typedef fn void(&FloatTensor selfTensor) TensorBackwardFn;
+
+// Internal (tensor.h's allocation helpers): the arena new tensors use on this
+// thread, or null; 64-byte-aligned memory from it; and registering a tensor
+// so a reset releases what it holds outside the arena.
+?&TensorArena tensor_arena_current_();
+unsigned char* tensor_arena_alloc_raw_(&TensorArena a, unsigned long bytes);
+void tensor_arena_track_raw_(&TensorArena a, FloatTensor* t);
+
+
 // What generic ML code asks of a tensor: FloatTensor, HalfTensor and
 // BF16Tensor all satisfy it ('generic<T: Tensor>').
 trait Tensor {
@@ -265,16 +268,16 @@ trait WebGpuTensor : DeviceTensor {
 // Internal (tensor_device.sc): keeping the copies coherent, for ops on any
 // element type (the graph fields have one layout, so each takes the tensor
 // type-erased: the *_raw_ entry points generic tensor code calls).
-void tensor_host_raw_(void* t);              // values current on the host
-void tensor_host_write_raw_(void* t);        // ... and about to be written there
-void tensor_grad_host_raw_(void* t);         // gradient current on the host
-void tensor_grad_host_write_raw_(void* t);   // ... and about to be written there
-int  tensor_dev_raw_(void* t, int device);   // values current on 'device' (uploads); 1 on success
-int  tensor_grad_dev_raw_(void* t, int device);   // gradient current on 'device'
+void tensor_host_raw_(FloatTensor* t);              // values current on the host
+void tensor_host_write_raw_(FloatTensor* t);        // ... and about to be written there
+void tensor_grad_host_raw_(FloatTensor* t);         // gradient current on the host
+void tensor_grad_host_write_raw_(FloatTensor* t);   // ... and about to be written there
+int  tensor_dev_raw_(FloatTensor* t, int device);   // values current on 'device' (uploads); 1 on success
+int  tensor_grad_dev_raw_(FloatTensor* t, int device);   // gradient current on 'device'
 // As tensor_grad_dev_ for an op about to add to the device gradient: 2 when
 // the gradient is still all zeros (the op must write every value, '=' instead
 // of '+='), 1 to add, 0 on failure.
-int  tensor_grad_dev_acc_raw_(void* t, int device);
+int  tensor_grad_dev_acc_raw_(FloatTensor* t, int device);
 // fp16: unscales cnt gradients {dgrad, n, start} in one launch (the table
 // cached on the device while it repeats); 0 when the backend can't.
 // A device tensor whose values are stored as 'tag' (device.h's DEVICE_FP32 /
@@ -283,18 +286,18 @@ int  tensor_grad_dev_acc_raw_(void* t, int device);
 // Where atomics add into t's device gradient (current on 'device'): the
 // gradient itself, or for a 16-bit one a zeroed fp32 scratch that
 // tensor_grad_atomic_end_ adds into it and frees.
-unsigned long tensor_grad_atomic_begin_raw_(void* t, int device);
-void tensor_grad_atomic_end_raw_(void* t, int device, unsigned long target);
+unsigned long tensor_grad_atomic_begin_raw_(FloatTensor* t, int device);
+void tensor_grad_atomic_end_raw_(FloatTensor* t, int device, unsigned long target);
 int  tensor_amp_unscale_table_(int device, unsigned long amp, const &unsigned long tab, unsigned long cnt,
                                unsigned long total);
-void tensor_dev_wrote_raw_(void* t);         // the device copy of the values changed
-void tensor_grad_dev_wrote_raw_(void* t);    // the device copy of the gradient changed
-void tensor_release_device_raw_(void* t);    // brings values and gradient home, returns the device buffers
-void tensor_free_device_raw_(void* t);       // returns the device buffers, dropping their contents
-int  tensor_place_raw_(void* t, int device);
+void tensor_dev_wrote_raw_(FloatTensor* t);         // the device copy of the values changed
+void tensor_grad_dev_wrote_raw_(FloatTensor* t);    // the device copy of the gradient changed
+void tensor_release_device_raw_(FloatTensor* t);    // brings values and gradient home, returns the device buffers
+void tensor_free_device_raw_(FloatTensor* t);       // returns the device buffers, dropping their contents
+int  tensor_place_raw_(FloatTensor* t, int device);
 // The device an op on these operands runs on: a GPU if any operand is on one
 // (and none on another), else DEVICE_CPU.
-int  tensor_op_device_raw_(void* a, void* b, void* c);
+int  tensor_op_device_raw_(FloatTensor* a, FloatTensor* b, FloatTensor* c);
 // A fresh float32 tensor whose values will be written on 'device'.
 ?&DenseTensor<float> tensor_dev_new_(const &unsigned long shape, unsigned long ndim, int device);
 
@@ -463,7 +466,7 @@ struct Autograd {
 // ══ Internal helpers (static — each including file gets its own copy) ═══════
 // Not part of the public API; used by tensor.sc's own op implementations
 // and reused directly (as raw function-pointer values, e.g.
-// '(void*)__add_backward') by tensor_nn.sc and the tensor_<backend>.sc
+// '__add_backward') by tensor_nn.sc and the tensor_<backend>.sc
 // family so a GPU-computed forward result can link into the exact same
 // backward math as the CPU path, without duplicating that math.
 
@@ -583,7 +586,7 @@ static &FloatTensor __tensor_alloc(const unsigned long* shape, unsigned long ndi
         t->size = size;
         t->requiresGrad = requiresGrad;
         t->grad = (&heap float)0;
-        t->gradFn = (void*)0;
+        t->gradFn = null;
         t->parents = vec_new();
         t->visited = 0;
         t->extraScalar = (float)0.0;
@@ -593,7 +596,7 @@ static &FloatTensor __tensor_alloc(const unsigned long* shape, unsigned long ndi
         t->dgrad = 0UL;
         t->coh = TS_HOST | TS_GHOST | TS_GDEV;
         match (ar) {
-            case some(a): { tensor_arena_track_raw_(a, (void*)t); }
+            case some(a): { tensor_arena_track_raw_(a, (FloatTensor*)t); }
             case null: { }
         }
         return (&FloatTensor)t;
@@ -603,7 +606,7 @@ static &FloatTensor __tensor_alloc(const unsigned long* shape, unsigned long ndi
 static void __tensor_ensure_grad(FloatTensor* t) {
     unsafe {
         // a gradient on a device comes back first: the caller writes it here
-        if (t->dev != DEVICE_CPU) { tensor_grad_host_write_raw_((void*)t); return; }
+        if (t->dev != DEVICE_CPU) { tensor_grad_host_write_raw_((FloatTensor*)t); return; }
         if (t->grad == (float*)0) {
             float* g;
             match (t->owner) {
@@ -641,7 +644,7 @@ static void __tensor_accumulate(FloatTensor* dst, const float* delta) {
     }
 }
 
-static void __tensor_link2(FloatTensor* out, FloatTensor* a, FloatTensor* b, void* backwardFn) {
+static void __tensor_link2(FloatTensor* out, FloatTensor* a, FloatTensor* b, TensorBackwardFn backwardFn) {
     unsafe {
         if (!Autograd::get().enabled()) { out->requiresGrad = 0; return; }
         out->requiresGrad = a->requiresGrad || b->requiresGrad;
@@ -652,7 +655,7 @@ static void __tensor_link2(FloatTensor* out, FloatTensor* a, FloatTensor* b, voi
     }
 }
 
-static void __tensor_link1(FloatTensor* out, FloatTensor* a, void* backwardFn) {
+static void __tensor_link1(FloatTensor* out, FloatTensor* a, TensorBackwardFn backwardFn) {
     unsafe {
         if (!Autograd::get().enabled()) { out->requiresGrad = 0; return; }
         out->requiresGrad = a->requiresGrad;
@@ -671,7 +674,7 @@ static void __tensor_link1(FloatTensor* out, FloatTensor* a, void* backwardFn) {
 // backward call, for no benefit at this size. __matmul_backward does the
 // same through sgemm's beta = 1.
 
-static void __add_backward(void* selfPtr) {
+static void __add_backward(&FloatTensor selfPtr) {
     unsafe {
         FloatTensor* selfT = (FloatTensor*)selfPtr;
         FloatTensor* a = __tensor_parent(selfT, 0UL);
@@ -681,7 +684,7 @@ static void __add_backward(void* selfPtr) {
     }
 }
 
-static void __sub_backward(void* selfPtr) {
+static void __sub_backward(&FloatTensor selfPtr) {
     unsafe {
         FloatTensor* selfT = (FloatTensor*)selfPtr;
         FloatTensor* a = __tensor_parent(selfT, 0UL);
@@ -694,7 +697,7 @@ static void __sub_backward(void* selfPtr) {
     }
 }
 
-static void __mul_backward(void* selfPtr) {
+static void __mul_backward(&FloatTensor selfPtr) {
     unsafe {
         FloatTensor* selfT = (FloatTensor*)selfPtr;
         FloatTensor* a = __tensor_parent(selfT, 0UL);
@@ -710,7 +713,7 @@ static void __mul_backward(void* selfPtr) {
     }
 }
 
-static void __scale_backward(void* selfPtr) {
+static void __scale_backward(&FloatTensor selfPtr) {
     unsafe {
         FloatTensor* selfT = (FloatTensor*)selfPtr;
         FloatTensor* a = __tensor_parent(selfT, 0UL);
@@ -720,7 +723,7 @@ static void __scale_backward(void* selfPtr) {
     }
 }
 
-static void __sum_backward(void* selfPtr) {
+static void __sum_backward(&FloatTensor selfPtr) {
     unsafe {
         FloatTensor* selfT = (FloatTensor*)selfPtr;
         FloatTensor* a = __tensor_parent(selfT, 0UL);
@@ -731,7 +734,7 @@ static void __sum_backward(void* selfPtr) {
     }
 }
 
-static void __matmul_backward(void* selfPtr) {
+static void __matmul_backward(&FloatTensor selfPtr) {
     unsafe {
         FloatTensor* selfT = (FloatTensor*)selfPtr;
         FloatTensor* a = __tensor_parent(selfT, 0UL);
@@ -791,7 +794,7 @@ static &DenseTensor<E> __dt_alloc(const unsigned long* shape, unsigned long ndim
         t->size = size;
         t->requiresGrad = requiresGrad;
         t->grad = (&heap float)0;
-        t->gradFn = (void*)0;
+        t->gradFn = null;
         t->parents = vec_new();
         t->visited = 0;
         t->extraScalar = (float)0.0;
@@ -801,7 +804,7 @@ static &DenseTensor<E> __dt_alloc(const unsigned long* shape, unsigned long ndim
         t->dgrad = 0UL;
         t->coh = TS_HOST | TS_GHOST | TS_GDEV;
         match (ar) {
-            case some(a): { tensor_arena_track_raw_(a, (void*)t); }
+            case some(a): { tensor_arena_track_raw_(a, (FloatTensor*)t); }
             case null: { }
         }
         return (&DenseTensor<E>)t;
@@ -811,7 +814,7 @@ static &DenseTensor<E> __dt_alloc(const unsigned long* shape, unsigned long ndim
 // A to_float / from_float node: the gradient passes to the input unchanged.
 // Every tensor's gradient is float32 and the graph fields have one layout,
 // so the same function serves every pair of element types.
-static void __dt_cast_backward(void* selfPtr) {
+static void __dt_cast_backward(&FloatTensor selfPtr) {
     unsafe {
         FloatTensor* selfT = (FloatTensor*)selfPtr;
         FloatTensor* a = __tensor_parent(selfT, 0UL);
@@ -820,7 +823,7 @@ static void __dt_cast_backward(void* selfPtr) {
 }
 
 // Links 'out' to an input of another element type through __dt_cast_backward.
-static void __dt_link_cast(void* out, void* in) {
+static void __dt_link_cast(FloatTensor* out, FloatTensor* in) {
     unsafe {
         FloatTensor* o = (FloatTensor*)out;
         FloatTensor* a = (FloatTensor*)in;
@@ -828,13 +831,13 @@ static void __dt_link_cast(void* out, void* in) {
         o->requiresGrad = a->requiresGrad;
         if (!o->requiresGrad) return;
         o->parents.push((&FloatTensor)a);
-        o->gradFn = (void*)__dt_cast_backward;
+        o->gradFn = __dt_cast_backward;
     }
 }
 
 generic<E>
 float DenseTensor::at1(unsigned long i) const {
-    unsafe { if (self.dev != DEVICE_CPU) tensor_host_raw_((void*)self); }
+    unsafe { if (self.dev != DEVICE_CPU) tensor_host_raw_((FloatTensor*)self); }
     float v = (float)0.0;
     if const (sizeof(E) == 4UL) { unsafe { v = self.data[i]; } }
     else { unsafe { E::load_n((const &E)&self.data[i], (&float)&v, 1UL); } }
@@ -850,7 +853,7 @@ float DenseTensor::at2(unsigned long r, unsigned long c) const {
 
 generic<E>
 void DenseTensor::set1(unsigned long i, float v) {
-    unsafe { if (self.dev != DEVICE_CPU) tensor_host_write_raw_((void*)self); }
+    unsafe { if (self.dev != DEVICE_CPU) tensor_host_write_raw_((FloatTensor*)self); }
     if const (sizeof(E) == 4UL) { unsafe { self.data[i] = v; } }
     else { unsafe { E::store_n((const &float)&v, (&E)&self.data[i], 1UL); } }
 }
@@ -867,19 +870,19 @@ void DenseTensor::free() { self.drop(); }
 
 generic<E>
 void DenseTensor::drop() {
-    unsafe { tensor_free_device_raw_((void*)self); }
+    unsafe { tensor_free_device_raw_((FloatTensor*)self); }
     match (self.owner) { case some(o): { return; } case null: { } }   // its TensorArena owns it
     unsafe {
-        if ((void*)self.data != (void*)0) { std::free((void*)self.data); self.data = (E*)0; }
-        if (self.shape != (unsigned long*)0) { std::free((void*)self.shape); self.shape = (unsigned long*)0; }
-        if (self.grad != (float*)0) { std::free((void*)self.grad); self.grad = (float*)0; }
+        if ((unsigned char*)self.data != (unsigned char*)0) { std::free((unsigned char*)self.data); self.data = (E*)0; }
+        if (self.shape != (unsigned long*)0) { std::free((unsigned char*)self.shape); self.shape = (unsigned long*)0; }
+        if (self.grad != (float*)0) { std::free((unsigned char*)self.grad); self.grad = (float*)0; }
         self.parents.free();
     }
 }
 
 generic<E>
 void DenseTensor::fill(float v) {
-    unsafe { if (self.dev != DEVICE_CPU) tensor_host_write_raw_((void*)self); }
+    unsafe { if (self.dev != DEVICE_CPU) tensor_host_write_raw_((FloatTensor*)self); }
     if const (sizeof(E) == 4UL) {
         unsafe { __tensor_ew(EW_FILL, (const float*)0, (const float*)0, v, (float*)self.data, self.size); }
     } else {
@@ -963,7 +966,7 @@ generic<E>
         unsafe {
             out = __tensor_alloc((const unsigned long*)self.shape, self.ndim, 0);
             E::load_n((const &E)self.data, (&float)out->data, self.size);
-            __dt_link_cast((void*)out, (void*)self);
+            __dt_link_cast((FloatTensor*)out, (FloatTensor*)self);
         }
         return out;
     }
@@ -978,7 +981,7 @@ generic<E>
     } else {
         unsafe { E::store_n((const &float)x->data, (&E)out->data, x->size); }
     }
-    unsafe { __dt_link_cast((void*)out, (void*)x); }
+    unsafe { __dt_link_cast((FloatTensor*)out, (FloatTensor*)x); }
     return out;
 }
 
@@ -1052,7 +1055,7 @@ static void __dt_amp_leaves_(&Vec<&DenseTensor<E>> order, int device, unsigned l
             int fits = 1;
             while (fits && j < order.length()) {
                 &DenseTensor<E> t = *order.at(j);
-                if (t->gradFn == (void*)0 && t->requiresGrad && t->dev == device && t->dgrad != 0UL &&
+                if (t->gradFn.is_null() && t->requiresGrad && t->dev == device && t->dgrad != 0UL &&
                     (t->coh & TS_GZERO) == 0 && (t->coh & TS_GDEV) != 0) {
                     if (cnt >= __DT_AMP_TABLE || total + t->size >= 4294967295UL) fits = 0;
                     else {
@@ -1067,8 +1070,8 @@ static void __dt_amp_leaves_(&Vec<&DenseTensor<E>> order, int device, unsigned l
                 j = 0UL;
                 while (j < order.length()) {
                     &DenseTensor<E> t = *order.at(j);
-                    if (t->gradFn == (void*)0 && t->requiresGrad && t->dev == device && t->dgrad != 0UL &&
-                        (t->coh & TS_GZERO) == 0 && (t->coh & TS_GDEV) != 0) tensor_grad_dev_wrote_raw_((void*)t);
+                    if (t->gradFn.is_null() && t->requiresGrad && t->dev == device && t->dgrad != 0UL &&
+                        (t->coh & TS_GZERO) == 0 && (t->coh & TS_GDEV) != 0) tensor_grad_dev_wrote_raw_((FloatTensor*)t);
                     j = j + 1UL;
                 }
                 return;
@@ -1077,10 +1080,10 @@ static void __dt_amp_leaves_(&Vec<&DenseTensor<E>> order, int device, unsigned l
         }
         while (j < order.length()) {
             &DenseTensor<E> t = *order.at(j);
-            if (t->gradFn == (void*)0 && t->requiresGrad && t->dev == device) {
+            if (t->gradFn.is_null() && t->requiresGrad && t->dev == device) {
                 int has = (t->dgrad != 0UL && (t->coh & TS_GZERO) == 0) || (t->grad != (float*)0 && (t->coh & TS_GHOST) != 0);
-                if (unscale ? t->dgrad != 0UL && (t->coh & TS_GZERO) == 0 && tensor_grad_dev_raw_((void*)t, device)
-                            : has && tensor_grad_dev_raw_((void*)t, device)) {
+                if (unscale ? t->dgrad != 0UL && (t->coh & TS_GZERO) == 0 && tensor_grad_dev_raw_((FloatTensor*)t, device)
+                            : has && tensor_grad_dev_raw_((FloatTensor*)t, device)) {
                     struct DevArgs a = dev_args_();
                     a.p[0] = t->dgrad;
                     if (unscale) {
@@ -1090,7 +1093,7 @@ static void __dt_amp_leaves_(&Vec<&DenseTensor<E>> order, int device, unsigned l
                         a.p[1] = amp; a.p[2] = t->dgrad; a.u[0] = (unsigned int)EW_MULS;
                         device_launch_(device, DK_EW, t->size, &a);
                     }
-                    tensor_grad_dev_wrote_raw_((void*)t);
+                    tensor_grad_dev_wrote_raw_((FloatTensor*)t);
                 }
             }
             j = j + 1UL;
@@ -1108,10 +1111,10 @@ void DenseTensor::backward() {
         if (amp != 0UL) {
             __dt_amp_leaves_(&order, self.dev, amp, 0);
             // the seed: the loss scale, on the device
-            int m = tensor_grad_dev_acc_raw_((void*)self, self.dev);
+            int m = tensor_grad_dev_acc_raw_((FloatTensor*)self, self.dev);
             struct DevArgs a = dev_args_();
             a.p[1] = amp; a.p[2] = self.dgrad; a.u[0] = (unsigned int)EW_ACC_PK; a.u[1] = 1U;
-            if (m != 0) { device_launch_(self.dev, DK_EW, self.size, &a); tensor_grad_dev_wrote_raw_((void*)self); }
+            if (m != 0) { device_launch_(self.dev, DK_EW, self.size, &a); tensor_grad_dev_wrote_raw_((FloatTensor*)self); }
         } else {
             __tensor_ensure_grad((FloatTensor*)self);
             unsigned long i = 0UL;
@@ -1121,19 +1124,19 @@ void DenseTensor::backward() {
         long long idx = (long long)n - 1LL;
         while (idx >= 0LL) {
             &DenseTensor<E> node = *order.at((unsigned long)idx);
-            if (node->gradFn != (void*)0) {
+            if (!node->gradFn.is_null()) {
                 // the node's gradient where its backward function reads it
                 int run = 1;
                 if ((node->coh & TS_DEVOP) != 0) {
                     // nothing reached a device node's gradient: its backward would add zeros
                     if ((node->dgrad == 0UL && node->grad == (float*)0) ||
                         (node->dgrad != 0UL && (node->coh & (TS_GZERO | TS_GDEV)) == (TS_GZERO | TS_GDEV))) run = 0;
-                    else tensor_grad_dev_raw_((void*)node, node->dev);
+                    else tensor_grad_dev_raw_((FloatTensor*)node, node->dev);
                 }
-                else if (node->dev != DEVICE_CPU) tensor_grad_host_raw_((void*)node);
+                else if (node->dev != DEVICE_CPU) tensor_grad_host_raw_((FloatTensor*)node);
                 if (run) {
                     TensorBackwardFn backwardFn = node->gradFn!;
-                    backwardFn((void*)node);
+                    backwardFn((&FloatTensor)node);
                 }
             }
             idx = idx - 1LL;
@@ -1174,12 +1177,12 @@ int DenseTensor::device() const { return self.dev; }
 generic<E>
 int DenseTensor::place(int device) {
     if const (sizeof(E) != 4UL) { return device == DEVICE_CPU; }
-    else { unsafe { return tensor_place_raw_((void*)self, device); } }
+    else { unsafe { return tensor_place_raw_((FloatTensor*)self, device); } }
 }
 
 generic<E>
 int DenseTensor::sync() {
-    unsafe { tensor_host_raw_((void*)self); return (self.coh & TS_HOST) != 0; }
+    unsafe { tensor_host_raw_((FloatTensor*)self); return (self.coh & TS_HOST) != 0; }
 }
 
 generic<E>
@@ -1193,13 +1196,13 @@ generic<E>
     &DenseTensor<E> out;
     unsafe { out = __dt_alloc((const unsigned long*)self.shape, self.ndim, 0); }
     unsafe {
-        tensor_host_raw_((void*)self);
+        tensor_host_raw_((FloatTensor*)self);
         unsigned long i = 0UL;
         while (i < self.size) { out->data[i] = self.data[i]; i = i + 1UL; }
-        __dt_link_cast((void*)out, (void*)self);
+        __dt_link_cast((FloatTensor*)out, (FloatTensor*)self);
     }
     if const (sizeof(E) == 4UL) {
-        if (device != DEVICE_CPU) { unsafe { tensor_place_raw_((void*)out, device); } }
+        if (device != DEVICE_CPU) { unsafe { tensor_place_raw_((FloatTensor*)out, device); } }
     }
     return out;
 }

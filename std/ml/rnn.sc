@@ -41,12 +41,12 @@ static &FloatTensor __row_add4(&FloatTensor a, &FloatTensor b,
     &FloatTensor cd = tensor_add(c, d);
     &FloatTensor out = tensor_add(ab, cd);
     ab->free(); cd->free();
-    unsafe { free((void*)ab); free((void*)cd); }
+    unsafe { free((unsigned char*)ab); free((unsigned char*)cd); }
     return out;
 }
 
 static &FloatTensor __one_minus(&FloatTensor z) {
-    unsafe { tensor_host_write_raw_((void*)z); }
+    unsafe { tensor_host_write_raw_((FloatTensor*)z); }
     &FloatTensor out = z.zeros_like();
     unsafe {
         unsigned long i = 0UL;
@@ -73,7 +73,7 @@ struct RNNCell RNNCell::new(unsigned long inputSize, unsigned long hiddenSize) {
         &FloatTensor sum = __row_add4(xi, hh, self->b_ih, self->b_hh);
         &FloatTensor h_t = sum.tanh_fwd();
         xi->free(); hh->free(); sum->free();
-        free((void*)xi); free((void*)hh); free((void*)sum);
+        free((unsigned char*)xi); free((unsigned char*)hh); free((unsigned char*)sum);
         return h_t;
     }
 }
@@ -83,8 +83,8 @@ void RNNCell::free() { self.drop(); }
 void RNNCell::drop() {
     unsafe {
         self->W_ih->free(); self->W_hh->free(); self->b_ih->free(); self->b_hh->free();
-        free((void*)self->W_ih); free((void*)self->W_hh);
-        free((void*)self->b_ih); free((void*)self->b_hh);
+        free((unsigned char*)self->W_ih); free((unsigned char*)self->W_hh);
+        free((unsigned char*)self->b_ih); free((unsigned char*)self->b_hh);
     }
 }
 
@@ -130,8 +130,8 @@ struct GRUCell GRUCell::new(unsigned long inputSize, unsigned long hiddenSize) {
         garbage[8]=in_b; garbage[9]=n_sum; garbage[10]=n_t;
         garbage[11]=one_minus_z; garbage[12]=term1;
         int gi = 0;
-        while (gi < 13) { garbage[gi]->free(); free((void*)garbage[gi]); gi = gi + 1; }
-        term2->free(); free((void*)term2);
+        while (gi < 13) { garbage[gi]->free(); free((unsigned char*)garbage[gi]); gi = gi + 1; }
+        term2->free(); free((unsigned char*)term2);
         return h_t;
     }
 }
@@ -145,7 +145,7 @@ void GRUCell::drop() {
         all[4]=self->W_iz; all[5]=self->W_hz; all[6]=self->b_iz; all[7]=self->b_hz;
         all[8]=self->W_in; all[9]=self->W_hn; all[10]=self->b_in; all[11]=self->b_hn;
         int i = 0;
-        while (i < 12) { all[i]->free(); free((void*)all[i]); i = i + 1; }
+        while (i < 12) { all[i]->free(); free((unsigned char*)all[i]); i = i + 1; }
     }
 }
 
@@ -190,9 +190,9 @@ struct LSTMCell LSTMCell::new(unsigned long inputSize, unsigned long hiddenSize)
         garbage[4]=g_sum; garbage[5]=g_t; garbage[6]=o_sum; garbage[7]=o_t;
         garbage[8]=tanh_c;
         int gi = 0;
-        while (gi < 9) { garbage[gi]->free(); free((void*)garbage[gi]); gi = gi + 1; }
-        fc->free(); free((void*)fc);
-        ig->free(); free((void*)ig);
+        while (gi < 9) { garbage[gi]->free(); free((unsigned char*)garbage[gi]); gi = gi + 1; }
+        fc->free(); free((unsigned char*)fc);
+        ig->free(); free((unsigned char*)ig);
 
         *c_out = c_t;
         return h_t;
@@ -209,7 +209,7 @@ void LSTMCell::drop() {
         all[8]=self->W_ig; all[9]=self->W_hg; all[10]=self->b_ig; all[11]=self->b_hg;
         all[12]=self->W_io; all[13]=self->W_ho; all[14]=self->b_io; all[15]=self->b_ho;
         int i = 0;
-        while (i < 16) { all[i]->free(); free((void*)all[i]); i = i + 1; }
+        while (i < 16) { all[i]->free(); free((unsigned char*)all[i]); i = i + 1; }
     }
 }
 
@@ -297,7 +297,7 @@ struct XLSTMState XLSTMCell::forward(const &FloatTensor x_t, const &XLSTMState p
         garbage[8]=i_t; garbage[9]=f_t; garbage[10]=fc; garbage[11]=iz;
         garbage[12]=fnT; garbage[13]=ratio; garbage[14]=z_t;
         int gi = 0;
-        while (gi < 15) { garbage[gi]->free(); free((void*)garbage[gi]); gi = gi + 1; }
+        while (gi < 15) { garbage[gi]->free(); free((unsigned char*)garbage[gi]); gi = gi + 1; }
 
         struct XLSTMState next;
         next.h = h_t;
@@ -318,7 +318,7 @@ void XLSTMCell::drop() {
         all[6]=self->Wf; all[7]=self->Rf; all[8]=self->bf;
         all[9]=self->Wo; all[10]=self->Ro; all[11]=self->bo;
         int i = 0;
-        while (i < 12) { all[i]->free(); free((void*)all[i]); i = i + 1; }
+        while (i < 12) { all[i]->free(); free((unsigned char*)all[i]); i = i + 1; }
     }
 }
 
@@ -327,7 +327,7 @@ void XLSTMState::free() { self.drop(); }
 void XLSTMState::drop() {
     unsafe {
         self->h->free(); self->c->free(); self->n->free(); self->m->free();
-        free((void*)self->h); free((void*)self->c); free((void*)self->n); free((void*)self->m);
+        free((unsigned char*)self->h); free((unsigned char*)self->c); free((unsigned char*)self->n); free((unsigned char*)self->m);
     }
 }
 

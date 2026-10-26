@@ -104,7 +104,7 @@ struct Dataset Dataset::blobs(unsigned long n, unsigned long classes, unsigned l
             i = i + 1UL;
         }
         centers->free();
-        free((void*)centers);
+        free((unsigned char*)centers);
     }
     return d;
 }
@@ -208,7 +208,7 @@ static unsigned long ds_read_all_(const &char path, &&heap unsigned char out) {
                 unsigned char* buf = (unsigned char*)malloc(n + 1UL);
                 unsigned long got = file_read(f, buf[0..n]);
                 file_close(f);
-                if (got != n) { free((void*)buf); return 0UL; }
+                if (got != n) { free((unsigned char*)buf); return 0UL; }
                 buf[n] = (unsigned char)0;
                 *out = (&heap unsigned char)buf;
             }
@@ -254,8 +254,8 @@ struct Dataset Dataset::load_mnist(const &char imagesPath, const &char labelsPat
                 while (i < count) { d.y->data[i] = (float)lp[8UL + i]; i = i + 1UL; }
             }
         }
-        if (img != (unsigned char*)0) free((void*)img);
-        if (lab != (unsigned char*)0) free((void*)lab);
+        if (img != (unsigned char*)0) free((unsigned char*)img);
+        if (lab != (unsigned char*)0) free((unsigned char*)lab);
     }
     return d;
 }
@@ -361,7 +361,7 @@ struct Dataset Dataset::load_csv(const &char path, long labelColumn, int hasHead
             if (!ok) { d.free(); d = ds_empty_(); }
             else if (labeled && classification) d.classes = (unsigned long)maxLabel + 1UL;
         }
-        free((void*)buf);
+        free((unsigned char*)buf);
     }
     return d;
 }
@@ -397,7 +397,7 @@ struct DatasetSplit Dataset::split(float testFraction, &Rng rng) const {
         i = 0UL;
         while (i < nTest) { ds_copy_row_(&s.test, i, self, order[i]); i = i + 1UL; }
         while (i < n) { ds_copy_row_(&s.train, i - nTest, self, order[i]); i = i + 1UL; }
-        free((void*)order);
+        free((unsigned char*)order);
     }
     return s;
 }
@@ -442,8 +442,8 @@ static void ds_standardize_(&Dataset fit, ?&Dataset other) {
             case some(o): { ds_apply_stats_(o, (const float*)mean, (const float*)inv); }
             case null: { }
         }
-        free((void*)mean);
-        free((void*)inv);
+        free((unsigned char*)mean);
+        free((unsigned char*)inv);
     }
 }
 
@@ -454,7 +454,7 @@ void Dataset::free() { self.drop(); }
 
 void Dataset::drop() {
     self.x->free(); self.y->free();
-    unsafe { free((void*)self.x); free((void*)self.y); }
+    unsafe { free((unsigned char*)self.x); free((unsigned char*)self.y); }
     self.n = 0UL;
 }
 
@@ -548,7 +548,7 @@ unsigned long DataLoader::batches() const {
 void DataLoader::free() { self.drop(); }
 
 void DataLoader::drop() {
-    unsafe { free((void*)self.order); }
+    unsafe { free((unsigned char*)self.order); }
 }
 
 } // namespace std

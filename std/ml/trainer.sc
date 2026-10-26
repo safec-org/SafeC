@@ -70,7 +70,7 @@ float trainer_step_(&Optimizer opt, &FloatTensor loss, float clipNorm) {
     loss.backward();
     if (clipNorm > (float)0.0) opt.clip_grad_norm(clipNorm);
     opt.step();
-    unsafe { tensor_host_raw_((void*)loss); return loss->data[0]; }
+    unsafe { tensor_host_raw_((FloatTensor*)loss); return loss->data[0]; }
 }
 
 struct TrainLossSum trainer_loss_sum_() {
@@ -112,7 +112,7 @@ void trainer_step_sum_(&Optimizer opt, &FloatTensor loss, float clipNorm, &Train
                 if (device_launch_(d, DK_EW, 1UL, &a)) return;
             }
         }
-        tensor_host_raw_((void*)t);
+        tensor_host_raw_((FloatTensor*)t);
         s.host = s.host + (double)t->data[0];
     }
 }

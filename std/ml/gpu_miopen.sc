@@ -12,6 +12,7 @@
 #include <std/stddef.h>
 #include <std/ml/gpu_miopen.h>
 #include <std/ml/gpu_rocm.h>
+#include <std/ml/rocm_ffi.h>
 #include <std/ml/cnn.h>
 #include <std/ml/unet.h>
 #include <std/mem.h>
@@ -19,34 +20,32 @@
 namespace std {
 
 // ── MIOpen C ABI (miopen/miopen.h; every handle/descriptor is a pointer) ─────
-extern int miopenCreate(void** handle);
-extern int miopenSetStream(void* handle, void* stream);
-extern int miopenCreateTensorDescriptor(void** desc);
-extern int miopenSet4dTensorDescriptor(void* desc, int dataType, int n, int c, int h, int w);
-extern int miopenDestroyTensorDescriptor(void* desc);
-extern int miopenCreateConvolutionDescriptor(void** desc);
-extern int miopenInitConvolutionDescriptor(void* desc, int mode, int padH, int padW, int strideH, int strideW,
+extern int miopenCreate(MiopenHandle_** handle);
+extern int miopenSetStream(MiopenHandle_* handle, RocmNativeStream* stream);
+extern int miopenCreateTensorDescriptor(MiopenTensorDesc_** desc);
+extern int miopenSet4dTensorDescriptor(MiopenTensorDesc_* desc, int dataType, int n, int c, int h, int w);
+extern int miopenDestroyTensorDescriptor(MiopenTensorDesc_* desc);
+extern int miopenCreateConvolutionDescriptor(MiopenConvDesc_** desc);
+extern int miopenInitConvolutionDescriptor(MiopenConvDesc_* desc, int mode, int padH, int padW, int strideH, int strideW,
                                            int dilationH, int dilationW);
-extern int miopenDestroyConvolutionDescriptor(void* desc);
-extern int miopenConvolutionForwardGetWorkSpaceSize(void* handle, void* wDesc, void* xDesc, void* convDesc,
-                                                    void* yDesc, size_t* bytes);
-extern int miopenFindConvolutionForwardAlgorithm(void* handle, void* xDesc, const void* x, void* wDesc,
-                                                 const void* w, void* convDesc, void* yDesc, void* y,
-                                                 int requested, int* returned, void* perfResults,
-                                                 void* workspace, size_t wsBytes, bool exhaustive);
-extern int miopenConvolutionForward(void* handle, const void* alpha, void* xDesc, const void* x,
-                                    void* wDesc, const void* w, void* convDesc, int algo,
-                                    const void* beta, void* yDesc, void* y, void* workspace, size_t wsBytes);
-extern int miopenCreatePoolingDescriptor(void** desc);
-extern int miopenSet2dPoolingDescriptor(void* desc, int mode, int windowH, int windowW,
+extern int miopenDestroyConvolutionDescriptor(MiopenConvDesc_* desc);
+extern int miopenConvolutionForwardGetWorkSpaceSize(MiopenHandle_* handle, MiopenTensorDesc_* wDesc, MiopenTensorDesc_* xDesc, MiopenConvDesc_* convDesc,
+                                                    MiopenTensorDesc_* yDesc, size_t* bytes);
+extern int miopenFindConvolutionForwardAlgorithm(MiopenHandle_* handle, MiopenTensorDesc_* xDesc, const HipDevPtr_* x, MiopenTensorDesc_* wDesc,
+                                                 const HipDevPtr_* w, MiopenConvDesc_* convDesc, MiopenTensorDesc_* yDesc, HipDevPtr_* y,
+                                                 int requested, int* returned, MiopenConvPerf_* perfResults,
+                                                 HipDevPtr_* workspace, size_t wsBytes, bool exhaustive);
+extern int miopenConvolutionForward(MiopenHandle_* handle, const float* alpha, MiopenTensorDesc_* xDesc, const HipDevPtr_* x,
+                                    MiopenTensorDesc_* wDesc, const HipDevPtr_* w, MiopenConvDesc_* convDesc, int algo,
+                                    const float* beta, MiopenTensorDesc_* yDesc, HipDevPtr_* y, HipDevPtr_* workspace, size_t wsBytes);
+extern int miopenCreatePoolingDescriptor(MiopenPoolDesc_** desc);
+extern int miopenSet2dPoolingDescriptor(MiopenPoolDesc_* desc, int mode, int windowH, int windowW,
                                         int padH, int padW, int strideH, int strideW);
-extern int miopenPoolingForward(void* handle, void* poolDesc, const void* alpha, void* xDesc, const void* x,
-                                const void* beta, void* yDesc, void* y, bool doBackward,
-                                void* workspace, size_t wsBytes);
+extern int miopenPoolingForward(MiopenHandle_* handle, MiopenPoolDesc_* poolDesc, const float* alpha, MiopenTensorDesc_* xDesc, const HipDevPtr_* x,
+                                const float* beta, MiopenTensorDesc_* yDesc, HipDevPtr_* y, bool doBackward,
+                                HipDevPtr_* workspace, size_t wsBytes);
 
-extern int hipMalloc(void** ptr, unsigned long size);
-extern int hipFree(void* ptr);
-extern int hipStreamSynchronize(void* stream);
+// The HIP runtime is declared in rocm_ffi.h.
 
 #define MIO_HALF           0    // miopenHalf
 #define MIO_FLOAT          1    // miopenFloat
@@ -61,27 +60,27 @@ extern int hipStreamSynchronize(void* stream);
 
 // ── State ────────────────────────────────────────────────────────────────────
 static int   g_mio_state = 0;        // 0 = not tried, 1 = ready, -1 = unavailable
-static void* g_mio = (void*)0;
-static void* g_mio_pool = (void*)0;
-static void* g_mio_pool_x = (void*)0;
-static void* g_mio_pool_y = (void*)0;
+static MiopenHandle_* g_mio = null;
+static MiopenPoolDesc_* g_mio_pool = null;
+static MiopenTensorDesc_* g_mio_pool_x = null;
+static MiopenTensorDesc_* g_mio_pool_y = null;
 
 // Plan cache. g_mp_key[s * 8 ..] = batch, inC, H, W, outC, kH, kW,
 // stride | padding << 16; g_mp_used[s] = 0 for a free slot.
 static unsigned long g_mp_key[MIO_PLANS * 8];
 static int   g_mp_used[MIO_PLANS];
-static void* g_mp_x[MIO_PLANS];
-static void* g_mp_w[MIO_PLANS];
-static void* g_mp_conv[MIO_PLANS];
-static void* g_mp_y[MIO_PLANS];
+static MiopenTensorDesc_* g_mp_x[MIO_PLANS];
+static MiopenTensorDesc_* g_mp_w[MIO_PLANS];
+static MiopenConvDesc_* g_mp_conv[MIO_PLANS];
+static MiopenTensorDesc_* g_mp_y[MIO_PLANS];
 static int   g_mp_algo[MIO_PLANS];
-static void* g_mp_ws[MIO_PLANS];
+static HipDevPtr_* g_mp_ws[MIO_PLANS];
 static unsigned long g_mp_wsBytes[MIO_PLANS];
 static int   g_mp_evict = 0;
 
-static void* mio_stream_() {
+static RocmNativeStream* mio_stream_() {
     ?&RocmNativeStream s = rocm_stream_handle();
-    unsafe { return (void*)s; }
+    unsafe { return (RocmNativeStream*)s; }
 }
 
 static int miopen_ensure_() {
@@ -117,7 +116,7 @@ static void mio_plan_release_(int s) {
         miopenDestroyTensorDescriptor(g_mp_w[s]);
         miopenDestroyConvolutionDescriptor(g_mp_conv[s]);
         miopenDestroyTensorDescriptor(g_mp_y[s]);
-        if (g_mp_ws[s] != (void*)0) {
+        if (g_mp_ws[s] != null) {
             hipStreamSynchronize(mio_stream_());   // queued work may still use it
             hipFree(g_mp_ws[s]);
         }
@@ -176,10 +175,10 @@ static int mio_plan_(const &MioGeom_ layer, int dt, unsigned long xdev, unsigned
         mio_plan_release_(slot);
     }
     unsafe {
-        void* xd = (void*)0;
-        void* wd = (void*)0;
-        void* cd = (void*)0;
-        void* yd = (void*)0;
+        MiopenTensorDesc_* xd = null;
+        MiopenTensorDesc_* wd = null;
+        MiopenConvDesc_* cd = null;
+        MiopenTensorDesc_* yd = null;
         int ok = miopenCreateTensorDescriptor(&xd) == 0 && miopenCreateTensorDescriptor(&wd) == 0 &&
                  miopenCreateConvolutionDescriptor(&cd) == 0 && miopenCreateTensorDescriptor(&yd) == 0;
         ok = ok && miopenSet4dTensorDescriptor(xd, dt, (int)batch, (int)layer.inC,
@@ -195,36 +194,35 @@ static int mio_plan_(const &MioGeom_ layer, int dt, unsigned long xdev, unsigned
         size_t findBytes = 0UL;
         ok = ok && miopenConvolutionForwardGetWorkSpaceSize(g_mio, wd, xd, cd, yd, &findBytes) == 0;
         if (ok && (unsigned long)findBytes > MIO_MAX_WORKSPACE) findBytes = (size_t)MIO_MAX_WORKSPACE;
-        void* findWs = (void*)0;
+        HipDevPtr_* findWs = null;
         if (ok && findBytes > 0UL) ok = hipMalloc(&findWs, (unsigned long)findBytes) == 0;
         // miopenConvAlgoPerf_t: { int fwd_algo; float time; size_t memory; },
         // fastest first.
-        unsigned long perf[2 * MIO_PERF_COUNT];
+        struct MiopenConvPerf_ perf[MIO_PERF_COUNT];
         int returned = 0;
-        ok = ok && miopenFindConvolutionForwardAlgorithm(g_mio, xd, (const void*)xdev, wd,
-                       (const void*)layer.wdev, cd, yd, (void*)ydev, MIO_PERF_COUNT, &returned,
-                       (void*)&perf[0], findWs, findBytes, false) == 0;
-        if (findWs != (void*)0) hipFree(findWs);
+        ok = ok && miopenFindConvolutionForwardAlgorithm(g_mio, xd, (const HipDevPtr_*)xdev, wd,
+                       (const HipDevPtr_*)layer.wdev, cd, yd, (HipDevPtr_*)ydev, MIO_PERF_COUNT, &returned,
+                       &perf[0], findWs, findBytes, false) == 0;
+        if (findWs != null) hipFree(findWs);
         int algo = -1;
         unsigned long wsBytes = 0UL;
         int r = 0;
         while (ok && algo < 0 && r < returned) {
-            int* p = (int*)&perf[r * 2];
-            unsigned long mem = perf[r * 2 + 1];
+            unsigned long mem = perf[r].memory;
             if (mem <= (unsigned long)findBytes) {
-                algo = p[0];
+                algo = perf[r].algo;
                 wsBytes = mem;
             }
             r = r + 1;
         }
         ok = ok && algo >= 0;
-        void* ws = (void*)0;
+        HipDevPtr_* ws = null;
         if (ok && wsBytes > 0UL) ok = hipMalloc(&ws, wsBytes) == 0;
         if (!ok) {
-            if (xd != (void*)0) miopenDestroyTensorDescriptor(xd);
-            if (wd != (void*)0) miopenDestroyTensorDescriptor(wd);
-            if (cd != (void*)0) miopenDestroyConvolutionDescriptor(cd);
-            if (yd != (void*)0) miopenDestroyTensorDescriptor(yd);
+            if (xd != null) miopenDestroyTensorDescriptor(xd);
+            if (wd != null) miopenDestroyTensorDescriptor(wd);
+            if (cd != null) miopenDestroyConvolutionDescriptor(cd);
+            if (yd != null) miopenDestroyTensorDescriptor(yd);
             return -1;
         }
         g_mp_x[slot] = xd;
@@ -255,9 +253,9 @@ static int mio_conv_(const &RocmConv2D layer, struct RocmBuf x, struct RocmBuf y
     float one = 1.0f;
     float zero = 0.0f;
     unsafe {
-        if (miopenConvolutionForward(g_mio, (const void*)&one, g_mp_x[p], (const void*)x.dev,
-                g_mp_w[p], (const void*)layer.weight.dev, g_mp_conv[p], g_mp_algo[p],
-                (const void*)&zero, g_mp_y[p], (void*)y.dev, g_mp_ws[p], (size_t)g_mp_wsBytes[p]) != 0)
+        if (miopenConvolutionForward(g_mio, (const float*)&one, g_mp_x[p], (const HipDevPtr_*)x.dev,
+                g_mp_w[p], (const HipDevPtr_*)layer.weight.dev, g_mp_conv[p], g_mp_algo[p],
+                (const float*)&zero, g_mp_y[p], (HipDevPtr_*)y.dev, g_mp_ws[p], (size_t)g_mp_wsBytes[p]) != 0)
             return 0;
     }
     // Bias (and ReLU) in one pass over y.
@@ -297,9 +295,9 @@ static int mio_pool_dt_(int mode, int dt, unsigned long xdev, unsigned long xlen
             miopenSet4dTensorDescriptor(g_mio_pool_y, dt, (int)batch, (int)channels,
                                         (int)outH, (int)outW) != 0) return 0;
         // Forward only: no index workspace.
-        return miopenPoolingForward(g_mio, g_mio_pool, (const void*)&one, g_mio_pool_x, (const void*)xdev,
-                                    (const void*)&zero, g_mio_pool_y, (void*)ydev, false,
-                                    (void*)0, (size_t)0) == 0;
+        return miopenPoolingForward(g_mio, g_mio_pool, (const float*)&one, g_mio_pool_x, (const HipDevPtr_*)xdev,
+                                    (const float*)&zero, g_mio_pool_y, (HipDevPtr_*)ydev, false,
+                                    null, (size_t)0) == 0;
     }
 }
 
@@ -393,9 +391,9 @@ static int mio_half_conv_(const &RocmHalfConv2D layer, struct RocmHalfBuf x, str
     float one = 1.0f;
     float zero = 0.0f;
     unsafe {
-        if (miopenConvolutionForward(g_mio, (const void*)&one, g_mp_x[p], (const void*)x.dev,
-                g_mp_w[p], (const void*)layer.weight.dev, g_mp_conv[p], g_mp_algo[p],
-                (const void*)&zero, g_mp_y[p], (void*)y.dev, g_mp_ws[p], (size_t)g_mp_wsBytes[p]) != 0)
+        if (miopenConvolutionForward(g_mio, (const float*)&one, g_mp_x[p], (const HipDevPtr_*)x.dev,
+                g_mp_w[p], (const HipDevPtr_*)layer.weight.dev, g_mp_conv[p], g_mp_algo[p],
+                (const float*)&zero, g_mp_y[p], (HipDevPtr_*)y.dev, g_mp_ws[p], (size_t)g_mp_wsBytes[p]) != 0)
             return 0;
     }
     return rocm_half_bias(y, layer.bias, batch, layer.outChannels, outH * outW, relu);

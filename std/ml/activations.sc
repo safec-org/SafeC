@@ -12,28 +12,28 @@ namespace std {
 // kernels and vmath.h's vectorized exp/tanh/sigmoid.
 
 &FloatTensor FloatTensor::relu_fwd() const {
-    unsafe { tensor_host_raw_((void*)self); }
+    unsafe { tensor_host_raw_((FloatTensor*)self); }
     &FloatTensor out = __tensor_alloc_uninit_like(self);
     unsafe { __tensor_ew(EW_RELU, (const float*)self->data, (const float*)0, (float)0.0, (float*)out->data, out->size); }
     return out;
 }
 
 &FloatTensor FloatTensor::sigmoid_fwd() const {
-    unsafe { tensor_host_raw_((void*)self); }
+    unsafe { tensor_host_raw_((FloatTensor*)self); }
     &FloatTensor out = __tensor_alloc_uninit_like(self);
     unsafe { vm_sigmoid_f32_n_((const float*)self->data, (float*)out->data, out->size); }
     return out;
 }
 
 &FloatTensor FloatTensor::tanh_fwd() const {
-    unsafe { tensor_host_raw_((void*)self); }
+    unsafe { tensor_host_raw_((FloatTensor*)self); }
     &FloatTensor out = __tensor_alloc_uninit_like(self);
     unsafe { vm_tanh_f32_n_((const float*)self->data, (float*)out->data, out->size); }
     return out;
 }
 
 &FloatTensor FloatTensor::silu_fwd() const {
-    unsafe { tensor_host_raw_((void*)self); }
+    unsafe { tensor_host_raw_((FloatTensor*)self); }
     &FloatTensor out = __tensor_alloc_uninit_like(self);
     unsafe {
         vm_sigmoid_f32_n_((const float*)self->data, (float*)out->data, out->size);
@@ -43,7 +43,7 @@ namespace std {
 }
 
 &FloatTensor FloatTensor::gelu_fwd() const {
-    unsafe { tensor_host_raw_((void*)self); }
+    unsafe { tensor_host_raw_((FloatTensor*)self); }
     &FloatTensor out = __tensor_alloc_uninit_like(self);
     float c = (float)0.7978845608028654; // sqrt(2/pi)
     unsafe {
@@ -59,7 +59,7 @@ namespace std {
 }
 
 &FloatTensor FloatTensor::layernorm_rows(float eps) const {
-    unsafe { tensor_host_raw_((void*)self); }
+    unsafe { tensor_host_raw_((FloatTensor*)self); }
     unsigned long rows; unsigned long cols;
     unsafe { rows = self->shape[0]; cols = self->shape[1]; }
     &FloatTensor out = FloatTensor::new_2d(rows, cols, 0);

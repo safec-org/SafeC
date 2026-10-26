@@ -25,9 +25,9 @@
 #include <std/ml/attention_advanced.h>
 #include <std/ml/transformer.h>
 
-extern void* malloc(unsigned long n);
-extern void free(void* p);
-extern void* memcpy(void* d, const void* s, unsigned long n);
+extern unsigned char* malloc(unsigned long n);
+extern void free(unsigned char* p);
+extern unsigned char* memcpy(unsigned char* d, const unsigned char* s, unsigned long n);
 
 static float absf_(float v) { return v < (float)0.0 ? -v : v; }
 
@@ -468,7 +468,7 @@ static &FloatTensor at_out_(&FloatTensor Q, &FloatTensor K, &FloatTensor V) {
 }
 
 static void at_grads_(&FloatTensor t, &float out) {
-    unsafe { tensor_grad_host_raw_((void*)t); unsigned long i = 0UL; while (i < t->size) { out[i] = t->grad[i]; i = i + 1UL; } }
+    unsafe { tensor_grad_host_raw_((FloatTensor*)t); unsigned long i = 0UL; while (i < t->size) { out[i] = t->grad[i]; i = i + 1UL; } }
 }
 
 static float at_maxrel_(const &float a, const &float b, unsigned long n) {
@@ -530,7 +530,7 @@ void check_attention_() {
         attention_set_fused(1);
         g_akind = g_akind + 1;
     }
-    unsafe { free((void*)cq); }
+    unsafe { free((unsigned char*)cq); }
     Q.free(); K.free(); V.free(); W.free();
 }
 
@@ -571,7 +571,7 @@ void check_attention_wide_() {
         unsafe {
             at_grads_(Q, (&float)&c[3UL * n]); at_grads_(K, (&float)&c[4UL * n]); at_grads_(V, (&float)&c[5UL * n]);
             e = at_maxrel_((const &float)c, (const &float)&c[3UL * n], 3UL * n);
-            free((void*)c);
+            free((unsigned char*)c);
         }
         print("  attention fused causal, "); print_int((long long)h); print(h == 1UL ? " head of " : " heads of ");
         print_int((long long)(w / h)); print(": loss cpu "); print_float((double)l0); print(" device ");
@@ -628,7 +628,7 @@ static float cv_err_(const &float a, const &float b, unsigned long n) {
 }
 
 static void cv_values_(&FloatTensor t, &float out) {
-    unsafe { tensor_host_raw_((void*)t); unsigned long i = 0UL; while (i < t->size) { out[i] = t->data[i]; i = i + 1UL; } }
+    unsafe { tensor_host_raw_((FloatTensor*)t); unsigned long i = 0UL; while (i < t->size) { out[i] = t->data[i]; i = i + 1UL; } }
 }
 
 // The fp16 loss scale a trainer leaves after a few overflowing steps
@@ -723,7 +723,7 @@ void check_conv_() {
             check_("convolution", on && eo < tol && ex < tol && ew < tol && eb < tol);
             prec = prec + 1;
         }
-        unsafe { free((void*)want); free((void*)got); }
+        unsafe { free((unsigned char*)want); free((unsigned char*)got); }
         x.free(); w.free(); b.free(); R.free();
         ci = ci + 1;
     }

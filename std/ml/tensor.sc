@@ -53,7 +53,7 @@ static unsigned long* tensor_arena_chunk_new_(unsigned long dataBytes) {
     }
 }
 
-void* tensor_arena_alloc_raw_(&TensorArena a, unsigned long bytes) {
+unsigned char* tensor_arena_alloc_raw_(&TensorArena a, unsigned long bytes) {
     unsigned long need = (bytes + 63UL) / 64UL * 64UL;
     if (need == 0UL) need = 64UL;
     unsafe {
@@ -78,26 +78,26 @@ void* tensor_arena_alloc_raw_(&TensorArena a, unsigned long bytes) {
             a.current = (unsigned long)cur;
         }
         char* base = (char*)cur;
-        void* p = (void*)&base[TENSOR_ARENA_HEADER + cur[2]];
+        unsigned char* p = (unsigned char*)&base[TENSOR_ARENA_HEADER + cur[2]];
         cur[2] = cur[2] + need;
         return p;
     }
 }
 
-void tensor_arena_track_raw_(&TensorArena a, void* t) {
+void tensor_arena_track_raw_(&TensorArena a, FloatTensor* t) {
     unsafe {
         if (a.trackedCount == a.trackedCap) {
             unsigned long cap = a.trackedCap == 0UL ? 256UL : a.trackedCap * 2UL;
-            void** list = (void**)alloc_raw_(sizeof(void*) * cap);
-            if (list == (void**)0) panic_at("tensor arena: out of memory", "tensor.sc", __LINE__);
-            void** old = (void**)a.tracked;
+            struct DenseTensor<float>** list = (struct DenseTensor<float>**)alloc_raw_(sizeof(FloatTensor*) * cap);
+            if (list == (struct DenseTensor<float>**)0) panic_at("tensor arena: out of memory", "tensor.sc", __LINE__);
+            struct DenseTensor<float>** old = (struct DenseTensor<float>**)a.tracked;
             unsigned long i = 0UL;
             while (i < a.trackedCount) { list[i] = old[i]; i = i + 1UL; }
-            if (old != (void**)0) dealloc(old);
+            if (old != (struct DenseTensor<float>**)0) dealloc(old);
             a.tracked = (unsigned long)list;
             a.trackedCap = cap;
         }
-        void** list = (void**)a.tracked;
+        struct DenseTensor<float>** list = (struct DenseTensor<float>**)a.tracked;
         list[a.trackedCount] = t;
         a.trackedCount = a.trackedCount + 1UL;
     }
@@ -106,10 +106,10 @@ void tensor_arena_track_raw_(&TensorArena a, void* t) {
 void TensorArena::reset() {
     unsafe {
         // the parents vectors live on the heap
-        void** list = (void**)self.tracked;
+        struct DenseTensor<float>** list = (struct DenseTensor<float>**)self.tracked;
         unsigned long i = 0UL;
         while (i < self.trackedCount) {
-            FloatTensor* t = (FloatTensor*)list[i];
+            FloatTensor* t = list[i];
             if (t->dev != DEVICE_CPU) {
                 // the step is over: its device buffers go back to the cache
                 device_mem_free_(t->dev, t->dbuf, dev_bytes_(dev_tag_(t->dbuf), t->size));
@@ -172,49 +172,49 @@ unsigned long TensorArena::used() const {
 // ── Add ──────────────────────────────────────────────────────────────────────
 &FloatTensor tensor_add_f32_(const &FloatTensor a, const &FloatTensor b) {
     match (tdev_binary_(a, b, 0)) { case some(o): { return o; } case null: { } }
-    unsafe { tensor_host_raw_((void*)a); tensor_host_raw_((void*)b); }
+    unsafe { tensor_host_raw_((FloatTensor*)a); tensor_host_raw_((FloatTensor*)b); }
     &FloatTensor out = __tensor_alloc_uninit_like(a);
     unsafe {
         __tensor_ew(EW_ADD, (const float*)a->data, (const float*)b->data, (float)0.0, (float*)out->data, out->size);
     }
-    __tensor_link2(out, a, b, (void*)__add_backward);
+    __tensor_link2(out, a, b, __add_backward);
     return out;
 }
 
 // ── Sub ──────────────────────────────────────────────────────────────────────
 &FloatTensor tensor_sub_f32_(const &FloatTensor a, const &FloatTensor b) {
     match (tdev_binary_(a, b, 1)) { case some(o): { return o; } case null: { } }
-    unsafe { tensor_host_raw_((void*)a); tensor_host_raw_((void*)b); }
+    unsafe { tensor_host_raw_((FloatTensor*)a); tensor_host_raw_((FloatTensor*)b); }
     &FloatTensor out = __tensor_alloc_uninit_like(a);
     unsafe {
         __tensor_ew(EW_SUB, (const float*)a->data, (const float*)b->data, (float)0.0, (float*)out->data, out->size);
     }
-    __tensor_link2(out, a, b, (void*)__sub_backward);
+    __tensor_link2(out, a, b, __sub_backward);
     return out;
 }
 
 // ── Mul (elementwise) ──────────────────────────────────────────────────────────
 &FloatTensor tensor_mul_f32_(const &FloatTensor a, const &FloatTensor b) {
     match (tdev_binary_(a, b, 2)) { case some(o): { return o; } case null: { } }
-    unsafe { tensor_host_raw_((void*)a); tensor_host_raw_((void*)b); }
+    unsafe { tensor_host_raw_((FloatTensor*)a); tensor_host_raw_((FloatTensor*)b); }
     &FloatTensor out = __tensor_alloc_uninit_like(a);
     unsafe {
         __tensor_ew(EW_MUL, (const float*)a->data, (const float*)b->data, (float)0.0, (float*)out->data, out->size);
     }
-    __tensor_link2(out, a, b, (void*)__mul_backward);
+    __tensor_link2(out, a, b, __mul_backward);
     return out;
 }
 
 // ── Scale (multiply by a scalar constant) ─────────────────────────────────────
 &FloatTensor tensor_scale_f32_(const &FloatTensor a, float k) {
     match (tdev_unary_(a, EW_SCALE, k, (float)0.0, EW_ACC_SCALE, 0, k, 0)) { case some(o): { return o; } case null: { } }
-    unsafe { tensor_host_raw_((void*)a); }
+    unsafe { tensor_host_raw_((FloatTensor*)a); }
     &FloatTensor out = __tensor_alloc_uninit_like(a);
     unsafe {
         __tensor_ew(EW_SCALE, (const float*)a->data, (const float*)0, k, (float*)out->data, out->size);
     }
     unsafe { out->extraScalar = k; }
-    __tensor_link1(out, a, (void*)__scale_backward);
+    __tensor_link1(out, a, __scale_backward);
     return out;
 }
 
@@ -227,7 +227,7 @@ unsigned long TensorArena::used() const {
 // ── Sum (full reduction to a 1-element tensor) ────────────────────────────────
 &FloatTensor tensor_sum_f32_(const &FloatTensor a) {
     match (tdev_sum_(a, (float)1.0)) { case some(o): { return o; } case null: { } }
-    unsafe { tensor_host_raw_((void*)a); }
+    unsafe { tensor_host_raw_((FloatTensor*)a); }
     unsigned long one[1];
     unsafe { one[0] = 1UL; }
     &FloatTensor out = __tensor_alloc(one, 1UL, 0);
@@ -243,7 +243,7 @@ unsigned long TensorArena::used() const {
         while (i < n) { acc = acc + p[i]; i = i + 1UL; }
         out->data[0] = acc;
     }
-    __tensor_link1(out, a, (void*)__sum_backward);
+    __tensor_link1(out, a, __sum_backward);
     return out;
 }
 
@@ -251,7 +251,7 @@ unsigned long TensorArena::used() const {
 
 &FloatTensor tensor_matmul_f32_(const &FloatTensor a, const &FloatTensor b) {
     match (tdev_matmul_(a, b)) { case some(o): { return o; } case null: { } }
-    unsafe { tensor_host_raw_((void*)a); tensor_host_raw_((void*)b); }
+    unsafe { tensor_host_raw_((FloatTensor*)a); tensor_host_raw_((FloatTensor*)b); }
     unsigned long m; unsigned long k; unsigned long n;
     unsafe { m = a->shape[0]; k = a->shape[1]; n = b->shape[1]; }
     unsigned long shape[2];
@@ -263,7 +263,7 @@ unsigned long TensorArena::used() const {
         sgemm_n_(SGEMM_NO_TRANS, SGEMM_NO_TRANS, m, n, k, (float)1.0,
               (const &float)a->data, k, (const &float)b->data, n, (float)0.0, (&float)out->data, n);
     }
-    __tensor_link2(out, a, b, (void*)__matmul_backward);
+    __tensor_link2(out, a, b, __matmul_backward);
     return out;
 }
 

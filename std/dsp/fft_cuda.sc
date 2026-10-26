@@ -9,6 +9,7 @@
 #include <std/dsp/fft_cuda.h>
 #include <std/dsp/complex_dsp.h>
 #include <std/ml/gpu_cuda.h>
+#include <std/ml/cuda_ffi.h>
 #include <std/mem.h>
 
 namespace std {
@@ -16,16 +17,13 @@ namespace std {
 // ── cuFFT C ABI (cufft.h; cufftHandle is an int) ─────────────────────────────
 extern int cufftPlan1d(int* plan, int nx, int type, int batch);
 extern int cufftPlan2d(int* plan, int nx, int ny, int type);
-extern int cufftSetStream(int plan, void* stream);
+extern int cufftSetStream(int plan, CudaNativeStream* stream);
 extern int cufftDestroy(int plan);
-extern int cufftExecC2C(int plan, void* idata, void* odata, int direction);
-extern int cufftExecR2C(int plan, void* idata, void* odata);
-extern int cufftExecC2R(int plan, void* idata, void* odata);
-extern int cufftExecZ2Z(int plan, void* idata, void* odata, int direction);
-
-extern int cuMemAlloc_v2(unsigned long long* dptr, size_t bytes);
-extern int cuMemFree_v2(unsigned long long dptr);
-extern int cuStreamSynchronize(void* stream);
+extern int cufftExecC2C(int plan, CuDevPtr_* idata, CuDevPtr_* odata, int direction);
+extern int cufftExecR2C(int plan, CuDevPtr_* idata, CuDevPtr_* odata);
+extern int cufftExecC2R(int plan, CuDevPtr_* idata, CuDevPtr_* odata);
+extern int cufftExecZ2Z(int plan, CuDevPtr_* idata, CuDevPtr_* odata, int direction);
+// The CUDA driver API is declared in std/ml/cuda_ffi.h.
 
 #define FFT_R2C      42     // CUFFT_R2C (0x2a)
 #define FFT_C2R      44     // CUFFT_C2R (0x2c)
@@ -126,7 +124,7 @@ static int fft_host_z2z_(struct Complex* data, unsigned long nx, unsigned long n
         // gpu_cuda's transfer path: large copies are staged through pinned
         // buffers by the thread pool, faster than the driver's pageable path
         if (!cuda_copy_to_device((unsigned long)d, ((const unsigned char*)data)[0..bytes])) return 0;
-        if (cufftExecZ2Z(plan, (void*)(unsigned long)d, (void*)(unsigned long)d,
+        if (cufftExecZ2Z(plan, (CuDevPtr_*)(unsigned long)d, (CuDevPtr_*)(unsigned long)d,
                          inverse ? FFT_INVERSE : FFT_FORWARD) != 0) return 0;
         if (!cuda_copy_to_host(((unsigned char*)data)[0..bytes], (unsigned long)d)) return 0;
         if (inverse) {
@@ -175,7 +173,7 @@ int cuda_fft_c2c(struct CudaBuf in, struct CudaBuf out, unsigned long n, unsigne
     int plan = fft_plan_(FFT_C2C, n, 0UL, batch);
     if (plan < 0) return 0;
     unsafe {
-        if (cufftExecC2C(plan, (void*)in.dev, (void*)out.dev, inverse ? FFT_INVERSE : FFT_FORWARD) != 0)
+        if (cufftExecC2C(plan, (CuDevPtr_*)in.dev, (CuDevPtr_*)out.dev, inverse ? FFT_INVERSE : FFT_FORWARD) != 0)
             return 0;
     }
     return inverse ? fft_normalize_(out, floats, n) : 1;
@@ -186,7 +184,7 @@ int cuda_fft_r2c(struct CudaBuf in, struct CudaBuf out, unsigned long n, unsigne
         return 0;
     int plan = fft_plan_(FFT_R2C, n, 0UL, batch);
     if (plan < 0) return 0;
-    unsafe { return cufftExecR2C(plan, (void*)in.dev, (void*)out.dev) == 0; }
+    unsafe { return cufftExecR2C(plan, (CuDevPtr_*)in.dev, (CuDevPtr_*)out.dev) == 0; }
 }
 
 int cuda_fft_c2r(struct CudaBuf in, struct CudaBuf out, unsigned long n, unsigned long batch) {
@@ -195,7 +193,7 @@ int cuda_fft_c2r(struct CudaBuf in, struct CudaBuf out, unsigned long n, unsigne
     int plan = fft_plan_(FFT_C2R, n, 0UL, batch);
     if (plan < 0) return 0;
     unsafe {
-        if (cufftExecC2R(plan, (void*)in.dev, (void*)out.dev) != 0) return 0;
+        if (cufftExecC2R(plan, (CuDevPtr_*)in.dev, (CuDevPtr_*)out.dev) != 0) return 0;
     }
     return fft_normalize_(out, n * batch, n);
 }

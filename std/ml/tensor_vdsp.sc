@@ -28,7 +28,7 @@ extern void vDSP_sve(const float* A, long IA, float* result, unsigned long N);
         vDSP_vadd((const float*)a->data, 1L, (const float*)b->data, 1L,
                   (float*)out->data, 1L, out->size);
     }
-    __tensor_link2(out, a, b, (void*)__add_backward);
+    __tensor_link2(out, a, b, __add_backward);
     return out;
 }
 
@@ -40,7 +40,7 @@ extern void vDSP_sve(const float* A, long IA, float* result, unsigned long N);
         vDSP_vsub((const float*)b->data, 1L, (const float*)a->data, 1L,
                   (float*)out->data, 1L, out->size);
     }
-    __tensor_link2(out, a, b, (void*)__sub_backward);
+    __tensor_link2(out, a, b, __sub_backward);
     return out;
 }
 
@@ -50,7 +50,7 @@ extern void vDSP_sve(const float* A, long IA, float* result, unsigned long N);
         vDSP_vmul((const float*)a->data, 1L, (const float*)b->data, 1L,
                   (float*)out->data, 1L, out->size);
     }
-    __tensor_link2(out, a, b, (void*)__mul_backward);
+    __tensor_link2(out, a, b, __mul_backward);
     return out;
 }
 
@@ -63,7 +63,7 @@ extern void vDSP_sve(const float* A, long IA, float* result, unsigned long N);
         vDSP_sve((const float*)self->data, 1L, &acc, self->size);
         out->data[0] = acc;
     }
-    __tensor_link1(out, self, (void*)__sum_backward);
+    __tensor_link1(out, self, __sum_backward);
     return out;
 }
 

@@ -273,8 +273,8 @@ int cuda_half_avgpool2d(struct CudaHalfBuf x, struct CudaHalfBuf y, unsigned lon
 // ── Interop: for libraries layered on this backend (gpu_cudnn.h, dsp/fft_cuda.h)
 
 // Opaque native handles: never constructed, only passed back to the CUDA
-// driver / runtime APIs they come from (a ?&CudaNativeStream converts to
-// their C 'void*' parameters).
+// driver / runtime APIs they come from (std's own bindings of those APIs
+// declare their stream and module parameters with these types).
 struct CudaNativeStream { char opaque_; };   // CUstream / cudaStream_t
 struct CudaNativeModule { char opaque_; };   // CUmodule
 
