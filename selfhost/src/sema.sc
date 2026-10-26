@@ -803,13 +803,24 @@ void collect_struct_members(int sd, int node) {
     g_sdef[sd].field0 = g_nfield;
     g_sdef[sd].nfield = 0;
     int i = 0;
-    // fields first (they must be contiguous)
+    // fields first (they must be contiguous): reserve the slots, then
+    // resolve the types (which may instantiate other structs' fields)
+    while (i < g_node[node].nlist) {
+        int m = g_list[g_node[node].list + i];
+        if (g_node[m].kind == D_FIELD) {
+            new_field(g_node[m].sid, TY_VOID, m);
+            g_sdef[sd].nfield = g_sdef[sd].nfield + 1;
+        }
+        i = i + 1;
+    }
+    i = 0;
+    int fi = g_sdef[sd].field0;
     while (i < g_node[node].nlist) {
         int m = g_list[g_node[node].list + i];
         if (g_node[m].kind == D_FIELD) {
             int ft = resolve_type(g_node[m].c);
-            new_field(g_node[m].sid, ft, m);
-            g_sdef[sd].nfield = g_sdef[sd].nfield + 1;
+            g_field[fi].ty = ft;
+            fi = fi + 1;
         }
         i = i + 1;
     }
@@ -860,6 +871,17 @@ int instance_method(int sd, int name) {
         if (g_gmeth_owner[i] == tname && g_node[g_gmeth_node[i]].sid == name) {
             int c = clone_node(g_gmeth_node[i]);
             int saved = push_struct_env(sd);
+            // 'generic<U> R S::m(...)': the definition's own parameter names
+            // stand for the struct's type arguments, in order
+            int mgp = g_node[c].b;
+            if ((g_node[c].flags & NF_GENERIC) != 0 && mgp != 0 && g_node[mgp].nlist == g_sdef[sd].ntargs) {
+                int j = 0;
+                while (j < g_sdef[sd].ntargs) {
+                    env_push(g_node[g_list[g_node[mgp].list + j]].sid, g_tyl[g_sdef[sd].targs + j]);
+                    j = j + 1;
+                }
+                g_node[c].flags = g_node[c].flags & ~NF_GENERIC;
+            }
             int nf = add_method(sd, c);
             g_func[nf].tmpl = 1;
             g_func[nf].env = sd;
