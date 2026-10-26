@@ -156,6 +156,8 @@ int tok_kind(int i) {
 
 int cur() { return tok_kind(g_p); }
 int peek(int k) { return tok_kind(g_p + k); }
+// the current token is the identifier 'w' (a contextual keyword)
+int cur_word(const char* w) { return (tok_kind(g_p) == T_IDENT && str_eq_lit(g_tok[g_p].sid, w) == 1) ? 1 : 0; }
 int cur_sid() { return g_tok[g_p].sid; }
 
 void advance() { if (g_p + 1 < g_ntok) { g_p = g_p + 1; } }
@@ -1063,6 +1065,15 @@ int parse_unary() {
         g_node[n].a = parse_unary();
         return n;
     }
+    if (cur_word("needs_drop") == 1 && peek(1) == T_LPAREN && is_type_start_tok(g_p + 2) == 1) {
+        advance();
+        advance();
+        int n = new_node(E_FIELDCOUNT, t);
+        g_node[n].flags = NF_NEEDSDROP;
+        g_node[n].c = parse_type();
+        expect_msg(T_RPAREN, "expected ')' after needs_drop type");
+        return n;
+    }
     if (k == K_FIELDCOUNT) {
         advance();
         expect_msg(T_LPAREN, "expected '(' after 'fieldcount'");
@@ -1701,6 +1712,14 @@ int parse_struct(int is_union, int gparams) {
         int saved = g_p;
         int mt = g_p;
         int mg = 0;
+        // thread-safety markers ('unsafe impl Send + Sync;', 'impl !Send;'):
+        // scc has no Send/Sync analysis, so they only parse
+        if ((cur() == K_UNSAFE && tok_kind(g_p + 1) == T_IDENT && str_eq_lit(g_tok[g_p + 1].sid, "impl") == 1) ||
+            (cur_word("impl") == 1 && (peek(1) == T_BANG || peek(1) == T_IDENT))) {
+            while (!at_end() && cur() != T_SEMI && cur() != T_RBRACE) { advance(); }
+            expect_msg(T_SEMI, "expected ';' after a thread-safety marker");
+            continue;
+        }
         if (cur() == K_GENERIC) { advance(); mg = parse_generic_params(); }
         int is_static = 0;
         if (cur() == K_STATIC) { advance(); is_static = 1; }
@@ -1727,6 +1746,14 @@ int parse_struct(int is_union, int gparams) {
             if (mg != 0) { g_node[m].flags = g_node[m].flags | NF_GENERIC; }
             parse_params(m);
             if (cur() == K_CONST) { advance(); g_node[m].flags = g_node[m].flags | NF_MCONST; }
+            if (cur_word("consume") == 1) { advance(); g_node[m].flags = g_node[m].flags | NF_CONSUME; }
+            // 'void drop() if (cond);': a conditional Drop (ival = the condition)
+            if (cur() == K_IF) {
+                advance();
+                expect_msg(T_LPAREN, "expected '(' after 'if'");
+                g_node[m].ival = (long)parse_expr();
+                expect_msg(T_RPAREN, "expected ')' after the drop condition");
+            }
             if (is_static == 1) {
                 g_node[m].flags = g_node[m].flags | NF_SMETHOD;
                 if ((g_node[m].flags & NF_MCONST) != 0) { msg_reset(); msg_lit("a static method has no 'self' and can't be 'const'"); error_node(m); }
@@ -2075,6 +2102,7 @@ void parse_top() {
             if (g_attr_export != 0) { export_sid = g_attr_export; }
         }
         if (cur() == K_CONST) { advance(); g_node[fnn].flags = g_node[fnn].flags | NF_MCONST; }
+        if (cur_word("consume") == 1) { advance(); g_node[fnn].flags = g_node[fnn].flags | NF_CONSUME; }
         if ((g_node[fnn].flags & NF_EXPORT) != 0) {
             if (export_sid == 0) { export_sid = name; }
             g_node[fnn].ival = (long)export_sid;

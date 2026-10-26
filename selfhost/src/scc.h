@@ -372,6 +372,8 @@ struct Tok {
 #define NF_FWD      524288  // forward declaration only
 #define NF_GENERIC  1048576
 #define NF_VOLATILE 16777216   // a declaration of a volatile object (var, param, field, global, typedef)
+#define NF_CONSUME  33554432   // a 'consume' method: destroys its receiver (drop() is one too)
+#define NF_NEEDSDROP 1        // E_FIELDCOUNT flag: needs_drop(c) instead of fieldcount(c)
 
 struct Node {
     int kind;

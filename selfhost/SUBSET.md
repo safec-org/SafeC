@@ -179,6 +179,15 @@ These are not implemented, and the error is a parse or name error:
   On safec's own `compiler/tests/lifetimes` suite, the two compilers agree
   on accept or reject for every test, and scc reports exactly safec's
   diagnostics on every `EXPECT-ERROR` test.
+- **Ownership and thread safety**: scc compiles the `Drop` forms — `drop()`
+  and `consume` methods, conditional `void drop() if (cond);`, `drop(x)`
+  (drop glue: `T::drop()`, else each owning field and constant-length array
+  element; an optional's payload is not dropped), `needs_drop(T)` and
+  `forget(x)` — and parses the `unsafe impl Send/Sync;` / `impl !Send;`
+  markers. It doesn't run safec's ownership checks (leaks, use after drop or
+  move, double drops, borrowed drops) or its Send/Sync checks: every type
+  satisfies `Send` and `Sync`, so programs safec rejects for those reasons
+  compile.
 - **Undefined functions**: a function that is declared but never defined,
   and isn't in the runtime, is a compile error (`undefined function 'f'`)
   when the program calls it. Natively that would be a link error.

@@ -1132,6 +1132,117 @@ int push_struct_env(int sd) {
     return saved;
 }
 
+// ── Drop ─────────────────────────────────────────────────────────────────────
+// scc compiles the Drop forms (drop(), consume, drop(x), needs_drop(T),
+// forget(x), conditional drop) but has no ownership analysis.
+
+// drop()'s declaration in sd's struct body, or 0
+int drop_proto(int sd) {
+    int n = g_sdef[sd].node;
+    if (n == 0 || g_node[n].kind != D_STRUCT) { return 0; }
+    int i = 0;
+    while (i < g_node[n].nlist) {
+        int m = g_list[g_node[n].list + i];
+        if (g_node[m].kind == D_FUNC && str_eq_lit(g_node[m].sid, "drop") == 1 && (g_node[m].flags & NF_SMETHOD) == 0) { return m; }
+        i = i + 1;
+    }
+    return 0;
+}
+
+// sd implements Drop: it has a drop() (whose 'if (cond)', if any, holds
+// for this instance)
+int sd_has_drop(int sd) {
+    if (g_sdef[sd].kind != SD_STRUCT) { return 0; }
+    int m = drop_proto(sd);
+    if (m == 0) { return 0; }
+    int cond = (int)g_node[m].ival;
+    if (cond == 0) { return 1; }
+    int saved = push_struct_env(sd);
+    int ok = sema_const_int(cond);
+    long v = g_cval;
+    g_nenv = saved;
+    if (ok == 0) { return 1; }
+    return v != 0L ? 1 : 0;
+}
+
+int ty_needs_drop(int t, int depth) {
+    if (t == 0 || depth > 16) { return 0; }
+    int k = g_ty[t].kind;
+    if (k == TY_ARRAY || k == TY_OPT) { return ty_needs_drop(g_ty[t].base, depth + 1); }
+    if (k == TY_TUPLE) {
+        int i = 0;
+        while (i < g_ty[t].nlist) {
+            if (ty_needs_drop(g_tyl[g_ty[t].list + i], depth + 1) == 1) { return 1; }
+            i = i + 1;
+        }
+        return 0;
+    }
+    if (k != TY_STRUCT) { return 0; }
+    int sd = g_ty[t].n;
+    if (sd_has_drop(sd) == 1) { return 1; }
+    if (g_sdef[sd].kind != SD_STRUCT) { return 0; }
+    int i = 0;
+    while (i < g_sdef[sd].nfield) {
+        if (ty_needs_drop(g_field[g_sdef[sd].field0 + i].ty, depth + 1) == 1) { return 1; }
+        i = i + 1;
+    }
+    return 0;
+}
+
+// The (unchecked) expression that drops place 'x' of type t, or 0 when
+// nothing needs dropping: T::drop(), else each owning field / element. An
+// optional's payload is not dropped by scc.
+int drop_glue(int x, int t, int tok, int depth) {
+    if (ty_needs_drop(t, 0) == 0 || depth > 16) { return 0; }
+    int k = g_ty[t].kind;
+    if (k == TY_STRUCT) {
+        int sd = g_ty[t].n;
+        if (sd_has_drop(sd) == 1) {
+            int m = new_node(E_MEMBER, tok);
+            g_node[m].a = clone_node(x);
+            g_node[m].sid = intern_lit("drop");
+            int c = new_node(E_CALL, tok);
+            g_node[c].a = m;
+            return c;
+        }
+        int out = 0;
+        int i = 0;
+        while (i < g_sdef[sd].nfield) {
+            int f = g_sdef[sd].field0 + i;
+            int fm = new_node(E_MEMBER, tok);
+            g_node[fm].a = clone_node(x);
+            g_node[fm].sid = g_field[f].sid;
+            int sub = drop_glue(fm, g_field[f].ty, tok, depth + 1);
+            if (sub != 0) {
+                if (out == 0) { out = sub; }
+                else { int cm = new_node(E_COMMA, tok); g_node[cm].a = out; g_node[cm].b = sub; out = cm; }
+            }
+            i = i + 1;
+        }
+        return out;
+    }
+    if (k == TY_ARRAY && g_ty[t].n > 0 && g_ty[t].n <= 256) {
+        int out = 0;
+        int i = 0;
+        while (i < g_ty[t].n) {
+            int ix = new_node(E_INDEX, tok);
+            g_node[ix].a = clone_node(x);
+            int lit = new_node(E_INT, tok);
+            g_node[lit].ival = (long)i;
+            g_node[lit].ty = TY_I32;
+            g_node[ix].b = lit;
+            int sub = drop_glue(ix, g_ty[t].base, tok, depth + 1);
+            if (sub != 0) {
+                if (out == 0) { out = sub; }
+                else { int cm = new_node(E_COMMA, tok); g_node[cm].a = out; g_node[cm].b = sub; out = cm; }
+            }
+            i = i + 1;
+        }
+        return out;
+    }
+    return 0;
+}
+
 // a generic struct method (from its out-of-line definition) for instance sd
 int instance_method(int sd, int name) {
     int f = lookup_method(sd, name);
@@ -1403,6 +1514,11 @@ int sema_const_int(int e) {
     if (k == E_FIELDCOUNT) {
         int t = resolve_type(g_node[e].c);
         g_cval = 0L;
+        if ((g_node[e].flags & NF_NEEDSDROP) != 0) {
+            if (g_ty[t].kind == TY_NAMED || g_ty[t].kind == TY_GENERIC) { return 0; }
+            g_cval = (long)ty_needs_drop(t, 0);
+            return 1;
+        }
         if (g_ty[t].kind == TY_STRUCT) { g_cval = (long)g_sdef[g_ty[t].n].nfield; }
         return 1;
     }

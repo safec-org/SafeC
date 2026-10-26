@@ -1180,7 +1180,7 @@ int check_try(int e) {
 }
 
 // ── spawn / fn_eval ──────────────────────────────────────────────────────────
-int check_spawn(int e, int fnx, int arg) {
+int check_spawn(int e, int fnx, int arg, int scoped) {
     int ft = check_expr(fnx);
     if (is_err(ft) == 0) {
         int valid = 0;
@@ -1194,8 +1194,21 @@ int check_spawn(int e, int fnx, int arg) {
         }
     }
     int at = check_expr(arg);
-    if (g_ty[at].kind == TY_REF && (g_ty[at].flags & TYF_CONST) == 0 && g_ty[at].n != R_STATIC) {
-        err_at(arg, "spawn argument must not pass mutable non-static reference (region isolation violation)");
+    // safec's rules on what a thread may receive, without its Send/Sync
+    // analysis: spawn's (detached-capable) threads only static data (or a
+    // region-less reference), spawn_scoped's anything (it is joined before
+    // the function returns); a raw pointer only in 'unsafe'
+    const char* what = scoped == 1 ? "spawn_scoped" : "spawn";
+    if (g_ty[at].kind == TY_PTR && in_unsafe() == 0 && g_node[arg].kind != E_NULL) {
+        msg_reset(); msg_lit(what);
+        msg_lit(": a raw pointer argument can't be checked for thread safety; pass a reference, or write the call inside 'unsafe { }'");
+        error_node(arg);
+    }
+    if (scoped == 0 && g_ty[at].kind == TY_REF && g_ty[at].n != R_STATIC && g_ty[at].n != R_EXTERN &&
+        g_ty[g_ty[at].base].kind != TY_FN) {
+        msg_reset(); msg_lit("spawn: the argument '"); msg_type(at);
+        msg_lit("' refers to data the thread may outlive (a spawned thread isn't joined by its scope): pass static data, or use spawn_scoped and join it before the data goes away");
+        error_node(arg);
     }
     return TY_I64;
 }
@@ -1322,9 +1335,14 @@ int check_expr(int e) {
         g_node[e].c = ft;
         g_node[e].ival = 0L;
         int sk = g_ty[ft].kind;
-        if (sk == TY_STRUCT) { g_node[e].ival = (long)g_sdef[g_ty[ft].n].nfield; }
-        else if (is_err(ft) == 0) { err_at(e, "fieldcount() requires a struct type"); }
-        t = TY_U64;
+        if ((g_node[e].flags & NF_NEEDSDROP) != 0) {
+            g_node[e].ival = (long)ty_needs_drop(ft, 0);
+            t = TY_I32;
+        } else {
+            if (sk == TY_STRUCT) { g_node[e].ival = (long)g_sdef[g_ty[ft].n].nfield; }
+            else if (is_err(ft) == 0) { err_at(e, "fieldcount() requires a struct type"); }
+            t = TY_U64;
+        }
     }
     else if (k == E_INITLIST) { t = check_initlist(e, 0); }
     else if (k == E_NEW) { t = check_new(e); }
@@ -1337,7 +1355,7 @@ int check_expr(int e) {
         t = check_expr(g_node[e].b);
     }
     else if (k == E_DESIG) { t = check_expr(g_node[e].a); }
-    else if (k == E_SPAWN) { t = check_spawn(e, g_node[e].a, g_node[e].b); }
+    else if (k == E_SPAWN) { t = check_spawn(e, g_node[e].a, g_node[e].b, 0); }
     else if (k == E_FNEVAL) { t = check_fn_eval(e); }
     return set_ty(e, t);
 }

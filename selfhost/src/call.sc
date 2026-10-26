@@ -82,6 +82,12 @@ int need_op(int sd, const char* op) {
 
 int trait_mismatch(int t, int trn) {
     int k = g_ty[t].kind;
+    // Send/Sync: scc has no thread-safety analysis, so every type has them
+    if (str_eq_lit(trn, "Send") == 1 || str_eq_lit(trn, "Sync") == 1) { return 0; }
+    if (str_eq_lit(trn, "Drop") == 1) {
+        if (k == TY_STRUCT && sd_has_drop(g_ty[t].n) == 1) { return 0; }
+        tmp_reset(); tmp_lit("no method 'drop'"); return 1;
+    }
     if (str_eq_lit(trn, "Indexed") == 1) {
         if (k == TY_ARRAY || k == TY_PTR || k == TY_SLICE || k == TY_REF) { return 0; }
         tmp_reset(); tmp_lit("-"); return 1;
@@ -642,11 +648,30 @@ int check_call(int e) {
                 g_node[callee].sid = str_concat3(intern_lit("__rt"), "_", sid);
                 return check_call(e);
             }
+            // drop(x): x's drop glue; forget(x): nothing (scc doesn't check
+            // ownership). The call becomes the glue expression, or '(void)x'.
+            if ((str_eq_lit(sid, "drop") == 1 || str_eq_lit(sid, "forget") == 1) && g_node[e].nlist == 1) {
+                int x = g_list[g_node[e].list];
+                int xc = clone_node(x);
+                int xt = check_expr(x);
+                int glue = 0;
+                if (str_eq_lit(sid, "drop") == 1 && is_err(xt) == 0) { glue = drop_glue(xc, xt, g_node[e].tok, 0); }
+                if (glue == 0) {
+                    glue = new_node(E_CAST, g_node[e].tok);
+                    g_node[glue].c = TY_VOID;
+                    g_node[glue].a = xc;
+                }
+                int tok = g_node[e].tok;
+                g_node[e] = g_node[glue];
+                g_node[e].tok = tok;
+                g_expect = expect;
+                return check_expr(e);
+            }
             if (str_eq_lit(sid, "spawn_scoped") == 1) {
                 if (g_node[e].nlist != 2) { err_at(e, "spawn_scoped expects 2 arguments (function, arg)"); return TY_ERROR; }
                 g_node[e].c = CK_BUILTIN;
                 g_node[e].op = BI_SPAWN;
-                return check_spawn(e, g_list[g_node[e].list], g_list[g_node[e].list + 1]);
+                return check_spawn(e, g_list[g_node[e].list], g_list[g_node[e].list + 1], 1);
             }
         }
     }

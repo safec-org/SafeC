@@ -653,7 +653,8 @@ void check_traits() {
                 int known = g_trait[s] != 0 || str_eq_lit(s, "Numeric") == 1 || str_eq_lit(s, "Eq") == 1 ||
                             str_eq_lit(s, "Ord") == 1 || str_eq_lit(s, "Add") == 1 || str_eq_lit(s, "Sub") == 1 ||
                             str_eq_lit(s, "Mul") == 1 || str_eq_lit(s, "Div") == 1 || str_eq_lit(s, "Indexed") == 1 ||
-                            str_eq_lit(s, "Pointer") == 1;
+                            str_eq_lit(s, "Pointer") == 1 || str_eq_lit(s, "Send") == 1 ||
+                            str_eq_lit(s, "Sync") == 1 || str_eq_lit(s, "Drop") == 1;
                 if (known == 0) {
                     msg_reset();
                     msg_lit("unknown supertrait '");

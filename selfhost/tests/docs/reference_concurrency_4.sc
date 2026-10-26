@@ -1,18 +1,13 @@
 // extracted from safec-docs reference/concurrency.md (block 4)
-#include <std/collections/slice.h>
+#include <std/collections/vec.h>
 extern int printf(const char* fmt, ...);
 
 struct WorkItem {
-    struct Slice<int> data;
+    const &Vec<int> data;       // shared for reading by both workers
     unsigned long start;
     unsigned long end;
     long long result;
 };
-
-// Shared with the workers, so it lives in static storage: spawn only
-// accepts references that can't dangle while the thread runs.
-static struct WorkItem w1;
-static struct WorkItem w2;
 
 ?&WorkItem sum_range(?&WorkItem arg) {
     match (arg) {
@@ -30,18 +25,19 @@ static struct WorkItem w2;
 
 int main() {
     unsigned long n = 10000UL;
-    struct Slice<int> data = std::Slice::alloc(n);      // heap, runtime-sized
-    for (unsigned long i = 0UL; i < n; i = i + 1UL) data.set(i, (int)i);
+    struct Vec<int> data = Vec::new();
+    for (unsigned long i = 0UL; i < n; i = i + 1UL) data.push((int)i);
 
-    w1.data = data; w1.start = 0UL;    w1.end = n / 2UL; w1.result = 0LL;
-    w2.data = data; w2.start = n / 2UL; w2.end = n;      w2.result = 0LL;
+    struct WorkItem w1; w1.data = &data; w1.start = 0UL;     w1.end = n / 2UL; w1.result = 0LL;
+    struct WorkItem w2; w2.data = &data; w2.start = n / 2UL; w2.end = n;       w2.result = 0LL;
 
-    long long h1 = spawn(sum_range, &w1);
-    long long h2 = spawn(sum_range, &w2);
+    // Each worker gets its own WorkItem until it is joined; both read 'data'.
+    long long h1 = spawn_scoped(sum_range, &w1);
+    long long h2 = spawn_scoped(sum_range, &w2);
     join(h1);
     join(h2);
 
     printf("Total: %lld\n", w1.result + w2.result);
-    data.free();
+    data.drop();
     return 0;
 }

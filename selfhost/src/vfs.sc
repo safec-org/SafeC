@@ -2,7 +2,7 @@
 #include "scc.h"
 #include "driver.h"
 
-int g_vfs_file[61];
+int g_vfs_file[62];
 
 const char* g_vfs_0() {
     return
@@ -2127,7 +2127,8 @@ const char* g_vfs_13() {
     "    // ── Close ─────────────────────────────────────────────────────────────────\n"
     "\n"
     "    // Close a file handle opened by File::open.  Returns 0 on success.\n"
-    "    int  close();\n"
+    "    int  close() consume;\n"
+    "    void drop();   // close(), ignoring the result\n"
     "\n"
     "    // ── Read ──────────────────────────────────────────────────────────────────\n"
     "\n"
@@ -2213,6 +2214,7 @@ const char* g_vfs_13() {
 const char* g_vfs_14() {
     return
     "#pragma once\n"
+    "#include <std/ownership.h>   // std::replace / std::swap, to take a String out of a field\n"
     "// SafeC Standard Library — String (mutable, heap-allocated)\n"
     "// A growable UTF-8 byte string with rich manipulation methods.\n"
     "\n"
@@ -2316,7 +2318,8 @@ const char* g_vfs_14() {
     "\n"
     "    // ── Lifecycle ────────────────────────────────────────────────────────────\n"
     "    struct String  clone() const;\n"
-    "    void           free();\n"
+    "    void           drop();                 // frees the buffer (Drop)\n"
+    "    void           free() consume;         // = drop()\n"
     "\n"
     "    // ── Internal ────────────────────────────────────────────────────────────\n"
     "    int            reserve_(unsigned long need);\n"
@@ -2333,6 +2336,55 @@ const char* g_vfs_14() {
 }
 
 const char* g_vfs_15() {
+    return
+    "#pragma once\n"
+    "// SafeC Standard Library — ownership helpers\n"
+    "//\n"
+    "// SafeC has no implicit destructors, but it does check them: a value whose\n"
+    "// type has a 'void drop()' method (the builtin Drop trait), or an aggregate\n"
+    "// holding one, must be dropped — 'x.drop()', 'defer x.drop()', or a method\n"
+    "// declared 'consume' — or moved (returned, passed by value, stored into\n"
+    "// something that owns it, sent to another thread) exactly once on every\n"
+    "// path. The compiler rejects a leak, a use after drop or move, a double\n"
+    "// drop, and overwriting a live value. See the language reference's\n"
+    "// \"Ownership & Drop\" page.\n"
+    "//\n"
+    "// Memory reached through a reference is borrowed: a Drop value can be\n"
+    "// dropped in place there, but not moved out. These move a value out of a\n"
+    "// place by putting another one in:\n"
+    "//\n"
+    "//   struct Waker w = std::replace(&self.w, Waker::noop());   // take self.w\n"
+    "//   std::swap(&a, &b);\n"
+    "//\n"
+    "// forget(x) (a compiler built-in, only inside 'unsafe { }') gives up a\n"
+    "// value without dropping it.\n"
+    "\n"
+    "namespace std {\n"
+    "\n"
+    "// Stores 'value' in *place and returns what was there.\n"
+    "generic<T>\n"
+    "T replace(&T place, T value) {\n"
+    "    unsafe {\n"
+    "        T old = *place;\n"
+    "        *place = value;\n"
+    "        return old;\n"
+    "    }\n"
+    "}\n"
+    "\n"
+    "// Exchanges *a and *b.\n"
+    "generic<T>\n"
+    "void swap(&T a, &T b) {\n"
+    "    unsafe {\n"
+    "        T t = *a;\n"
+    "        *a = *b;\n"
+    "        *b = t;\n"
+    "    }\n"
+    "}\n"
+    "\n"
+    "} // namespace std\n";
+}
+
+const char* g_vfs_16() {
     return
     "// SafeC Standard Library — String implementation\n"
     "#pragma once\n"
@@ -2451,7 +2503,9 @@ const char* g_vfs_15() {
     "    unsafe { return String::from_n((const char*)self.data, self.len); }\n"
     "}\n"
     "\n"
-    "inline void String::free() {\n"
+    "inline void String::free() { self.drop(); }\n"
+    "\n"
+    "inline void String::drop() {\n"
     "    unsafe {\n"
     "        if (self.cap > 0UL) { dealloc_raw_((void*)self.data); }\n"
     "        self.data = (&heap char)0;\n"
@@ -3170,7 +3224,7 @@ const char* g_vfs_15() {
     "} // namespace std\n";
 }
 
-const char* g_vfs_16() {
+const char* g_vfs_17() {
     return
     "// SafeC Standard Library — Memory declarations\n"
     "#pragma once\n"
@@ -3320,7 +3374,7 @@ const char* g_vfs_16() {
     "} // namespace std\n";
 }
 
-const char* g_vfs_17() {
+const char* g_vfs_18() {
     return
     "// SafeC Standard Library — String and memory declarations (C11/C17/C23 coverage)\n"
     "#pragma once\n"
@@ -3389,7 +3443,7 @@ const char* g_vfs_17() {
     "#pragma scc_impl <std/str.sc>\n";
 }
 
-const char* g_vfs_18() {
+const char* g_vfs_19() {
     return
     "// SafeC Standard Library — Strings\n"
     "// Safe wrappers around libc string functions.\n"
@@ -3680,7 +3734,7 @@ const char* g_vfs_18() {
     "} // namespace std\n";
 }
 
-const char* g_vfs_19() {
+const char* g_vfs_20() {
     return
     "// SafeC Standard Library — Standard type definitions (C99/C11/C17/C23)\n"
     "// Fundamental types, NULL, offsetof, max_align_t.\n"
@@ -3724,7 +3778,7 @@ const char* g_vfs_19() {
     "// or simply: sys_abort();  (in sys.h)\n";
 }
 
-const char* g_vfs_20() {
+const char* g_vfs_21() {
     return
     "// SafeC Standard Library — String formatting\n"
     "// Safe snprintf-based builders that write into caller-supplied buffers.\n"
@@ -3754,7 +3808,7 @@ const char* g_vfs_20() {
     "#pragma scc_impl <std/fmt.sc>\n";
 }
 
-const char* g_vfs_21() {
+const char* g_vfs_22() {
     return
     "// SafeC Standard Library — String formatting implementation\n"
     "#pragma once\n"
@@ -3890,7 +3944,7 @@ const char* g_vfs_21() {
     "} // namespace std\n";
 }
 
-const char* g_vfs_22() {
+const char* g_vfs_23() {
     return
     "// SafeC Standard Library — Type conversions (C11/C17 string ↔ number)\n"
     "// All parse functions set *ok = 1 on success, 0 on failure (NULL ok is safe).\n"
@@ -3938,7 +3992,7 @@ const char* g_vfs_22() {
     "#pragma scc_impl <std/convert.sc>\n";
 }
 
-const char* g_vfs_23() {
+const char* g_vfs_24() {
     return
     "// SafeC Standard Library — Type conversions implementation\n"
     "#pragma once\n"
@@ -4126,7 +4180,7 @@ const char* g_vfs_23() {
     "} // namespace std\n";
 }
 
-const char* g_vfs_24() {
+const char* g_vfs_25() {
     return
     "// SafeC Standard Library — File I/O implementation\n"
     "// &File handles wrap the C FILE* (the libc externs below stay untyped).\n"
@@ -4155,6 +4209,8 @@ const char* g_vfs_24() {
     "inline ?&File File::open(const &char path, const &char mode) {\n"
     "    unsafe { return (?&File)fopen(path, mode); }\n"
     "}\n"
+    "\n"
+    "inline void File::drop() { self.close(); }\n"
     "\n"
     "inline int File::close() {\n"
     "    unsafe { return fclose((void*)self); }\n"
@@ -4223,7 +4279,8 @@ const char* g_vfs_24() {
     "// Forwarding wrappers kept for std/ml (see io_file.h).\n"
     "// kept for std/ml until its refactor moves to the static method\n"
     "inline ?&File        file_open(const &char path, const &char mode) { return File::open(path, mode); }\n"
-    "inline int           file_close(&File f) { return f.close(); }\n"
+    "// Closes *f in place (File::open hands out references, not owned values).\n"
+    "inline int           file_close(&File f) { unsafe { return f.close(); } }\n"
     "inline unsigned long file_read(&File f, &unsigned char buf, unsigned long n) {\n"
     "    long long r = f.read(buf, n); return r < 0LL ? 0UL : (unsigned long)r;\n"
     "}\n"
@@ -4273,7 +4330,7 @@ const char* g_vfs_24() {
     "} // namespace std\n";
 }
 
-const char* g_vfs_25() {
+const char* g_vfs_26() {
     return
     "#pragma once\n"
     "// SafeC Standard Library — byte-stream traits.\n"
@@ -4405,7 +4462,7 @@ const char* g_vfs_25() {
     "} // namespace std\n";
 }
 
-const char* g_vfs_26() {
+const char* g_vfs_27() {
     return
     "// SafeC Standard Library — I/O (C11/C17/C23 stdio coverage)\n"
     "// Wraps stdio functions for formatted, raw, and interactive I/O.\n"
@@ -4682,7 +4739,7 @@ const char* g_vfs_26() {
     "} // namespace std\n";
 }
 
-const char* g_vfs_27() {
+const char* g_vfs_28() {
     return
     "// SafeC Standard Library — internal stderr-handle compatibility shim.\n"
     "//\n"
@@ -4723,7 +4780,7 @@ const char* g_vfs_27() {
     "}\n";
 }
 
-const char* g_vfs_28() {
+const char* g_vfs_29() {
     return
     "// SafeC Standard Library — Optional Panic System\n"
     "// Opt-in; does nothing unless panic_set_handler is called.\n"
@@ -4792,7 +4849,7 @@ const char* g_vfs_28() {
     "} // namespace std\n";
 }
 
-const char* g_vfs_29() {
+const char* g_vfs_30() {
     return
     "// SafeC Standard Library — Math declarations\n"
     "// Naming convention:\n"
@@ -4904,7 +4961,7 @@ const char* g_vfs_29() {
     "#pragma scc_impl <std/math.sc>\n";
 }
 
-const char* g_vfs_30() {
+const char* g_vfs_31() {
     return
     "// SafeC Standard Library — Math\n"
     "// Integer utilities are pure const functions eligible for compile-time evaluation.\n"
@@ -5147,7 +5204,7 @@ const char* g_vfs_30() {
     "} // namespace std\n";
 }
 
-const char* g_vfs_31() {
+const char* g_vfs_32() {
     return
     "// SafeC Standard Library — Slice<T>: a bounds-checked view of T elements\n"
     "//\n"
@@ -5330,14 +5387,14 @@ const char* g_vfs_31() {
     "#pragma scc_impl <std/collections/slice.sc>\n";
 }
 
-const char* g_vfs_32() {
+const char* g_vfs_33() {
     return
     "// SafeC Standard Library — Slice<T>: generic, defined entirely in slice.h.\n"
     "#pragma once\n"
     "#include <std/collections/slice.h>\n";
 }
 
-const char* g_vfs_33() {
+const char* g_vfs_34() {
     return
     "#pragma once\n"
     "// SafeC Standard Library — Vec<T> (dynamic array)\n"
@@ -5351,11 +5408,19 @@ const char* g_vfs_33() {
     "// Elements are stored by value in one contiguous heap buffer. Element access\n"
     "// hands out '?&T' (null when out of range) — a reference into the buffer,\n"
     "// valid until the next call that can reallocate it (push/insert/extend/\n"
-    "// reserve/shrink/free). Copies are shallow: a Vec of structs that own heap\n"
-    "// memory (String, Vec, ...) doesn't free those on clear()/free().\n"
+    "// reserve/shrink/drop) — the compiler rejects using one after drop().\n"
+    "//\n"
+    "// A Vec owns its buffer and its elements: it is a Drop type (drop() it, or\n"
+    "// move it, on every path), and drop()/clear() drop each element whose type\n"
+    "// owns something (String, Vec, ...: see needs_drop). push/insert/set take\n"
+    "// the element by value; one they can't store is dropped. clone(), filter(),\n"
+    "// extend() and from_arr() copy elements bit for bit, so for an element type\n"
+    "// that owns something they would share it: they panic instead (build such\n"
+    "// a copy element by element, cloning each).\n"
     "#include <std/mem.h>\n"
     "#include <std/panic.h>\n"
     "#include <std/cmp.h>\n"
+    "#include <std/ownership.h>\n"
     "\n"
     "namespace std {\n"
     "\n"
@@ -5401,7 +5466,8 @@ const char* g_vfs_33() {
     "    void          foreach(fn void(&T, unsigned long) func);\n"
     "    struct Vec<T> filter(fn int(const &T) pred) const;\n"
     "\n"
-    "    void          free();\n"
+    "    void          drop();                             // frees the buffer (Drop)\n"
+    "    void          free() consume;                     // = drop()\n"
     "};\n"
     "\n"
     "generic<T>\n"
@@ -5492,8 +5558,11 @@ const char* g_vfs_33() {
     "\n"
     "generic<T>\n"
     "int Vec::set(unsigned long idx, T value) {\n"
-    "    if (idx >= self.len) return 0;\n"
-    "    unsafe { self.data[idx] = value; }\n"
+    "    if (idx >= self.len) { drop(value); return 0; }\n"
+    "    unsafe {\n"
+    "        drop(self.data[idx]);\n"
+    "        self.data[idx] = value;\n"
+    "    }\n"
     "    return 1;\n"
     "}\n"
     "\n"
@@ -5517,7 +5586,7 @@ const char* g_vfs_33() {
     "        unsigned long next = self.cap < 4UL ? 4UL : self.cap * 2UL;\n"
     "        ?&heap T grown = null;\n"
     "        unsafe { grown = (?&heap T)realloc_array_raw_((void*)self.data, next, sizeof(T)); }\n"
-    "        if (grown.is_null()) return 0;\n"
+    "        if (grown.is_null()) { drop(value); return 0; }\n"
     "        self.data = grown;\n"
     "        self.cap = next;\n"
     "    }\n"
@@ -5535,12 +5604,12 @@ const char* g_vfs_33() {
     "\n"
     "generic<T>\n"
     "int Vec::insert(unsigned long idx, T value) {\n"
-    "    if (idx > self.len) return 0;\n"
+    "    if (idx > self.len) { drop(value); return 0; }\n"
     "    if (self.len == self.cap) {\n"
     "        unsigned long next = self.cap < 4UL ? 4UL : self.cap * 2UL;\n"
     "        ?&heap T grown = null;\n"
     "        unsafe { grown = (?&heap T)realloc_array_raw_((void*)self.data, next, sizeof(T)); }\n"
-    "        if (grown.is_null()) return 0;\n"
+    "        if (grown.is_null()) { drop(value); return 0; }\n"
     "        self.data = grown;\n"
     "        self.cap = next;\n"
     "    }\n"
@@ -5566,10 +5635,18 @@ const char* g_vfs_33() {
     "}\n"
     "\n"
     "generic<T>\n"
-    "void Vec::clear() { self.len = 0UL; }\n"
+    "void Vec::clear() {\n"
+    "    if const (needs_drop(T)) {\n"
+    "        unsigned long i = 0UL;\n"
+    "        while (i < self.len) { unsafe { drop(self.data[i]); } i = i + 1UL; }\n"
+    "    }\n"
+    "    self.len = 0UL;\n"
+    "}\n"
+    "\n"
     "\n"
     "generic<T>\n"
     "int Vec::extend(const &T items, unsigned long count) {\n"
+    "    if const (needs_drop(T)) panic_at(\"Vec::extend: the elements own resources; push clones of them instead\", \"vec.h\", 0);\n"
     "    if (count == 0UL) return 1;\n"
     "    if (self.len + count > self.cap) {\n"
     "        unsigned long next = self.cap * 2UL;\n"
@@ -5734,6 +5811,7 @@ const char* g_vfs_33() {
     "\n"
     "generic<T>\n"
     "struct Vec<T> Vec::clone() const {\n"
+    "    if const (needs_drop(T)) panic_at(\"Vec::clone: the elements own resources; clone them one by one\", \"vec.h\", 0);\n"
     "    struct Vec<T> out = Vec::with_cap(self.len);\n"
     "    match (self.data) {\n"
     "        case null: { }\n"
@@ -5752,6 +5830,7 @@ const char* g_vfs_33() {
     "\n"
     "generic<T>\n"
     "struct Vec<T> Vec::filter(fn int(const &T) pred) const {\n"
+    "    if const (needs_drop(T)) panic_at(\"Vec::filter: the elements own resources; build the result with clones\", \"vec.h\", 0);\n"
     "    struct Vec<T> out = Vec::new();\n"
     "    unsafe {\n"
     "        unsigned long i = 0UL;\n"
@@ -5764,7 +5843,11 @@ const char* g_vfs_33() {
     "}\n"
     "\n"
     "generic<T>\n"
-    "void Vec::free() {\n"
+    "void Vec::free() { self.drop(); }\n"
+    "\n"
+    "generic<T>\n"
+    "void Vec::drop() {\n"
+    "    self.clear();\n"
     "    unsafe { dealloc_raw_((void*)self.data); }\n"
     "    self.data = null;\n"
     "    self.len = 0UL;\n"
@@ -5787,7 +5870,7 @@ const char* g_vfs_33() {
     "#pragma scc_impl <std/collections/vec.sc>\n";
 }
 
-const char* g_vfs_34() {
+const char* g_vfs_35() {
     return
     "#pragma once\n"
     "// SafeC Standard Library — compile-time orderings\n"
@@ -5862,14 +5945,14 @@ const char* g_vfs_34() {
     "} // namespace std\n";
 }
 
-const char* g_vfs_35() {
+const char* g_vfs_36() {
     return
     "// SafeC Standard Library — Vec<T> is header-only (generic): see vec.h.\n"
     "#pragma once\n"
     "#include <std/collections/vec.h>\n";
 }
 
-const char* g_vfs_36() {
+const char* g_vfs_37() {
     return
     "#pragma once\n"
     "// SafeC Standard Library — HashMap<K,V> / StrMap<V> (open addressing, linear probing)\n"
@@ -5984,7 +6067,8 @@ const char* g_vfs_36() {
     "\n"
     "    // ── Lifecycle ────────────────────────────────────────────────────────────\n"
     "    int           reserve(unsigned long n);   // room for n entries without resizing\n"
-    "    void          free();\n"
+    "    void          drop();\n"
+    "    void          free() consume;   // = drop()\n"
     "\n"
     "    // ── Internal ────────────────────────────────────────────────────────────\n"
     "    long long     find_(const &K key, unsigned int h) const;\n"
@@ -6187,7 +6271,10 @@ const char* g_vfs_36() {
     "}\n"
     "\n"
     "generic<K, V>\n"
-    "void HashMap::free() {\n"
+    "void HashMap::free() { self.drop(); }\n"
+    "\n"
+    "generic<K, V>\n"
+    "void HashMap::drop() {\n"
     "    unsafe {\n"
     "        dealloc_raw_((void*)self.keys); dealloc_raw_((void*)self.vals);\n"
     "        dealloc_raw_((void*)self.hashes); dealloc_raw_((void*)self.states);\n"
@@ -6218,7 +6305,8 @@ const char* g_vfs_36() {
     "    int           is_empty() const;\n"
     "    void          clear();\n"
     "    void          foreach(fn void(const &char, &V) func);\n"
-    "    void          free();\n"
+    "    void          drop();\n"
+    "    void          free() consume;   // = drop()\n"
     "\n"
     "    long long     find_(const char* key, unsigned int h) const;\n"
     "    int           rehash_(unsigned long new_cap);\n"
@@ -6386,7 +6474,10 @@ const char* g_vfs_36() {
     "}\n"
     "\n"
     "generic<V>\n"
-    "void StrMap::free() {\n"
+    "void StrMap::free() { self.drop(); }\n"
+    "\n"
+    "generic<V>\n"
+    "void StrMap::drop() {\n"
     "    self.clear();\n"
     "    unsafe {\n"
     "        dealloc_raw_((void*)self.keys); dealloc_raw_((void*)self.vals);\n"
@@ -6401,7 +6492,7 @@ const char* g_vfs_36() {
     "#pragma scc_impl <std/collections/map.sc>\n";
 }
 
-const char* g_vfs_37() {
+const char* g_vfs_38() {
     return
     "// SafeC Standard Library — HashMap<K,V> / StrMap<V>. The containers are\n"
     "// generic and live entirely in map.h; this file holds the one non-generic\n"
@@ -6434,7 +6525,7 @@ const char* g_vfs_37() {
     "} // namespace std\n";
 }
 
-const char* g_vfs_38() {
+const char* g_vfs_39() {
     return
     "// SafeC Standard Library — Fixed-width integer types (C99/C11/C17/C23)\n"
     "// Provides exact-width, minimum-width, and fastest integer type aliases.\n"
@@ -6534,7 +6625,7 @@ const char* g_vfs_38() {
     "//   unsigned 64-bit : ULL suffix, e.g. 42ULL\n";
 }
 
-const char* g_vfs_39() {
+const char* g_vfs_40() {
     return
     "// SafeC Standard Library — Integer limit constants (C89/C99/C11/C17/C23)\n"
     "// Implementation assumes LP64 (64-bit POSIX) or LLP64 (Windows 64-bit).\n"
@@ -6577,7 +6668,7 @@ const char* g_vfs_39() {
     "#define MB_LEN_MAX  16\n";
 }
 
-const char* g_vfs_40() {
+const char* g_vfs_41() {
     return
     "// SafeC Standard Library — Floating-point limit constants (C89/C99/C11/C17/C23)\n"
     "// All values assume IEEE 754 binary32 (float) and binary64 (double).\n"
@@ -6647,7 +6738,7 @@ const char* g_vfs_40() {
     "#define DECIMAL_DIG  21\n";
 }
 
-const char* g_vfs_41() {
+const char* g_vfs_42() {
     return
     "// SafeC Standard Library — Boolean type (C99/C11/C17)\n"
     "// Defines bool, true, and false.  SafeC uses int-sized booleans.\n"
@@ -6664,7 +6755,7 @@ const char* g_vfs_41() {
     "#endif\n";
 }
 
-const char* g_vfs_42() {
+const char* g_vfs_43() {
     return
     "// SafeC Standard Library — Fixed-width integer format specifiers (C99/C11/C17/C23)\n"
     "// Use these macros with printf/scanf and the io_printf/io_scan family.\n"
@@ -6733,7 +6824,7 @@ const char* g_vfs_42() {
     "#define SCNxMAX  \"llx\"\n";
 }
 
-const char* g_vfs_43() {
+const char* g_vfs_44() {
     return
     "// SafeC Standard Library — Character classification and conversion (C89–C23)\n"
     "// Functions are locale-aware (delegate to the current C locale).\n"
@@ -6795,7 +6886,7 @@ const char* g_vfs_43() {
     "#pragma scc_impl <std/ctype.sc>\n";
 }
 
-const char* g_vfs_44() {
+const char* g_vfs_45() {
     return
     "// SafeC Standard Library — Character classification and conversion\n"
     "// ASCII / \"C\" locale semantics, implemented natively: freestanding-safe, and\n"
@@ -6823,7 +6914,7 @@ const char* g_vfs_44() {
     "} // namespace std\n";
 }
 
-const char* g_vfs_45() {
+const char* g_vfs_46() {
     return
     "// SafeC Standard Library — Runtime assertions (C89–C23)\n"
     "// SafeC has compile-time `static_assert` as a built-in keyword.\n"
@@ -6873,7 +6964,7 @@ const char* g_vfs_45() {
     "#pragma scc_impl <std/assert.sc>\n";
 }
 
-const char* g_vfs_46() {
+const char* g_vfs_47() {
     return
     "// SafeC Standard Library — Runtime assertions\n"
     "// runtime_assert() — checked condition with diagnostic message.\n"
@@ -6951,7 +7042,7 @@ const char* g_vfs_46() {
     "} // namespace std\n";
 }
 
-const char* g_vfs_47() {
+const char* g_vfs_48() {
     return
     "// SafeC Standard Library — Checked integer arithmetic (C23 <stdckdint.h>)\n"
     "// Each function performs op(a, b), stores the wrapped result in *result,\n"
@@ -6992,7 +7083,7 @@ const char* g_vfs_47() {
     "#pragma scc_impl <std/stdckdint.sc>\n";
 }
 
-const char* g_vfs_48() {
+const char* g_vfs_49() {
     return
     "// SafeC Standard Library — Checked integer arithmetic (C23)\n"
     "// Pure SafeC implementation — overflow is detected before the operation.\n"
@@ -7110,7 +7201,7 @@ const char* g_vfs_48() {
     "} // namespace std\n";
 }
 
-const char* g_vfs_49() {
+const char* g_vfs_50() {
     return
     "#pragma once\n"
     "// SafeC Standard Library — capability traits shared across modules.\n"
@@ -7133,7 +7224,7 @@ const char* g_vfs_49() {
     "} // namespace std\n";
 }
 
-const char* g_vfs_50() {
+const char* g_vfs_51() {
     return
     "// SafeC Standard Library — Bit manipulation (C23 <stdbit.h> + compiler builtins)\n"
     "// All functions are const-eligible (pure, no side effects).\n"
@@ -7216,7 +7307,7 @@ const char* g_vfs_50() {
     "#pragma scc_impl <std/bit.sc>\n";
 }
 
-const char* g_vfs_51() {
+const char* g_vfs_52() {
     return
     "// SafeC Standard Library — Bit manipulation implementation\n"
     "// Uses GCC/Clang compiler builtins for hardware-accelerated operations.\n"
@@ -7352,7 +7443,7 @@ const char* g_vfs_51() {
     "} // namespace std\n";
 }
 
-const char* g_vfs_52() {
+const char* g_vfs_53() {
     return
     "// SafeC Standard Library — Result<T,E>: a value or an error, stored inline\n"
     "//\n"
@@ -7362,8 +7453,11 @@ const char* g_vfs_52() {
     "//   match (e.get_err()) { case some(code): ...; case null: ... }\n"
     "//\n"
     "// No heap allocation: both slots live in the struct and only the one named\n"
-    "// by 'is_ok' is meaningful.\n"
+    "// by 'is_ok' is meaningful. When T or E owns something (a Drop type), so\n"
+    "// does the Result: drop() drops whichever slot is live, and unwrap_or()\n"
+    "// consumes it, as do unwrap() / unwrap_err() (which panic on the other kind).\n"
     "#pragma once\n"
+    "#include <std/panic.h>\n"
     "\n"
     "namespace std {\n"
     "\n"
@@ -7380,7 +7474,10 @@ const char* g_vfs_52() {
     "    int err() const;\n"
     "    ?&T get_ok();             // null for an error result\n"
     "    ?&E get_err();            // null for an ok result\n"
-    "    T   unwrap_or(T fallback) const;\n"
+    "    T   unwrap_or(T fallback) consume;   // the value, or 'fallback' (the other one is dropped)\n"
+    "    T   unwrap() consume;                // the value; panics for an error result\n"
+    "    E   unwrap_err() consume;            // the error; panics for an ok result\n"
+    "    void drop() if (needs_drop(T) || needs_drop(E));\n"
     "};\n"
     "\n"
     "generic<T, E>\n"
@@ -7418,21 +7515,43 @@ const char* g_vfs_52() {
     "}\n"
     "\n"
     "generic<T, E>\n"
-    "T Result::unwrap_or(T fallback) const { return self.is_ok ? self.value : fallback; }\n"
+    "T Result::unwrap_or(T fallback) consume {\n"
+    "    if (self.is_ok) { drop(fallback); return self.value; }\n"
+    "    drop(self.error);\n"
+    "    return fallback;\n"
+    "}\n"
+    "\n"
+    "generic<T, E>\n"
+    "T Result::unwrap() consume {\n"
+    "    if (!self.is_ok) { drop(self.error); panic_at(\"Result::unwrap on an error result\", \"result.h\", 0); }\n"
+    "    return self.value;\n"
+    "}\n"
+    "\n"
+    "generic<T, E>\n"
+    "E Result::unwrap_err() consume {\n"
+    "    if (self.is_ok) { drop(self.value); panic_at(\"Result::unwrap_err on an ok result\", \"result.h\", 0); }\n"
+    "    return self.error;\n"
+    "}\n"
+    "\n"
+    "generic<T, E>\n"
+    "void Result::drop() {\n"
+    "    if (self.is_ok) drop(self.value);\n"
+    "    else drop(self.error);\n"
+    "}\n"
     "\n"
     "} // namespace std\n"
     "\n"
     "#pragma scc_impl <std/result.sc>\n";
 }
 
-const char* g_vfs_53() {
+const char* g_vfs_54() {
     return
     "// SafeC Standard Library — Result<T,E>: generic, defined entirely in result.h.\n"
     "#pragma once\n"
     "#include <std/result.h>\n";
 }
 
-const char* g_vfs_54() {
+const char* g_vfs_55() {
     return
     "// SafeC Standard Library — Atomics (C11 <stdatomic.h>)\n"
     "// Lock-free operations on shared integers and pointers.\n"
@@ -7486,12 +7605,43 @@ const char* g_vfs_54() {
     "// Full sequential-consistency fence.\n"
     "void atomic_thread_fence();\n"
     "\n"
+    "// ── Typed atomics ─────────────────────────────────────────────────────────────\n"
+    "// An int / long long every access to which is atomic: Sync, so threads may\n"
+    "// share one through a mutable reference ('&static AtomicInt', or a local\n"
+    "// lent to spawn_scoped threads) where a plain int would race.\n"
+    "//   static struct AtomicInt hits;            // zero-initialized\n"
+    "//   hits.fetch_add(1);\n"
+    "struct AtomicInt {\n"
+    "    int v_;\n"
+    "    unsafe impl Send + Sync;\n"
+    "    static struct AtomicInt new(int v);\n"
+    "    int  load() const;\n"
+    "    void store(int v);\n"
+    "    int  fetch_add(int d);     // returns the old value\n"
+    "    int  fetch_sub(int d);\n"
+    "    int  exchange(int v);\n"
+    "    int  compare_exchange(&int expected, int desired);   // 1 if stored\n"
+    "};\n"
+    "\n"
+    "struct AtomicLong {\n"
+    "    long long v_;\n"
+    "    unsafe impl Send + Sync;\n"
+    "    static struct AtomicLong new(long long v);\n"
+    "    long long load() const;\n"
+    "    void      store(long long v);\n"
+    "    long long fetch_add(long long d);\n"
+    "    long long fetch_sub(long long d);\n"
+    "    long long exchange(long long v);\n"
+    "    int       compare_exchange(&long long expected, long long desired);\n"
+    "};\n"
+    "\n"
+    "\n"
     "} // namespace std\n"
     "\n"
     "#pragma scc_impl <std/atomic.sc>\n";
 }
 
-const char* g_vfs_55() {
+const char* g_vfs_56() {
     return
     "// SafeC Standard Library — Atomics (C11 <stdatomic.h>-equivalent surface)\n"
     "//\n"
@@ -7575,10 +7725,27 @@ const char* g_vfs_55() {
     "    unsafe { atomic_fence(); }\n"
     "}\n"
     "\n"
+    "// ── Typed atomics ─────────────────────────────────────────────────────────────\n"
+    "struct AtomicInt AtomicInt::new(int v) { struct AtomicInt a; a.v_ = v; return a; }\n"
+    "int  AtomicInt::load() const { return atomic_load_int(&self.v_); }\n"
+    "void AtomicInt::store(int v) { atomic_store_int(&self.v_, v); }\n"
+    "int  AtomicInt::fetch_add(int d) { return atomic_fetch_add_int(&self.v_, d); }\n"
+    "int  AtomicInt::fetch_sub(int d) { return atomic_fetch_sub_int(&self.v_, d); }\n"
+    "int  AtomicInt::exchange(int v) { return atomic_exchange_int(&self.v_, v); }\n"
+    "int  AtomicInt::compare_exchange(&int expected, int desired) { return atomic_cas_int(&self.v_, expected, desired); }\n"
+    "\n"
+    "struct AtomicLong AtomicLong::new(long long v) { struct AtomicLong a; a.v_ = v; return a; }\n"
+    "long long AtomicLong::load() const { return atomic_load_ll(&self.v_); }\n"
+    "void      AtomicLong::store(long long v) { atomic_store_ll(&self.v_, v); }\n"
+    "long long AtomicLong::fetch_add(long long d) { return atomic_fetch_add_ll(&self.v_, d); }\n"
+    "long long AtomicLong::fetch_sub(long long d) { return atomic_fetch_sub_ll(&self.v_, d); }\n"
+    "long long AtomicLong::exchange(long long v) { return atomic_exchange_ll(&self.v_, v); }\n"
+    "int       AtomicLong::compare_exchange(&long long expected, long long desired) { return atomic_cas_ll(&self.v_, expected, desired); }\n"
+    "\n"
     "} // namespace std\n";
 }
 
-const char* g_vfs_56() {
+const char* g_vfs_57() {
     return
     "// SafeC Standard Library — System declarations (C11/C17/C23 stdlib coverage)\n"
     "#pragma once\n"
@@ -7649,7 +7816,7 @@ const char* g_vfs_56() {
     "#pragma scc_impl <std/sys.sc>\n";
 }
 
-const char* g_vfs_57() {
+const char* g_vfs_58() {
     return
     "// SafeC Standard Library — System (C11/C17/C23 stdlib coverage)\n"
     "// Process control, PRNG, conversions, sorting, and clock wrappers.\n"
@@ -7832,7 +7999,7 @@ const char* g_vfs_57() {
     "} // namespace std\n";
 }
 
-const char* g_vfs_58() {
+const char* g_vfs_59() {
     return
     "#pragma once\n"
     "// SafeC Standard Library — Time (comprehensive C11 <time.h>)\n"
@@ -7898,7 +8065,7 @@ const char* g_vfs_58() {
     "#pragma scc_impl <std/time.sc>\n";
 }
 
-const char* g_vfs_59() {
+const char* g_vfs_60() {
     return
     "// SafeC Standard Library — time implementation\n"
     "#pragma once\n"
@@ -8269,185 +8436,189 @@ int vfs_load(int name) {
         if (g_vfs_file[14] == 0) { g_vfs_file[14] = vfs_add(name, g_vfs_14()); }
         return g_vfs_file[14];
     }
-    if (str_eq_lit(name, "std/collections/string.sc") == 1) {
+    if (str_eq_lit(name, "std/ownership.h") == 1) {
         if (g_vfs_file[15] == 0) { g_vfs_file[15] = vfs_add(name, g_vfs_15()); }
         return g_vfs_file[15];
     }
-    if (str_eq_lit(name, "std/mem.h") == 1) {
+    if (str_eq_lit(name, "std/collections/string.sc") == 1) {
         if (g_vfs_file[16] == 0) { g_vfs_file[16] = vfs_add(name, g_vfs_16()); }
         return g_vfs_file[16];
     }
-    if (str_eq_lit(name, "std/str.h") == 1) {
+    if (str_eq_lit(name, "std/mem.h") == 1) {
         if (g_vfs_file[17] == 0) { g_vfs_file[17] = vfs_add(name, g_vfs_17()); }
         return g_vfs_file[17];
     }
-    if (str_eq_lit(name, "std/str.sc") == 1) {
+    if (str_eq_lit(name, "std/str.h") == 1) {
         if (g_vfs_file[18] == 0) { g_vfs_file[18] = vfs_add(name, g_vfs_18()); }
         return g_vfs_file[18];
     }
-    if (str_eq_lit(name, "std/stddef.h") == 1) {
+    if (str_eq_lit(name, "std/str.sc") == 1) {
         if (g_vfs_file[19] == 0) { g_vfs_file[19] = vfs_add(name, g_vfs_19()); }
         return g_vfs_file[19];
     }
-    if (str_eq_lit(name, "std/fmt.h") == 1) {
+    if (str_eq_lit(name, "std/stddef.h") == 1) {
         if (g_vfs_file[20] == 0) { g_vfs_file[20] = vfs_add(name, g_vfs_20()); }
         return g_vfs_file[20];
     }
-    if (str_eq_lit(name, "std/fmt.sc") == 1) {
+    if (str_eq_lit(name, "std/fmt.h") == 1) {
         if (g_vfs_file[21] == 0) { g_vfs_file[21] = vfs_add(name, g_vfs_21()); }
         return g_vfs_file[21];
     }
-    if (str_eq_lit(name, "std/convert.h") == 1) {
+    if (str_eq_lit(name, "std/fmt.sc") == 1) {
         if (g_vfs_file[22] == 0) { g_vfs_file[22] = vfs_add(name, g_vfs_22()); }
         return g_vfs_file[22];
     }
-    if (str_eq_lit(name, "std/convert.sc") == 1) {
+    if (str_eq_lit(name, "std/convert.h") == 1) {
         if (g_vfs_file[23] == 0) { g_vfs_file[23] = vfs_add(name, g_vfs_23()); }
         return g_vfs_file[23];
     }
-    if (str_eq_lit(name, "std/io_file.sc") == 1) {
+    if (str_eq_lit(name, "std/convert.sc") == 1) {
         if (g_vfs_file[24] == 0) { g_vfs_file[24] = vfs_add(name, g_vfs_24()); }
         return g_vfs_file[24];
     }
-    if (str_eq_lit(name, "std/io_traits.h") == 1) {
+    if (str_eq_lit(name, "std/io_file.sc") == 1) {
         if (g_vfs_file[25] == 0) { g_vfs_file[25] = vfs_add(name, g_vfs_25()); }
         return g_vfs_file[25];
     }
-    if (str_eq_lit(name, "std/io.sc") == 1) {
+    if (str_eq_lit(name, "std/io_traits.h") == 1) {
         if (g_vfs_file[26] == 0) { g_vfs_file[26] = vfs_add(name, g_vfs_26()); }
         return g_vfs_file[26];
     }
-    if (str_eq_lit(name, "std/stderr_compat.h") == 1) {
+    if (str_eq_lit(name, "std/io.sc") == 1) {
         if (g_vfs_file[27] == 0) { g_vfs_file[27] = vfs_add(name, g_vfs_27()); }
         return g_vfs_file[27];
     }
-    if (str_eq_lit(name, "std/panic.h") == 1) {
+    if (str_eq_lit(name, "std/stderr_compat.h") == 1) {
         if (g_vfs_file[28] == 0) { g_vfs_file[28] = vfs_add(name, g_vfs_28()); }
         return g_vfs_file[28];
     }
-    if (str_eq_lit(name, "std/math.h") == 1) {
+    if (str_eq_lit(name, "std/panic.h") == 1) {
         if (g_vfs_file[29] == 0) { g_vfs_file[29] = vfs_add(name, g_vfs_29()); }
         return g_vfs_file[29];
     }
-    if (str_eq_lit(name, "std/math.sc") == 1) {
+    if (str_eq_lit(name, "std/math.h") == 1) {
         if (g_vfs_file[30] == 0) { g_vfs_file[30] = vfs_add(name, g_vfs_30()); }
         return g_vfs_file[30];
     }
-    if (str_eq_lit(name, "std/collections/slice.h") == 1) {
+    if (str_eq_lit(name, "std/math.sc") == 1) {
         if (g_vfs_file[31] == 0) { g_vfs_file[31] = vfs_add(name, g_vfs_31()); }
         return g_vfs_file[31];
     }
-    if (str_eq_lit(name, "std/collections/slice.sc") == 1) {
+    if (str_eq_lit(name, "std/collections/slice.h") == 1) {
         if (g_vfs_file[32] == 0) { g_vfs_file[32] = vfs_add(name, g_vfs_32()); }
         return g_vfs_file[32];
     }
-    if (str_eq_lit(name, "std/collections/vec.h") == 1) {
+    if (str_eq_lit(name, "std/collections/slice.sc") == 1) {
         if (g_vfs_file[33] == 0) { g_vfs_file[33] = vfs_add(name, g_vfs_33()); }
         return g_vfs_file[33];
     }
-    if (str_eq_lit(name, "std/cmp.h") == 1) {
+    if (str_eq_lit(name, "std/collections/vec.h") == 1) {
         if (g_vfs_file[34] == 0) { g_vfs_file[34] = vfs_add(name, g_vfs_34()); }
         return g_vfs_file[34];
     }
-    if (str_eq_lit(name, "std/collections/vec.sc") == 1) {
+    if (str_eq_lit(name, "std/cmp.h") == 1) {
         if (g_vfs_file[35] == 0) { g_vfs_file[35] = vfs_add(name, g_vfs_35()); }
         return g_vfs_file[35];
     }
-    if (str_eq_lit(name, "std/collections/map.h") == 1) {
+    if (str_eq_lit(name, "std/collections/vec.sc") == 1) {
         if (g_vfs_file[36] == 0) { g_vfs_file[36] = vfs_add(name, g_vfs_36()); }
         return g_vfs_file[36];
     }
-    if (str_eq_lit(name, "std/collections/map.sc") == 1) {
+    if (str_eq_lit(name, "std/collections/map.h") == 1) {
         if (g_vfs_file[37] == 0) { g_vfs_file[37] = vfs_add(name, g_vfs_37()); }
         return g_vfs_file[37];
     }
-    if (str_eq_lit(name, "std/stdint.h") == 1) {
+    if (str_eq_lit(name, "std/collections/map.sc") == 1) {
         if (g_vfs_file[38] == 0) { g_vfs_file[38] = vfs_add(name, g_vfs_38()); }
         return g_vfs_file[38];
     }
-    if (str_eq_lit(name, "std/limits.h") == 1) {
+    if (str_eq_lit(name, "std/stdint.h") == 1) {
         if (g_vfs_file[39] == 0) { g_vfs_file[39] = vfs_add(name, g_vfs_39()); }
         return g_vfs_file[39];
     }
-    if (str_eq_lit(name, "std/float.h") == 1) {
+    if (str_eq_lit(name, "std/limits.h") == 1) {
         if (g_vfs_file[40] == 0) { g_vfs_file[40] = vfs_add(name, g_vfs_40()); }
         return g_vfs_file[40];
     }
-    if (str_eq_lit(name, "std/stdbool.h") == 1) {
+    if (str_eq_lit(name, "std/float.h") == 1) {
         if (g_vfs_file[41] == 0) { g_vfs_file[41] = vfs_add(name, g_vfs_41()); }
         return g_vfs_file[41];
     }
-    if (str_eq_lit(name, "std/inttypes.h") == 1) {
+    if (str_eq_lit(name, "std/stdbool.h") == 1) {
         if (g_vfs_file[42] == 0) { g_vfs_file[42] = vfs_add(name, g_vfs_42()); }
         return g_vfs_file[42];
     }
-    if (str_eq_lit(name, "std/ctype.h") == 1) {
+    if (str_eq_lit(name, "std/inttypes.h") == 1) {
         if (g_vfs_file[43] == 0) { g_vfs_file[43] = vfs_add(name, g_vfs_43()); }
         return g_vfs_file[43];
     }
-    if (str_eq_lit(name, "std/ctype.sc") == 1) {
+    if (str_eq_lit(name, "std/ctype.h") == 1) {
         if (g_vfs_file[44] == 0) { g_vfs_file[44] = vfs_add(name, g_vfs_44()); }
         return g_vfs_file[44];
     }
-    if (str_eq_lit(name, "std/assert.h") == 1) {
+    if (str_eq_lit(name, "std/ctype.sc") == 1) {
         if (g_vfs_file[45] == 0) { g_vfs_file[45] = vfs_add(name, g_vfs_45()); }
         return g_vfs_file[45];
     }
-    if (str_eq_lit(name, "std/assert.sc") == 1) {
+    if (str_eq_lit(name, "std/assert.h") == 1) {
         if (g_vfs_file[46] == 0) { g_vfs_file[46] = vfs_add(name, g_vfs_46()); }
         return g_vfs_file[46];
     }
-    if (str_eq_lit(name, "std/stdckdint.h") == 1) {
+    if (str_eq_lit(name, "std/assert.sc") == 1) {
         if (g_vfs_file[47] == 0) { g_vfs_file[47] = vfs_add(name, g_vfs_47()); }
         return g_vfs_file[47];
     }
-    if (str_eq_lit(name, "std/stdckdint.sc") == 1) {
+    if (str_eq_lit(name, "std/stdckdint.h") == 1) {
         if (g_vfs_file[48] == 0) { g_vfs_file[48] = vfs_add(name, g_vfs_48()); }
         return g_vfs_file[48];
     }
-    if (str_eq_lit(name, "std/traits.h") == 1) {
+    if (str_eq_lit(name, "std/stdckdint.sc") == 1) {
         if (g_vfs_file[49] == 0) { g_vfs_file[49] = vfs_add(name, g_vfs_49()); }
         return g_vfs_file[49];
     }
-    if (str_eq_lit(name, "std/bit.h") == 1) {
+    if (str_eq_lit(name, "std/traits.h") == 1) {
         if (g_vfs_file[50] == 0) { g_vfs_file[50] = vfs_add(name, g_vfs_50()); }
         return g_vfs_file[50];
     }
-    if (str_eq_lit(name, "std/bit.sc") == 1) {
+    if (str_eq_lit(name, "std/bit.h") == 1) {
         if (g_vfs_file[51] == 0) { g_vfs_file[51] = vfs_add(name, g_vfs_51()); }
         return g_vfs_file[51];
     }
-    if (str_eq_lit(name, "std/result.h") == 1) {
+    if (str_eq_lit(name, "std/bit.sc") == 1) {
         if (g_vfs_file[52] == 0) { g_vfs_file[52] = vfs_add(name, g_vfs_52()); }
         return g_vfs_file[52];
     }
-    if (str_eq_lit(name, "std/result.sc") == 1) {
+    if (str_eq_lit(name, "std/result.h") == 1) {
         if (g_vfs_file[53] == 0) { g_vfs_file[53] = vfs_add(name, g_vfs_53()); }
         return g_vfs_file[53];
     }
-    if (str_eq_lit(name, "std/atomic.h") == 1) {
+    if (str_eq_lit(name, "std/result.sc") == 1) {
         if (g_vfs_file[54] == 0) { g_vfs_file[54] = vfs_add(name, g_vfs_54()); }
         return g_vfs_file[54];
     }
-    if (str_eq_lit(name, "std/atomic.sc") == 1) {
+    if (str_eq_lit(name, "std/atomic.h") == 1) {
         if (g_vfs_file[55] == 0) { g_vfs_file[55] = vfs_add(name, g_vfs_55()); }
         return g_vfs_file[55];
     }
-    if (str_eq_lit(name, "std/sys.h") == 1) {
+    if (str_eq_lit(name, "std/atomic.sc") == 1) {
         if (g_vfs_file[56] == 0) { g_vfs_file[56] = vfs_add(name, g_vfs_56()); }
         return g_vfs_file[56];
     }
-    if (str_eq_lit(name, "std/sys.sc") == 1) {
+    if (str_eq_lit(name, "std/sys.h") == 1) {
         if (g_vfs_file[57] == 0) { g_vfs_file[57] = vfs_add(name, g_vfs_57()); }
         return g_vfs_file[57];
     }
-    if (str_eq_lit(name, "std/time.h") == 1) {
+    if (str_eq_lit(name, "std/sys.sc") == 1) {
         if (g_vfs_file[58] == 0) { g_vfs_file[58] = vfs_add(name, g_vfs_58()); }
         return g_vfs_file[58];
     }
-    if (str_eq_lit(name, "std/time.sc") == 1) {
+    if (str_eq_lit(name, "std/time.h") == 1) {
         if (g_vfs_file[59] == 0) { g_vfs_file[59] = vfs_add(name, g_vfs_59()); }
         return g_vfs_file[59];
+    }
+    if (str_eq_lit(name, "std/time.sc") == 1) {
+        if (g_vfs_file[60] == 0) { g_vfs_file[60] = vfs_add(name, g_vfs_60()); }
+        return g_vfs_file[60];
     }
     return 0;
 }

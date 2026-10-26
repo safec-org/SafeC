@@ -11,7 +11,8 @@ static int g_value = 42;
 }
 
 int main() {
-    long long handle = spawn(worker, &g_value);   // &static int: allowed
+    // A detached-capable thread may only see static data; read-only here.
+    long long handle = spawn(worker, (const &static int)&g_value);
     join(handle);
     return 0;
 }
