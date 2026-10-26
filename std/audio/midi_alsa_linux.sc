@@ -58,34 +58,50 @@ struct AlsaSeqEvent_ {
 
 static_assert(sizeof(struct AlsaSeqEvent_) == 28, "snd_seq_event_t is 28 bytes");
 
-typedef fn int(void**, const char*, int, int) AseqOpen_;
-typedef fn int(void*) AseqClose_;
-typedef fn int(void*, const char*) AseqSetName_;
-typedef fn int(void*) AseqClientId_;
-typedef fn int(void*, const char*, unsigned int, unsigned int) AseqCreatePort_;
-typedef fn int(void*, int) AseqDeletePort_;
-typedef fn int(void*, int, int, int) AseqConnect_;
-typedef fn size_t() AseqSizeof_;
-typedef fn void(void*, int) AseqInfoSetInt_;
-typedef fn int(const void*) AseqInfoGetInt_;
-typedef fn unsigned int(const void*) AseqInfoGetUint_;
-typedef fn const char*(const void*) AseqInfoGetName_;
-typedef fn int(void*, void*) AseqQueryNext_;
-typedef fn int(void*, short) AseqPollCount_;
-typedef fn int(void*, void*, unsigned int, short) AseqPollDesc_;
-typedef fn int(void*, &?&AlsaSeqEvent_) AseqEventInput_;
-typedef fn int(void*, &AlsaSeqEvent_) AseqEventOutput_;
-typedef fn int(void*, int) AseqNonblock_;
-typedef fn int(void*) AseqSetHandler_;
-typedef fn int(size_t, void**) AmevNew_;
-typedef fn void(void*) AmevFree_;
-typedef fn int(void*, size_t) AmevResize_;
-typedef fn void(void*) AmevReset_;
-typedef fn long(void*, const unsigned char*, long, &AlsaSeqEvent_) AmevEncode_;
-typedef fn long(void*, unsigned char*, long, const &AlsaSeqEvent_) AmevDecode_;
-typedef fn void(void*, int) AmevNoStatus_;
+// libasound's sequencer handles (opaque; the info blocks are allocated at
+// the size snd_seq_*_info_sizeof() reports).
+struct SndSeq_        { char opaque_; };   // snd_seq_t
+struct SndSeqClientInfo_ { char opaque_; };   // snd_seq_client_info_t
+struct SndSeqPortInfo_   { char opaque_; };   // snd_seq_port_info_t
+struct SndMidiEvent_  { char opaque_; };   // snd_midi_event_t
+// struct pollfd.
+struct AseqPollFd_ { int fd; short events; short revents; };
 
-extern int poll(void* fds, unsigned long nfds, int timeout);
+// snd_lib_error_handler_t (variadic in C; see midi_alsa_quiet_).
+typedef fn void(const char*, int, const char*, int, const char*) AseqErrorHandler_;
+
+typedef fn int(SndSeq_**, const char*, int, int) AseqOpen_;
+typedef fn int(SndSeq_*) AseqClose_;
+typedef fn int(SndSeq_*, const char*) AseqSetName_;
+typedef fn int(SndSeq_*) AseqClientId_;
+typedef fn int(SndSeq_*, const char*, unsigned int, unsigned int) AseqCreatePort_;
+typedef fn int(SndSeq_*, int) AseqDeletePort_;
+typedef fn int(SndSeq_*, int, int, int) AseqConnect_;
+typedef fn size_t() AseqSizeof_;
+typedef fn void(SndSeqClientInfo_*, int) AseqClientSetInt_;
+typedef fn void(SndSeqPortInfo_*, int) AseqPortSetInt_;
+typedef fn int(const SndSeqClientInfo_*) AseqClientGetInt_;
+typedef fn int(const SndSeqPortInfo_*) AseqPortGetInt_;
+typedef fn unsigned int(const SndSeqPortInfo_*) AseqPortGetUint_;
+typedef fn const char*(const SndSeqClientInfo_*) AseqClientGetName_;
+typedef fn const char*(const SndSeqPortInfo_*) AseqPortGetName_;
+typedef fn int(SndSeq_*, SndSeqClientInfo_*) AseqQueryNextClient_;
+typedef fn int(SndSeq_*, SndSeqPortInfo_*) AseqQueryNextPort_;
+typedef fn int(SndSeq_*, short) AseqPollCount_;
+typedef fn int(SndSeq_*, AseqPollFd_*, unsigned int, short) AseqPollDesc_;
+typedef fn int(SndSeq_*, &?&AlsaSeqEvent_) AseqEventInput_;
+typedef fn int(SndSeq_*, &AlsaSeqEvent_) AseqEventOutput_;
+typedef fn int(SndSeq_*, int) AseqNonblock_;
+typedef fn int(AseqErrorHandler_) AseqSetHandler_;
+typedef fn int(size_t, SndMidiEvent_**) AmevNew_;
+typedef fn void(SndMidiEvent_*) AmevFree_;
+typedef fn int(SndMidiEvent_*, size_t) AmevResize_;
+typedef fn void(SndMidiEvent_*) AmevReset_;
+typedef fn long(SndMidiEvent_*, const unsigned char*, long, &AlsaSeqEvent_) AmevEncode_;
+typedef fn long(SndMidiEvent_*, unsigned char*, long, const &AlsaSeqEvent_) AmevDecode_;
+typedef fn void(SndMidiEvent_*, int) AmevNoStatus_;
+
+extern int poll(AseqPollFd_* fds, unsigned long nfds, int timeout);
 
 struct AlsaSeqLib_ {
     int loaded;
@@ -99,18 +115,18 @@ struct AlsaSeqLib_ {
     AseqConnect_ connect_to;
     AseqSizeof_ client_info_sizeof;
     AseqSizeof_ port_info_sizeof;
-    AseqInfoSetInt_ client_info_set_client;
-    AseqInfoGetInt_ client_info_get_client;
-    AseqInfoGetName_ client_info_get_name;
-    AseqQueryNext_ query_next_client;
-    AseqInfoSetInt_ port_info_set_client;
-    AseqInfoSetInt_ port_info_set_port;
-    AseqQueryNext_ query_next_port;
-    AseqInfoGetUint_ port_info_get_capability;
-    AseqInfoGetUint_ port_info_get_type;
-    AseqInfoGetName_ port_info_get_name;
-    AseqInfoGetInt_ port_info_get_port;
-    AseqInfoGetInt_ port_info_get_client;
+    AseqClientSetInt_ client_info_set_client;
+    AseqClientGetInt_ client_info_get_client;
+    AseqClientGetName_ client_info_get_name;
+    AseqQueryNextClient_ query_next_client;
+    AseqPortSetInt_ port_info_set_client;
+    AseqPortSetInt_ port_info_set_port;
+    AseqQueryNextPort_ query_next_port;
+    AseqPortGetUint_ port_info_get_capability;
+    AseqPortGetUint_ port_info_get_type;
+    AseqPortGetName_ port_info_get_name;
+    AseqPortGetInt_ port_info_get_port;
+    AseqPortGetInt_ port_info_get_client;
     AseqPollCount_ poll_descriptors_count;
     AseqPollDesc_ poll_descriptors;
     AseqEventInput_ event_input;
@@ -131,16 +147,14 @@ static struct AlsaSeqLib_ g_aseq_;
 
 static void midi_alsa_quiet_(const char* file, int line, const char* function, int err, const char* fmt) { }
 
-static void* midi_alsa_sym_(?&void lib, const &char name, &int ok) {
-    ?&void p = audio_dlsym_(lib, name);
-    if (p.is_null()) *ok = 0;
-    unsafe { return (void*)p; }
+static fn void() midi_alsa_sym_(?&AudioLib_ lib, const &char name, &int ok) {
+    return audio_dlsym_or_(lib, name, ok);
 }
 
 static int midi_alsa_load_() {
     if (g_aseq_.loaded != 0) return g_aseq_.loaded > 0;
     g_aseq_.loaded = -1;
-    ?&void lib = audio_dlopen2_("libasound.so.2", "libasound.so");
+    ?&AudioLib_ lib = audio_dlopen2_("libasound.so.2", "libasound.so");
     if (lib.is_null()) return 0;
     int ok = 1;
     unsafe {
@@ -154,18 +168,18 @@ static int midi_alsa_load_() {
         g_aseq_.connect_to = (AseqConnect_)midi_alsa_sym_(lib, "snd_seq_connect_to", &ok);
         g_aseq_.client_info_sizeof = (AseqSizeof_)midi_alsa_sym_(lib, "snd_seq_client_info_sizeof", &ok);
         g_aseq_.port_info_sizeof = (AseqSizeof_)midi_alsa_sym_(lib, "snd_seq_port_info_sizeof", &ok);
-        g_aseq_.client_info_set_client = (AseqInfoSetInt_)midi_alsa_sym_(lib, "snd_seq_client_info_set_client", &ok);
-        g_aseq_.client_info_get_client = (AseqInfoGetInt_)midi_alsa_sym_(lib, "snd_seq_client_info_get_client", &ok);
-        g_aseq_.client_info_get_name = (AseqInfoGetName_)midi_alsa_sym_(lib, "snd_seq_client_info_get_name", &ok);
-        g_aseq_.query_next_client = (AseqQueryNext_)midi_alsa_sym_(lib, "snd_seq_query_next_client", &ok);
-        g_aseq_.port_info_set_client = (AseqInfoSetInt_)midi_alsa_sym_(lib, "snd_seq_port_info_set_client", &ok);
-        g_aseq_.port_info_set_port = (AseqInfoSetInt_)midi_alsa_sym_(lib, "snd_seq_port_info_set_port", &ok);
-        g_aseq_.query_next_port = (AseqQueryNext_)midi_alsa_sym_(lib, "snd_seq_query_next_port", &ok);
-        g_aseq_.port_info_get_capability = (AseqInfoGetUint_)midi_alsa_sym_(lib, "snd_seq_port_info_get_capability", &ok);
-        g_aseq_.port_info_get_type = (AseqInfoGetUint_)midi_alsa_sym_(lib, "snd_seq_port_info_get_type", &ok);
-        g_aseq_.port_info_get_name = (AseqInfoGetName_)midi_alsa_sym_(lib, "snd_seq_port_info_get_name", &ok);
-        g_aseq_.port_info_get_port = (AseqInfoGetInt_)midi_alsa_sym_(lib, "snd_seq_port_info_get_port", &ok);
-        g_aseq_.port_info_get_client = (AseqInfoGetInt_)midi_alsa_sym_(lib, "snd_seq_port_info_get_client", &ok);
+        g_aseq_.client_info_set_client = (AseqClientSetInt_)midi_alsa_sym_(lib, "snd_seq_client_info_set_client", &ok);
+        g_aseq_.client_info_get_client = (AseqClientGetInt_)midi_alsa_sym_(lib, "snd_seq_client_info_get_client", &ok);
+        g_aseq_.client_info_get_name = (AseqClientGetName_)midi_alsa_sym_(lib, "snd_seq_client_info_get_name", &ok);
+        g_aseq_.query_next_client = (AseqQueryNextClient_)midi_alsa_sym_(lib, "snd_seq_query_next_client", &ok);
+        g_aseq_.port_info_set_client = (AseqPortSetInt_)midi_alsa_sym_(lib, "snd_seq_port_info_set_client", &ok);
+        g_aseq_.port_info_set_port = (AseqPortSetInt_)midi_alsa_sym_(lib, "snd_seq_port_info_set_port", &ok);
+        g_aseq_.query_next_port = (AseqQueryNextPort_)midi_alsa_sym_(lib, "snd_seq_query_next_port", &ok);
+        g_aseq_.port_info_get_capability = (AseqPortGetUint_)midi_alsa_sym_(lib, "snd_seq_port_info_get_capability", &ok);
+        g_aseq_.port_info_get_type = (AseqPortGetUint_)midi_alsa_sym_(lib, "snd_seq_port_info_get_type", &ok);
+        g_aseq_.port_info_get_name = (AseqPortGetName_)midi_alsa_sym_(lib, "snd_seq_port_info_get_name", &ok);
+        g_aseq_.port_info_get_port = (AseqPortGetInt_)midi_alsa_sym_(lib, "snd_seq_port_info_get_port", &ok);
+        g_aseq_.port_info_get_client = (AseqPortGetInt_)midi_alsa_sym_(lib, "snd_seq_port_info_get_client", &ok);
         g_aseq_.poll_descriptors_count = (AseqPollCount_)midi_alsa_sym_(lib, "snd_seq_poll_descriptors_count", &ok);
         g_aseq_.poll_descriptors = (AseqPollDesc_)midi_alsa_sym_(lib, "snd_seq_poll_descriptors", &ok);
         g_aseq_.event_input = (AseqEventInput_)midi_alsa_sym_(lib, "snd_seq_event_input", &ok);
@@ -183,16 +197,16 @@ static int midi_alsa_load_() {
     }
     if (!ok) return 0;
     // ALSA prints errors to stderr (no sequencer, ...); std reports them.
-    unsafe { g_aseq_.set_error_handler((void*)midi_alsa_quiet_); }
+    unsafe { g_aseq_.set_error_handler(midi_alsa_quiet_); }
     g_aseq_.loaded = 1;
     return 1;
 }
 
 struct AlsaSeqClient_ {
-    void* seq;
+    SndSeq_* seq;
     int client_id;
     int port;                 // our port, -1 if none
-    void* coder;              // snd_midi_event_t (encode for output, decode for input)
+    SndMidiEvent_* coder;     // snd_midi_event_t (encode for output, decode for input)
     unsigned long coder_size;
     int stop;                 // (atomic) input thread: exit
     unsigned long long thread;
@@ -203,7 +217,7 @@ struct AlsaSeqClient_ {
 
 static int midi_alsa_available_() {
     if (!midi_alsa_load_()) return 0;
-    void* seq = (void*)0;
+    SndSeq_* seq = (SndSeq_*)0;
     int rc = 0;
     unsafe { rc = g_aseq_.open(&seq, "default", ASEQ_OPEN_OUTPUT, ASEQ_NONBLOCK); }
     if (rc < 0) return 0;
@@ -230,23 +244,23 @@ static int midi_alsa_client_open_(&MidiPortState_ st) {
                                   st.is_input ? ASEQ_NONBLOCK : 0);
             }
             if (rc < 0) {
-                unsafe { dealloc(c); }
+                unsafe { dealloc((?&heap AlsaSeqClient_)c); }
                 return audio_fail_(&st.error, AUDIO_ERR_UNAVAILABLE, "alsa: no MIDI sequencer (/dev/snd/seq)");
             }
             unsafe {
                 g_aseq_.set_client_name(c.seq, (const char*)&st.client_name[0]);
                 c.client_id = g_aseq_.client_id(c.seq);
                 c.coder_size = st.is_input ? 256UL : 32UL;
-                if (g_aseq_.mev_new((size_t)c.coder_size, &c.coder) < 0) c.coder = (void*)0;
+                if (g_aseq_.mev_new((size_t)c.coder_size, &c.coder) < 0) c.coder = (SndMidiEvent_*)0;
                 if (st.is_input) {
                     c.decode_buf = (unsigned char*)alloc_zeroed_raw_(MIDI_MAX_SYSEX);
-                    if (c.coder != (void*)0) g_aseq_.mev_no_status(c.coder, 1);
+                    if (c.coder != (SndMidiEvent_*)0) g_aseq_.mev_no_status(c.coder, 1);
                 }
-                if (c.coder == (void*)0 || (st.is_input && c.decode_buf == (unsigned char*)0)) {
-                    if (c.coder != (void*)0) g_aseq_.mev_free(c.coder);
+                if (c.coder == (SndMidiEvent_*)0 || (st.is_input && c.decode_buf == (unsigned char*)0)) {
+                    if (c.coder != (SndMidiEvent_*)0) g_aseq_.mev_free(c.coder);
                     dealloc(c.decode_buf);
                     g_aseq_.close(c.seq);
-                    dealloc(c);
+                    dealloc((?&heap AlsaSeqClient_)c);
                     return audio_fail_(&st.error, AUDIO_ERR_NO_MEMORY, "alsa: out of memory");
                 }
                 st.backend = (?&heap MidiPortImpl_)c;
@@ -263,31 +277,31 @@ static int midi_alsa_port_at_(&AlsaSeqClient_ c, int input, int index, &int outC
                               &char name, unsigned long cap) {
     int count = 0;
     unsafe {
-        void* cinfo = alloc_zeroed_raw_((unsigned long)g_aseq_.client_info_sizeof());
-        void* pinfo = alloc_zeroed_raw_((unsigned long)g_aseq_.port_info_sizeof());
-        if (cinfo == (void*)0 || pinfo == (void*)0) {
-            dealloc_raw_(cinfo); dealloc_raw_(pinfo);
+        SndSeqClientInfo_* cinfo = (SndSeqClientInfo_*)alloc_zeroed_raw_((unsigned long)g_aseq_.client_info_sizeof());
+        SndSeqPortInfo_* pinfo = (SndSeqPortInfo_*)alloc_zeroed_raw_((unsigned long)g_aseq_.port_info_sizeof());
+        if (cinfo == (SndSeqClientInfo_*)0 || pinfo == (SndSeqPortInfo_*)0) {
+            dealloc(cinfo); dealloc(pinfo);
             return 0;
         }
         unsigned int want = input ? (ASEQ_CAP_READ | ASEQ_CAP_SUBS_READ) : (ASEQ_CAP_WRITE | ASEQ_CAP_SUBS_WRITE);
         g_aseq_.client_info_set_client(cinfo, -1);
         int found = 0;
         while (!found && g_aseq_.query_next_client(c.seq, cinfo) >= 0) {
-            int client = g_aseq_.client_info_get_client((const void*)cinfo);
+            int client = g_aseq_.client_info_get_client(cinfo);
             if (client == 0 || client == c.client_id) continue;   // the System client, ourselves
             g_aseq_.port_info_set_client(pinfo, client);
             g_aseq_.port_info_set_port(pinfo, -1);
             while (g_aseq_.query_next_port(c.seq, pinfo) >= 0) {
-                unsigned int caps = g_aseq_.port_info_get_capability((const void*)pinfo);
-                unsigned int type = g_aseq_.port_info_get_type((const void*)pinfo);
+                unsigned int caps = g_aseq_.port_info_get_capability(pinfo);
+                unsigned int type = g_aseq_.port_info_get_type(pinfo);
                 if ((type & (ASEQ_TYPE_MIDI_GENERIC | ASEQ_TYPE_SYNTH | ASEQ_TYPE_APPLICATION)) == 0U) continue;
                 if ((caps & want) != want || (caps & ASEQ_CAP_NO_EXPORT) != 0U) continue;
                 if (count == index) {
                     *outClient = client;
-                    *outPort = g_aseq_.port_info_get_port((const void*)pinfo);
-                    audio_strcpy_(name, cap, (const ?&char)g_aseq_.client_info_get_name((const void*)cinfo));
+                    *outPort = g_aseq_.port_info_get_port(pinfo);
+                    audio_strcpy_(name, cap, (const ?&char)g_aseq_.client_info_get_name(cinfo));
                     audio_strcat_(name, cap, ":");
-                    audio_strcat_(name, cap, (const ?&char)g_aseq_.port_info_get_name((const void*)pinfo));
+                    audio_strcat_(name, cap, (const ?&char)g_aseq_.port_info_get_name(pinfo));
                     audio_strcat_(name, cap, " ");
                     audio_strcat_int_(name, cap, (long long)client);
                     audio_strcat_(name, cap, ":");
@@ -298,8 +312,8 @@ static int midi_alsa_port_at_(&AlsaSeqClient_ c, int input, int index, &int outC
                 count = count + 1;
             }
         }
-        dealloc_raw_(cinfo);
-        dealloc_raw_(pinfo);
+        dealloc(cinfo);
+        dealloc(pinfo);
         if (index < 0) return count;
         return found;
     }
@@ -339,10 +353,10 @@ static ?&AlsaSeqClient_ midi_alsa_thread_(?&AlsaSeqClient_ arg) {
                 int n = g_aseq_.poll_descriptors_count(c.seq, (short)ASEQ_POLLIN);
                 if (n <= 0) return null;
                 if (n > 8) n = 8;
-                unsigned long long pfds[8];        // struct pollfd { int fd; short events, revents; }: 8 bytes
-                g_aseq_.poll_descriptors(c.seq, (void*)&pfds[0], (unsigned int)n, (short)ASEQ_POLLIN);
+                struct AseqPollFd_ pfds[8];
+                g_aseq_.poll_descriptors(c.seq, &pfds[0], (unsigned int)n, (short)ASEQ_POLLIN);
                 while (atomic_load((_Atomic int*)&c.stop) == 0) {
-                    poll((void*)&pfds[0], (unsigned long)n, 50);
+                    poll(&pfds[0], (unsigned long)n, 50);
                     while (1) {
                         ?&AlsaSeqEvent_ ev = null;
                         int r = g_aseq_.event_input(c.seq, &ev);
@@ -487,10 +501,10 @@ static void midi_alsa_client_close_(&MidiPortState_ st) {
         case some(c): {
             midi_alsa_drop_port_(c);
             unsafe {
-                if (c.coder != (void*)0) g_aseq_.mev_free(c.coder);
+                if (c.coder != (SndMidiEvent_*)0) g_aseq_.mev_free(c.coder);
                 g_aseq_.close(c.seq);
                 dealloc(c.decode_buf);
-                dealloc(c);
+                dealloc((?&heap AlsaSeqClient_)c);
                 st.backend = null;
             }
         }

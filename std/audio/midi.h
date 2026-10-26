@@ -207,7 +207,9 @@ struct MidiIn {
     void close_port();
     int  is_port_open() const;
 
-    generic<T> void set_callback(fn void(&MidiEvent, ?&T) callback, ?&T user);
+    // The callback runs on the API's receiving thread, so T must be Send +
+    // Sync (as for Audio::open_stream).
+    generic<T: Send + Sync> void set_callback(fn void(&MidiEvent, ?&T) callback, ?&T user);
     void set_callback_raw_(MidiCallbackRaw_ callback, ?&Erased user);
     // Back to the polling queue.
     void cancel_callback();
@@ -249,7 +251,7 @@ struct MidiOut {
     void close() consume;   // = drop()
 };
 
-generic<T>
+generic<T: Send + Sync>
 void MidiIn::set_callback(fn void(&MidiEvent, ?&T) callback, ?&T user) {
     unsafe { self.set_callback_raw_((MidiCallbackRaw_)callback, (?&Erased)user); }
 }

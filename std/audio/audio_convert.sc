@@ -107,7 +107,7 @@ unsigned long audio_f32_to_i16_dither([]const float in, []short out, &unsigned i
     return n;
 }
 
-static double audio_sample_read_raw_(const void* p, unsigned int format) {
+static double audio_sample_read_raw_(const unsigned char* p, unsigned int format) {
     unsafe {
         if (format == AUDIO_FORMAT_F32) return (double)*(const float*)p;
         if (format == AUDIO_FORMAT_F64) return *(const double*)p;
@@ -124,7 +124,7 @@ static double audio_sample_read_raw_(const void* p, unsigned int format) {
     return 0.0;
 }
 
-static void audio_sample_write_raw_(void* p, unsigned int format, double v) {
+static void audio_sample_write_raw_(unsigned char* p, unsigned int format, double v) {
     unsafe {
         if (format == AUDIO_FORMAT_F32) { *(float*)p = (float)v; return; }
         if (format == AUDIO_FORMAT_F64) { *(double*)p = v; return; }
@@ -149,13 +149,13 @@ static void audio_sample_write_raw_(void* p, unsigned int format, double v) {
 double audio_sample_read([]const unsigned char bytes, unsigned int format) {
     int sb = audio_format_bytes(format);
     if (sb == 0 || bytes.len < (unsigned long)sb) return 0.0;
-    unsafe { return audio_sample_read_raw_((const void*)&bytes[0], format); }
+    unsafe { return audio_sample_read_raw_((const unsigned char*)&bytes[0], format); }
 }
 
 void audio_sample_write([]unsigned char bytes, unsigned int format, double v) {
     int db = audio_format_bytes(format);
     if (db == 0 || bytes.len < (unsigned long)db) return;
-    unsafe { audio_sample_write_raw_((void*)&bytes[0], format, v); }
+    unsafe { audio_sample_write_raw_((unsigned char*)&bytes[0], format, v); }
 }
 
 unsigned long audio_convert([]unsigned char dst, unsigned int dst_format,
@@ -180,8 +180,8 @@ unsigned long audio_convert([]unsigned char dst, unsigned int dst_format,
             return audio_i16_to_f32(((const short*)s)[0..n], ((float*)d)[0..n]);
         }
         for (unsigned long i = 0UL; i < n; i = i + 1UL) {
-            double v = audio_sample_read_raw_((const void*)(s + i * (unsigned long)sb), src_format);
-            audio_sample_write_raw_((void*)(d + i * (unsigned long)db), dst_format, v);
+            double v = audio_sample_read_raw_((const unsigned char*)(s + i * (unsigned long)sb), src_format);
+            audio_sample_write_raw_((unsigned char*)(d + i * (unsigned long)db), dst_format, v);
         }
     }
     return n;
@@ -207,8 +207,8 @@ unsigned long audio_deinterleave_f32([]const float in, []float planar, int chann
     return frames;
 }
 
-static void audio_copy_frames_raw_(void* dst, unsigned int dst_format, int dst_channels, int dst_interleaved, int dst_first,
-                                   const void* src, unsigned int src_format, int src_channels, int src_interleaved,
+static void audio_copy_frames_raw_(unsigned char* dst, unsigned int dst_format, int dst_channels, int dst_interleaved, int dst_first,
+                                   const unsigned char* src, unsigned int src_format, int src_channels, int src_interleaved,
                                    int src_first, int channels, unsigned long frames) {
     unsigned long db = (unsigned long)audio_format_bytes(dst_format);
     unsigned long sb = (unsigned long)audio_format_bytes(src_format);
@@ -237,8 +237,8 @@ static void audio_copy_frames_raw_(void* dst, unsigned int dst_format, int dst_c
                 if (dst_format == src_format) {
                     for (unsigned long b = 0UL; b < db; b = b + 1UL) d[di * db + b] = s[si * sb + b];
                 } else {
-                    double v = audio_sample_read_raw_((const void*)(s + si * sb), src_format);
-                    audio_sample_write_raw_((void*)(d + di * db), dst_format, v);
+                    double v = audio_sample_read_raw_((const unsigned char*)(s + si * sb), src_format);
+                    audio_sample_write_raw_((unsigned char*)(d + di * db), dst_format, v);
                 }
                 di = di + dstep;
                 si = si + sstep;
@@ -259,8 +259,8 @@ unsigned long audio_copy_frames([]unsigned char dst, unsigned int dst_format, in
     if (dst.len / db / (unsigned long)dst_channels < frames) return 0UL;
     if (src.len / sb / (unsigned long)src_channels < frames) return 0UL;
     unsafe {
-        audio_copy_frames_raw_((void*)&dst[0], dst_format, dst_channels, dst_interleaved, dst_first,
-                               (const void*)&src[0], src_format, src_channels, src_interleaved, src_first,
+        audio_copy_frames_raw_((unsigned char*)&dst[0], dst_format, dst_channels, dst_interleaved, dst_first,
+                               (const unsigned char*)&src[0], src_format, src_channels, src_interleaved, src_first,
                                channels, frames);
     }
     return frames;

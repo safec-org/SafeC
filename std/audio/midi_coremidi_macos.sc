@@ -24,31 +24,41 @@
 
 namespace std {
 
-extern int  MIDIClientCreate(const void* name, void* notifyProc, void* notifyRefCon, unsigned int* outClient);
+// Opaque Core Foundation types; MIDIPacketList / MIDIPacket are handled
+// as their bytes (the layout above).
+struct CFString_    { char opaque_; };   // CFStringRef
+struct CFAllocator_ { char opaque_; };   // CFAllocatorRef
+
+// MIDIReadProc (readProcRefCon = the port's CoreMidi_, erased; see
+// std/erased.h) and MIDINotifyProc (unused: always null).
+typedef fn void(const unsigned char*, ?&Erased, ?&Erased) CMReadFn_;
+typedef ?fn void(const unsigned char*, ?&Erased) CMNotifyFn_;
+
+extern int  MIDIClientCreate(const CFString_* name, CMNotifyFn_ notifyProc, ?&Erased notifyRefCon, unsigned int* outClient);
 extern int  MIDIClientDispose(unsigned int client);
-extern int  MIDIInputPortCreate(unsigned int client, const void* name, void* readProc, void* refCon, unsigned int* outPort);
-extern int  MIDIOutputPortCreate(unsigned int client, const void* name, unsigned int* outPort);
+extern int  MIDIInputPortCreate(unsigned int client, const CFString_* name, CMReadFn_ readProc, ?&Erased refCon, unsigned int* outPort);
+extern int  MIDIOutputPortCreate(unsigned int client, const CFString_* name, unsigned int* outPort);
 extern int  MIDIPortDispose(unsigned int port);
-extern int  MIDIPortConnectSource(unsigned int port, unsigned int source, void* connRefCon);
+extern int  MIDIPortConnectSource(unsigned int port, unsigned int source, ?&Erased connRefCon);
 extern int  MIDIPortDisconnectSource(unsigned int port, unsigned int source);
-extern int  MIDIDestinationCreate(unsigned int client, const void* name, void* readProc, void* refCon, unsigned int* outDest);
-extern int  MIDISourceCreate(unsigned int client, const void* name, unsigned int* outSrc);
+extern int  MIDIDestinationCreate(unsigned int client, const CFString_* name, CMReadFn_ readProc, ?&Erased refCon, unsigned int* outDest);
+extern int  MIDISourceCreate(unsigned int client, const CFString_* name, unsigned int* outSrc);
 extern int  MIDIEndpointDispose(unsigned int endpoint);
 extern unsigned long MIDIGetNumberOfSources();
 extern unsigned int  MIDIGetSource(unsigned long index);
 extern unsigned long MIDIGetNumberOfDestinations();
 extern unsigned int  MIDIGetDestination(unsigned long index);
-extern int  MIDIObjectGetStringProperty(unsigned int obj, const void* propertyID, void** outStr);
-extern void* MIDIPacketListInit(void* list);
-extern void* MIDIPacketListAdd(void* list, unsigned long listSize, void* cur, unsigned long long time,
-                               unsigned long nData, const unsigned char* data);
-extern int  MIDISend(unsigned int port, unsigned int dest, const void* list);
-extern int  MIDIReceived(unsigned int src, const void* list);
-extern const void* kMIDIPropertyName;
-extern const void* kMIDIPropertyDisplayName;
-extern void* CFStringCreateWithCString(const void* alloc, const char* str, unsigned int encoding);
-extern unsigned char CFStringGetCString(const void* str, char* buf, long size, unsigned int encoding);
-extern void CFRelease(const void* cf);
+extern int  MIDIObjectGetStringProperty(unsigned int obj, const CFString_* propertyID, CFString_** outStr);
+extern unsigned char* MIDIPacketListInit(unsigned char* list);
+extern unsigned char* MIDIPacketListAdd(unsigned char* list, unsigned long listSize, unsigned char* cur, unsigned long long time,
+                                        unsigned long nData, const unsigned char* data);
+extern int  MIDISend(unsigned int port, unsigned int dest, const unsigned char* list);
+extern int  MIDIReceived(unsigned int src, const unsigned char* list);
+extern const CFString_* kMIDIPropertyName;
+extern const CFString_* kMIDIPropertyDisplayName;
+extern CFString_* CFStringCreateWithCString(const CFAllocator_* alloc, const char* str, unsigned int encoding);
+extern unsigned char CFStringGetCString(const CFString_* str, char* buf, long size, unsigned int encoding);
+extern void CFRelease(const CFString_* cf);
 
 struct CoreMidi_ {
     unsigned int client;
@@ -64,12 +74,12 @@ static ?&CoreMidi_ cm_of_(&MidiPortState_ st) {
     unsafe { return (?&CoreMidi_)st.backend; }
 }
 
-static void* cm_cfstring_(const &char s) {
-    unsafe { return CFStringCreateWithCString((const void*)0, (const char*)s, CM_UTF8); }
+static CFString_* cm_cfstring_(const &char s) {
+    unsafe { return CFStringCreateWithCString((const CFAllocator_*)0, (const char*)s, CM_UTF8); }
 }
 
 // The MIDIReadProc: walk the packet list, feed each packet's bytes.
-static void cm_read_proc_(const unsigned char* list, void* refCon, void* srcRefCon) {
+static void cm_read_proc_(const unsigned char* list, ?&Erased refCon, ?&Erased srcRefCon) {
     unsafe {
         struct CoreMidi_* c = (struct CoreMidi_*)refCon;
         unsigned int n = *(const unsigned int*)list;
@@ -94,11 +104,11 @@ static int midi_coremidi_client_open_(&MidiPortState_ st) {
         case some(c): {
             unsafe {
                 c.st = (struct MidiPortState_*)st;
-                void* name = cm_cfstring_(&st.client_name[0]);
-                int e = MIDIClientCreate((const void*)name, (void*)0, (void*)0, &c.client);
-                if (name != (void*)0) CFRelease((const void*)name);
+                CFString_* name = cm_cfstring_(&st.client_name[0]);
+                int e = MIDIClientCreate(name, null, null, &c.client);
+                if (name != (CFString_*)0) CFRelease(name);
                 if (e != 0) {
-                    dealloc(c);
+                    dealloc((?&heap CoreMidi_)c);
                     return audio_fail_code_(&st.error, AUDIO_ERR_UNAVAILABLE, "coremidi: MIDIClientCreate", (long long)e);
                 }
                 st.backend = (?&heap MidiPortImpl_)c;
@@ -128,13 +138,13 @@ static int midi_coremidi_port_name_(&MidiPortState_ st, unsigned int index, &cha
     unsigned int ep = cm_endpoint_at_(st.is_input, index);
     if (ep == 0U) return AUDIO_ERR_INVALID_DEVICE;
     unsafe {
-        void* s = (void*)0;
-        if (MIDIObjectGetStringProperty(ep, kMIDIPropertyDisplayName, &s) != 0 || s == (void*)0)
+        CFString_* s = (CFString_*)0;
+        if (MIDIObjectGetStringProperty(ep, kMIDIPropertyDisplayName, &s) != 0 || s == (CFString_*)0)
             MIDIObjectGetStringProperty(ep, kMIDIPropertyName, &s);
         audio_strcpy_(out, cap, "Core MIDI port");
-        if (s != (void*)0) {
-            CFStringGetCString((const void*)s, (char*)out, (long)cap, CM_UTF8);
-            CFRelease((const void*)s);
+        if (s != (CFString_*)0) {
+            CFStringGetCString(s, (char*)out, (long)cap, CM_UTF8);
+            CFRelease(s);
         }
     }
     return AUDIO_OK;
@@ -146,13 +156,13 @@ static int midi_coremidi_open_port_(&MidiPortState_ st, unsigned int index, cons
             unsigned int ep = cm_endpoint_at_(st.is_input, index);
             if (ep == 0U) return audio_fail_(&st.error, AUDIO_ERR_INVALID_DEVICE, "coremidi: no MIDI port with that index");
             unsafe {
-                void* pname = cm_cfstring_(name);
-                int e = st.is_input ? MIDIInputPortCreate(c.client, (const void*)pname, (void*)cm_read_proc_, (void*)c, &c.port)
-                                    : MIDIOutputPortCreate(c.client, (const void*)pname, &c.port);
-                if (pname != (void*)0) CFRelease((const void*)pname);
+                CFString_* pname = cm_cfstring_(name);
+                int e = st.is_input ? MIDIInputPortCreate(c.client, pname, cm_read_proc_, (?&Erased)c, &c.port)
+                                    : MIDIOutputPortCreate(c.client, pname, &c.port);
+                if (pname != (CFString_*)0) CFRelease(pname);
                 if (e != 0) return audio_fail_code_(&st.error, AUDIO_ERR_SYSTEM, "coremidi: could not create a port", (long long)e);
                 if (st.is_input) {
-                    e = MIDIPortConnectSource(c.port, ep, (void*)0);
+                    e = MIDIPortConnectSource(c.port, ep, null);
                     if (e != 0) {
                         MIDIPortDispose(c.port);
                         c.port = 0U;
@@ -173,10 +183,10 @@ static int midi_coremidi_open_virtual_(&MidiPortState_ st, const &char name) {
     match (cm_of_(st)) {
         case some(c): {
             unsafe {
-                void* pname = cm_cfstring_(name);
-                int e = st.is_input ? MIDIDestinationCreate(c.client, (const void*)pname, (void*)cm_read_proc_, (void*)c, &c.endpoint)
-                                    : MIDISourceCreate(c.client, (const void*)pname, &c.endpoint);
-                if (pname != (void*)0) CFRelease((const void*)pname);
+                CFString_* pname = cm_cfstring_(name);
+                int e = st.is_input ? MIDIDestinationCreate(c.client, pname, cm_read_proc_, (?&Erased)c, &c.endpoint)
+                                    : MIDISourceCreate(c.client, pname, &c.endpoint);
+                if (pname != (CFString_*)0) CFRelease(pname);
                 if (e != 0) return audio_fail_code_(&st.error, AUDIO_ERR_SYSTEM, "coremidi: could not create a virtual port", (long long)e);
                 c.is_virtual = 1;
             }
@@ -220,12 +230,12 @@ static int midi_coremidi_send_(&MidiPortState_ st, const &unsigned char msg, uns
                     list = (unsigned char*)alloc_raw_(size);
                     if (list == (unsigned char*)0) return audio_fail_(&st.error, AUDIO_ERR_NO_MEMORY, "coremidi: out of memory");
                 }
-                void* pkt = MIDIPacketListInit((void*)list);
-                pkt = MIDIPacketListAdd((void*)list, size, pkt, 0ULL, len, (const unsigned char*)msg);
-                if (pkt == (void*)0) rc = audio_fail_(&st.error, AUDIO_ERR_INVALID_PARAM, "coremidi: message too long");
+                unsigned char* pkt = MIDIPacketListInit(list);
+                pkt = MIDIPacketListAdd(list, size, pkt, 0ULL, len, (const unsigned char*)msg);
+                if (pkt == (unsigned char*)0) rc = audio_fail_(&st.error, AUDIO_ERR_INVALID_PARAM, "coremidi: message too long");
                 else {
-                    int e = c.is_virtual ? MIDIReceived(c.endpoint, (const void*)list)
-                                         : MIDISend(c.port, c.endpoint, (const void*)list);
+                    int e = c.is_virtual ? MIDIReceived(c.endpoint, list)
+                                         : MIDISend(c.port, c.endpoint, list);
                     if (e != 0) rc = audio_fail_code_(&st.error, AUDIO_ERR_SYSTEM, "coremidi: MIDISend", (long long)e);
                 }
                 if (list != (unsigned char*)&local[0]) dealloc(list);
@@ -243,7 +253,7 @@ static void midi_coremidi_client_close_(&MidiPortState_ st) {
             midi_coremidi_close_port_(st);
             unsafe {
                 MIDIClientDispose(c.client);
-                dealloc(c);
+                dealloc((?&heap CoreMidi_)c);
                 st.backend = null;
             }
         }

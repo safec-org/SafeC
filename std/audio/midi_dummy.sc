@@ -27,7 +27,7 @@ namespace std {
 struct MidiDummyBus_ {
     int kind;                                     // (atomic) MIDI_DUMMY_KIND_*
     char name[MIDI_PORT_NAME_MAX];
-    void* listeners[MIDI_DUMMY_LISTENERS];        // (atomic) MidiPortState_*
+    struct MidiPortState_* listeners[MIDI_DUMMY_LISTENERS];   // (atomic)
     int busy;                                     // (atomic) senders delivering right now
 };
 
@@ -107,8 +107,9 @@ static int midi_dummy_port_name_(&MidiPortState_ st, unsigned int index, &char o
 static int midi_dummy_listen_(&MidiPortState_ st, &MidiDummyClient_ c, int b) {
     for (int i = 0; i < MIDI_DUMMY_LISTENERS; i = i + 1) {
         unsafe {
-            void* expected = (void*)0;
-            if (atomic_compare_exchange_strong((_Atomic void**)&g_midi_dummy_bus_[b].listeners[i], &expected, (void*)st)) {
+            struct MidiPortState_* expected = (struct MidiPortState_*)0;
+            if (atomic_compare_exchange_strong((struct MidiPortState_**)&g_midi_dummy_bus_[b].listeners[i], &expected,
+                                               (struct MidiPortState_*)st)) {
                 c.bus = b;
                 c.slot = i;
                 return AUDIO_OK;
@@ -178,14 +179,14 @@ static void midi_dummy_close_port_(&MidiPortState_ st) {
             int b = c.bus;
             if (b < 0) return;
             if (c.slot >= 0) {
-                unsafe { atomic_store((_Atomic void**)&g_midi_dummy_bus_[b].listeners[c.slot], (void*)0); }
+                unsafe { atomic_store((struct MidiPortState_**)&g_midi_dummy_bus_[b].listeners[c.slot], (struct MidiPortState_*)0); }
             }
             if (c.owns) {
                 // Disconnect everyone else listening on our virtual port too.
                 unsafe {
                     atomic_store((_Atomic int*)&g_midi_dummy_bus_[b].kind, -1);
                     for (int i = 0; i < MIDI_DUMMY_LISTENERS; i = i + 1)
-                        atomic_store((_Atomic void**)&g_midi_dummy_bus_[b].listeners[i], (void*)0);
+                        atomic_store((struct MidiPortState_**)&g_midi_dummy_bus_[b].listeners[i], (struct MidiPortState_*)0);
                 }
             }
             // A sender may still be delivering to us: wait it out.
@@ -209,8 +210,8 @@ static int midi_dummy_send_(&MidiPortState_ st, const &unsigned char msg, unsign
             unsafe {
                 atomic_fetch_add((_Atomic int*)&g_midi_dummy_bus_[b].busy, 1);
                 for (int i = 0; i < MIDI_DUMMY_LISTENERS; i = i + 1) {
-                    void* l = atomic_load((_Atomic void**)&g_midi_dummy_bus_[b].listeners[i]);
-                    if (l != (void*)0) midi_in_feed_((&MidiPortState_)l, msg, len, -1.0);
+                    struct MidiPortState_* l = atomic_load((struct MidiPortState_**)&g_midi_dummy_bus_[b].listeners[i]);
+                    if (l != (struct MidiPortState_*)0) midi_in_feed_((&MidiPortState_)l, msg, len, -1.0);
                 }
                 atomic_fetch_sub((_Atomic int*)&g_midi_dummy_bus_[b].busy, 1);
             }
@@ -223,7 +224,7 @@ static int midi_dummy_send_(&MidiPortState_ st, const &unsigned char msg, unsign
 
 static void midi_dummy_client_close_(&MidiPortState_ st) {
     unsafe {
-        dealloc_raw_(st.backend);
+        dealloc(st.backend);
         st.backend = null;
     }
 }
