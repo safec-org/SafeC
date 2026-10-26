@@ -28,60 +28,134 @@
 #include <std/mem.h>
 #include <std/time.h>
 #include <std/collections/string.h>
-extern void* memset(void* ptr, int val, size_t n);
 extern char* getenv(const char* name);
 
 namespace std {
 
-extern void* GetModuleHandleW(const void* moduleName);
-extern unsigned short RegisterClassExW(const void* wndClassEx);
-extern void* CreateWindowExW(unsigned int exStyle, const void* className, const void* windowName,
-                             unsigned int style, int x, int y, int w, int h,
-                             void* parent, void* menu, void* instance, void* param);
-extern int ShowWindow(void* hwnd, int cmdShow);
-extern int UpdateWindow(void* hwnd);
-extern int PeekMessageW(void* msg, void* hwnd, unsigned int msgMin, unsigned int msgMax, unsigned int remove);
-extern int TranslateMessage(const void* msg);
-extern long long DispatchMessageW(const void* msg);
-extern long long DefWindowProcW(void* hwnd, unsigned int msg, unsigned long long wparam, long long lparam);
-extern void* LoadCursorW(void* instance, const void* cursorName);
-extern void* SetCursor(void* cursor);
-extern void* GetDC(void* hwnd);
-extern int ReleaseDC(void* hwnd, void* dc);
-extern int GetDeviceCaps(void* dc, int index);
-extern int StretchDIBits(void* dc, int destX, int destY, int destW, int destH,
+// Opaque Win32 handles: HWND, HINSTANCE/HMODULE, HCURSOR, HICON, HBRUSH,
+// HMENU, HDC, HGLOBAL, and a kernel object HANDLE (never passed).
+struct HWND_      { char opaque_; };
+struct HINSTANCE_ { char opaque_; };
+struct HCURSOR_   { char opaque_; };
+struct HICON_     { char opaque_; };
+struct HBRUSH_    { char opaque_; };
+struct HMENU_     { char opaque_; };
+struct HDC_       { char opaque_; };
+struct HGLOBAL_   { char opaque_; };
+struct WinHandle_ { char opaque_; };
+struct WinCreateParam_ { char opaque_; };   // CreateWindowExW's lpParam (unused)
+
+// WNDPROC.
+typedef fn long long(HWND_*, unsigned int, unsigned long long, long long) Win32WndProc_;
+
+// Mirrors WNDCLASSEXW/MSG's real field layout directly (rather than a
+// hand-packed byte/word array) so standard C struct alignment rules give
+// an ABI-compatible layout without manual offset arithmetic. WPARAM and
+// LPARAM are 64-bit on Win64 (Windows' own 'long' is 32-bit).
+struct Win32WndClassExW {
+    unsigned int cbSize;
+    unsigned int style;
+    Win32WndProc_ lpfnWndProc;
+    int cbClsExtra;
+    int cbWndExtra;
+    HINSTANCE_* hInstance;
+    HICON_* hIcon;
+    HCURSOR_* hCursor;
+    HBRUSH_* hbrBackground;
+    const unsigned short* lpszMenuName;
+    const unsigned short* lpszClassName;
+    HICON_* hIconSm;
+};
+
+struct Win32Msg {
+    HWND_* hwnd;
+    unsigned int message;
+    unsigned long long wParam;
+    long long lParam;
+    unsigned int time;
+    int ptX;
+    int ptY;
+    unsigned int lPrivate;
+};
+
+struct Win32Rect { int left; int top; int right; int bottom; };
+struct Win32Point { int x; int y; };
+struct Win32MinMaxInfo {
+    struct Win32Point reserved;
+    struct Win32Point maxSize;
+    struct Win32Point maxPosition;
+    struct Win32Point minTrackSize;
+    struct Win32Point maxTrackSize;
+};
+struct Win32TrackMouseEvent {
+    unsigned int cbSize;
+    unsigned int dwFlags;
+    HWND_* hwndTrack;
+    unsigned int dwHoverTime;
+};
+struct Win32BitmapInfoHeader {
+    unsigned int biSize;
+    int biWidth;
+    int biHeight;
+    unsigned short biPlanes;
+    unsigned short biBitCount;
+    unsigned int biCompression;
+    unsigned int biSizeImage;
+    int biXPelsPerMeter;
+    int biYPelsPerMeter;
+    unsigned int biClrUsed;
+    unsigned int biClrImportant;
+};
+
+extern HINSTANCE_* GetModuleHandleW(const unsigned short* moduleName);
+extern unsigned short RegisterClassExW(const Win32WndClassExW* wndClassEx);
+extern HWND_* CreateWindowExW(unsigned int exStyle, const unsigned short* className, const unsigned short* windowName,
+                              unsigned int style, int x, int y, int w, int h,
+                              HWND_* parent, HMENU_* menu, HINSTANCE_* instance, WinCreateParam_* param);
+extern int ShowWindow(HWND_* hwnd, int cmdShow);
+extern int UpdateWindow(HWND_* hwnd);
+extern int PeekMessageW(Win32Msg* msg, HWND_* hwnd, unsigned int msgMin, unsigned int msgMax, unsigned int remove);
+extern int TranslateMessage(const Win32Msg* msg);
+extern long long DispatchMessageW(const Win32Msg* msg);
+extern long long DefWindowProcW(HWND_* hwnd, unsigned int msg, unsigned long long wparam, long long lparam);
+extern HCURSOR_* LoadCursorW(HINSTANCE_* instance, const unsigned short* cursorName);
+extern HCURSOR_* SetCursor(HCURSOR_* cursor);
+extern HDC_* GetDC(HWND_* hwnd);
+extern int ReleaseDC(HWND_* hwnd, HDC_* dc);
+extern int GetDeviceCaps(HDC_* dc, int index);
+extern int StretchDIBits(HDC_* dc, int destX, int destY, int destW, int destH,
                          int srcX, int srcY, int srcW, int srcH,
-                         const void* bits, const void* bitmapInfo,
+                         const unsigned char* bits, const Win32BitmapInfoHeader* bitmapInfo,
                          unsigned int usage, unsigned int rop);
-extern int DestroyWindow(void* hwnd);
-extern long long SetWindowLongPtrW(void* hwnd, int index, long long newLong);
-extern long long GetWindowLongPtrW(void* hwnd, int index);
-extern int AdjustWindowRectEx(void* rect, unsigned int style, int menu, unsigned int exStyle);
-extern int SetWindowTextW(void* hwnd, const void* text);
-extern int SetWindowPos(void* hwnd, void* after, int x, int y, int cx, int cy, unsigned int flags);
-extern int SetForegroundWindow(void* hwnd);
-extern void* SetFocus(void* hwnd);
-extern void* SetCapture(void* hwnd);
+extern int DestroyWindow(HWND_* hwnd);
+extern long long SetWindowLongPtrW(HWND_* hwnd, int index, long long newLong);
+extern long long GetWindowLongPtrW(HWND_* hwnd, int index);
+extern int AdjustWindowRectEx(Win32Rect* rect, unsigned int style, int menu, unsigned int exStyle);
+extern int SetWindowTextW(HWND_* hwnd, const unsigned short* text);
+extern int SetWindowPos(HWND_* hwnd, HWND_* after, int x, int y, int cx, int cy, unsigned int flags);
+extern int SetForegroundWindow(HWND_* hwnd);
+extern HWND_* SetFocus(HWND_* hwnd);
+extern HWND_* SetCapture(HWND_* hwnd);
 extern int ReleaseCapture();
-extern int TrackMouseEvent(void* tme);
-extern int ScreenToClient(void* hwnd, void* point);
-extern int ClientToScreen(void* hwnd, void* point);
+extern int TrackMouseEvent(Win32TrackMouseEvent* tme);
+extern int ScreenToClient(HWND_* hwnd, Win32Point* point);
+extern int ClientToScreen(HWND_* hwnd, Win32Point* point);
 extern short GetKeyState(int vk);
-extern int ValidateRect(void* hwnd, const void* rect);
-extern unsigned int MsgWaitForMultipleObjects(unsigned int count, const void* handles, int waitAll,
+extern int ValidateRect(HWND_* hwnd, const Win32Rect* rect);
+extern unsigned int MsgWaitForMultipleObjects(unsigned int count, WinHandle_* const* handles, int waitAll,
                                               unsigned int ms, unsigned int wakeMask);
 extern int PostThreadMessageW(unsigned int thread, unsigned int msg, unsigned long long wparam, long long lparam);
 extern unsigned int GetCurrentThreadId();
 extern int SetProcessDPIAware();
-extern int OpenClipboard(void* hwnd);
+extern int OpenClipboard(HWND_* hwnd);
 extern int CloseClipboard();
 extern int EmptyClipboard();
-extern void* SetClipboardData(unsigned int format, void* mem);
-extern void* GetClipboardData(unsigned int format);
-extern void* GlobalAlloc(unsigned int flags, unsigned long long bytes);
-extern void* GlobalLock(void* mem);
-extern int GlobalUnlock(void* mem);
-extern void* GlobalFree(void* mem);
+extern HGLOBAL_* SetClipboardData(unsigned int format, HGLOBAL_* mem);
+extern HGLOBAL_* GetClipboardData(unsigned int format);
+extern HGLOBAL_* GlobalAlloc(unsigned int flags, unsigned long long bytes);
+extern unsigned short* GlobalLock(HGLOBAL_* mem);   // the CF_UNICODETEXT text here
+extern int GlobalUnlock(HGLOBAL_* mem);
+extern HGLOBAL_* GlobalFree(HGLOBAL_* mem);
 
 #define GUI_WM_NULL          0x0000U
 #define GUI_WM_DESTROY       0x0002U
@@ -121,67 +195,8 @@ extern void* GlobalFree(void* mem);
 #define GUI_WS_EX_TOPMOST       0x00000008U
 #define GUI_CW_USEDEFAULT       ((int)0x80000000U)
 
-// Mirrors WNDCLASSEXW/MSG's real field layout directly (rather than a
-// hand-packed byte/word array) so standard C struct alignment rules give
-// an ABI-compatible layout without manual offset arithmetic. WPARAM and
-// LPARAM are 64-bit on Win64 (Windows' own 'long' is 32-bit).
-struct Win32WndClassExW {
-    unsigned int cbSize;
-    unsigned int style;
-    void* lpfnWndProc;
-    int cbClsExtra;
-    int cbWndExtra;
-    void* hInstance;
-    void* hIcon;
-    void* hCursor;
-    void* hbrBackground;
-    const unsigned short* lpszMenuName;
-    const unsigned short* lpszClassName;
-    void* hIconSm;
-};
-
-struct Win32Msg {
-    void* hwnd;
-    unsigned int message;
-    unsigned long long wParam;
-    long long lParam;
-    unsigned int time;
-    int ptX;
-    int ptY;
-    unsigned int lPrivate;
-};
-
-struct Win32Rect { int left; int top; int right; int bottom; };
-struct Win32Point { int x; int y; };
-struct Win32MinMaxInfo {
-    struct Win32Point reserved;
-    struct Win32Point maxSize;
-    struct Win32Point maxPosition;
-    struct Win32Point minTrackSize;
-    struct Win32Point maxTrackSize;
-};
-struct Win32TrackMouseEvent {
-    unsigned int cbSize;
-    unsigned int dwFlags;
-    void* hwndTrack;
-    unsigned int dwHoverTime;
-};
-struct Win32BitmapInfoHeader {
-    unsigned int biSize;
-    int biWidth;
-    int biHeight;
-    unsigned short biPlanes;
-    unsigned short biBitCount;
-    unsigned int biCompression;
-    unsigned int biSizeImage;
-    int biXPelsPerMeter;
-    int biYPelsPerMeter;
-    unsigned int biClrUsed;
-    unsigned int biClrImportant;
-};
-
 struct GuiWin32Window {
-    void* hwnd;
+    HWND_* hwnd;
     unsigned int style;
     unsigned int exStyle;
     unsigned char* staging;      // BGRA copy of the buffer
@@ -194,12 +209,12 @@ struct GuiWin32Window {
 
 static struct GuiBackend gW32Backend;
 static int gW32BackendInit = 0;
-static void* gW32Instance = (void*)0;
+static HINSTANCE_* gW32Instance = (HINSTANCE_*)0;
 static unsigned int gW32Thread = 0U;
 static int gW32ClassRegistered = 0;
 static double gW32Scale = 1.0;
 static unsigned short gW32ClassName[20];
-static void* gW32Cursors[GUI_CURSOR_COUNT];
+static HCURSOR_* gW32Cursors[GUI_CURSOR_COUNT];
 
 static struct GuiWin32Window* __gui_win32_win(&GuiWindowState st) {
     unsafe { return (struct GuiWin32Window*)st.native; }
@@ -287,7 +302,7 @@ static void __gui_win32_outer(struct GuiWin32Window* w, int cw, int ch, &int ow,
     unsafe {
         struct Win32Rect r;
         r.left = 0; r.top = 0; r.right = cw; r.bottom = ch;
-        AdjustWindowRectEx((void*)&r, w->style, 0, w->exStyle);
+        AdjustWindowRectEx(&r, w->style, 0, w->exStyle);
         *ow = r.right - r.left;
         *oh = r.bottom - r.top;
     }
@@ -297,7 +312,7 @@ static void __gui_win32_outer(struct GuiWin32Window* w, int cw, int ch, &int ow,
 // (set right after CreateWindowExW), translates the message into a
 // GuiEvent and posts it — application logic never runs inside this
 // callback, only poll_event()'s caller sees events.
-long long __gui_win32_wndproc(void* hwnd, unsigned int msg, unsigned long long wparam, long long lparam) {
+long long __gui_win32_wndproc(HWND_* hwnd, unsigned int msg, unsigned long long wparam, long long lparam) {
     unsafe {
         struct GuiWindowState* st = (struct GuiWindowState*)GetWindowLongPtrW(hwnd, GUI_GWLP_USERDATA);
         if (st == (struct GuiWindowState*)0) {
@@ -349,14 +364,14 @@ long long __gui_win32_wndproc(void* hwnd, unsigned int msg, unsigned long long w
             return 0LL;
         }
         if (msg == GUI_WM_PAINT) {
-            ValidateRect(hwnd, (const void*)0);
+            ValidateRect(hwnd, (const Win32Rect*)0);
             gui_backend_post(st, GuiEvent::new(GUI_EVENT_EXPOSE));
             return 0LL;
         }
         if (msg == GUI_WM_ERASEBKGND) { return 1LL; }
         if (msg == GUI_WM_SETCURSOR) {
             if ((lparam & 0xFFFFLL) == 1LL) {                         // HTCLIENT
-                SetCursor(st->cursor == GUI_CURSOR_HIDDEN ? (void*)0 : gW32Cursors[st->cursor]);
+                SetCursor(st->cursor == GUI_CURSOR_HIDDEN ? (HCURSOR_*)0 : gW32Cursors[st->cursor]);
                 return 1LL;
             }
             return DefWindowProcW(hwnd, msg, wparam, lparam);
@@ -382,7 +397,7 @@ long long __gui_win32_wndproc(void* hwnd, unsigned int msg, unsigned long long w
                 if (ns > 0.0 && ns != st->scale) {
                     st->scale = ns;
                     struct Win32Rect* r = (struct Win32Rect*)lparam;
-                    SetWindowPos(hwnd, (void*)0, r->left, r->top, r->right - r->left, r->bottom - r->top,
+                    SetWindowPos(hwnd, (HWND_*)0, r->left, r->top, r->right - r->left, r->bottom - r->top,
                                  0x0004U | 0x0010U);   // SWP_NOZORDER | SWP_NOACTIVATE
                     struct GuiEvent ev = GuiEvent::new(GUI_EVENT_SCALE);
                     ev.width = st->pixelW;
@@ -418,7 +433,7 @@ long long __gui_win32_wndproc(void* hwnd, unsigned int msg, unsigned long long w
                 tme.dwFlags = 2U;                                     // TME_LEAVE
                 tme.hwndTrack = hwnd;
                 tme.dwHoverTime = 0U;
-                TrackMouseEvent((void*)&tme);
+                TrackMouseEvent(&tme);
                 w->tracking = 1;
                 __gui_win32_post_mouse(st, GUI_EVENT_MOUSE_ENTER, lparam, 0);
             }
@@ -476,7 +491,7 @@ long long __gui_win32_wndproc(void* hwnd, unsigned int msg, unsigned long long w
             struct Win32Point pt;
             pt.x = (int)__gui_win32_lo(lparam);
             pt.y = (int)__gui_win32_hi(lparam);
-            ScreenToClient(hwnd, (void*)&pt);
+            ScreenToClient(hwnd, &pt);
             struct GuiEvent ev = GuiEvent::new(GUI_EVENT_SCROLL);
             double d = (double)(short)((wparam >> 16) & 0xFFFFULL) / 120.0;
             if (msg == GUI_WM_MOUSEWHEEL) { ev.scrollDy = d; } else { ev.scrollDx = d; }
@@ -494,7 +509,7 @@ static int __gui_win32_init() {
     unsafe {
         char* unaware = getenv("SAFEC_GUI_DPI_UNAWARE");
         if (unaware == (char*)0) { SetProcessDPIAware(); }
-        gW32Instance = GetModuleHandleW((const void*)0);
+        gW32Instance = GetModuleHandleW((const unsigned short*)0);
         gW32Thread = GetCurrentThreadId();
         const char* cls = "SafeCGuiWindow";
         int i = 0;
@@ -502,14 +517,14 @@ static int __gui_win32_init() {
         gW32ClassName[i] = (unsigned short)0;
         if (!gW32ClassRegistered) {
             struct Win32WndClassExW wc;
-            memset((void*)&wc, 0, sizeof(struct Win32WndClassExW));
+            safe_memset_obj(&wc, 0);
             wc.cbSize = (unsigned int)sizeof(struct Win32WndClassExW);
             wc.style = 0x0003U;                                   // CS_HREDRAW | CS_VREDRAW
-            wc.lpfnWndProc = (void*)__gui_win32_wndproc;
+            wc.lpfnWndProc = __gui_win32_wndproc;
             wc.hInstance = gW32Instance;
-            wc.hCursor = (void*)0;                                // WM_SETCURSOR sets it
+            wc.hCursor = (HCURSOR_*)0;                             // WM_SETCURSOR sets it
             wc.lpszClassName = &gW32ClassName[0];
-            if (RegisterClassExW((const void*)&wc) == (unsigned short)0) { return 0; }
+            if (RegisterClassExW(&wc) == (unsigned short)0) { return 0; }
             gW32ClassRegistered = 1;
         }
         // IDC_* resource ids per GUI_CURSOR_*.
@@ -520,12 +535,12 @@ static int __gui_win32_init() {
         ids[GUI_CURSOR_WAIT] = 32514; ids[GUI_CURSOR_NOT_ALLOWED] = 32648; ids[GUI_CURSOR_HIDDEN] = 32512;
         i = 0;
         while (i < GUI_CURSOR_COUNT) {
-            gW32Cursors[i] = LoadCursorW((void*)0, (const void*)(unsigned long long)ids[i]);
+            gW32Cursors[i] = LoadCursorW((HINSTANCE_*)0, (const unsigned short*)(unsigned long long)ids[i]);   // MAKEINTRESOURCE
             i = i + 1;
         }
-        void* dc = GetDC((void*)0);
-        int dpi = dc != (void*)0 ? GetDeviceCaps(dc, 88 /* LOGPIXELSX */) : 96;
-        if (dc != (void*)0) { ReleaseDC((void*)0, dc); }
+        HDC_* dc = GetDC((HWND_*)0);
+        int dpi = dc != (HDC_*)0 ? GetDeviceCaps(dc, 88 /* LOGPIXELSX */) : 96;
+        if (dc != (HDC_*)0) { ReleaseDC((HWND_*)0, dc); }
         gW32Scale = dpi > 0 ? (double)dpi / 96.0 : 1.0;
         if (unaware != (char*)0) { gW32Scale = 1.0; }
         return 1;
@@ -549,24 +564,24 @@ static int __gui_win32_create(&GuiWindowState st, const &GuiWindowOptions opts) 
             py = (int)((double)st.y * st.scale);
         }
         unsigned short* title = __gui_win32_wide((const char*)st.title.data);
-        void* hwnd = CreateWindowExW(w->exStyle, (const void*)&gW32ClassName[0], (const void*)title, w->style,
-                                     px, py, ow, oh, (void*)0, (void*)0, gW32Instance, (void*)0);
+        HWND_* hwnd = CreateWindowExW(w->exStyle, &gW32ClassName[0], title, w->style,
+                                      px, py, ow, oh, (HWND_*)0, (HMENU_*)0, gW32Instance, (WinCreateParam_*)0);
         dealloc(title);
-        if (hwnd == (void*)0) {
+        if (hwnd == (HWND_*)0) {
             dealloc(w);
             return 0;
         }
         w->hwnd = hwnd;
-        st.native = (void*)w;
+        st.native = (?&Erased)w;
         st.key = (unsigned long long)hwnd;
-        SetWindowLongPtrW(hwnd, GUI_GWLP_USERDATA, (long long)(void*)st);
+        SetWindowLongPtrW(hwnd, GUI_GWLP_USERDATA, (long long)(struct GuiWindowState*)st);
         if (opts.visible) {
             ShowWindow(hwnd, 1 /* SW_SHOWNORMAL */);
             UpdateWindow(hwnd);
         }
         struct Win32Point origin;
         origin.x = 0; origin.y = 0;
-        ClientToScreen(hwnd, (void*)&origin);
+        ClientToScreen(hwnd, &origin);
         st.x = (int)((double)origin.x / st.scale);
         st.y = (int)((double)origin.y / st.scale);
         return 1;
@@ -614,17 +629,17 @@ static void __gui_win32_present(&GuiWindowState st, const &unsigned char px, int
         // A top-down DIB of just the rows y..y+rh (so there's no question
         // which way the source y origin counts).
         struct Win32BitmapInfoHeader bmi;
-        memset((void*)&bmi, 0, sizeof(struct Win32BitmapInfoHeader));
+        safe_memset_obj(&bmi, 0);
         bmi.biSize = 40U;
         bmi.biWidth = bw;
         bmi.biHeight = -rh;
         bmi.biPlanes = (unsigned short)1;
         bmi.biBitCount = (unsigned short)32;
         bmi.biCompression = 0U;                                    // BI_RGB
-        void* dc = GetDC(w->hwnd);
+        HDC_* dc = GetDC(w->hwnd);
         StretchDIBits(dc, x, y, rw, rh, x, 0, rw, rh,
-                      (const void*)(w->staging + (unsigned long)y * (unsigned long)bw * 4UL),
-                      (const void*)&bmi, 0U, 0x00CC0020U /* SRCCOPY */);
+                      w->staging + (unsigned long)y * (unsigned long)bw * 4UL,
+                      &bmi, 0U, 0x00CC0020U /* SRCCOPY */);
         ReleaseDC(w->hwnd, dc);
     }
 }
@@ -634,7 +649,7 @@ static void __gui_win32_set_title(&GuiWindowState st, const &char title) {
     unsafe {
         if (w == (struct GuiWin32Window*)0) { return; }
         unsigned short* t = __gui_win32_wide(title);
-        SetWindowTextW(w->hwnd, (const void*)t);
+        SetWindowTextW(w->hwnd, t);
         dealloc(t);
     }
 }
@@ -645,7 +660,7 @@ static void __gui_win32_set_size(&GuiWindowState st, int lw, int lh) {
         if (w == (struct GuiWin32Window*)0) { return; }
         int ow = 0; int oh = 0;
         __gui_win32_outer(w, (int)((double)lw * st.scale + 0.5), (int)((double)lh * st.scale + 0.5), &ow, &oh);
-        SetWindowPos(w->hwnd, (void*)0, 0, 0, ow, oh, 0x0002U | 0x0004U | 0x0010U);  // NOMOVE|NOZORDER|NOACTIVATE
+        SetWindowPos(w->hwnd, (HWND_*)0, 0, 0, ow, oh, 0x0002U | 0x0004U | 0x0010U);  // NOMOVE|NOZORDER|NOACTIVATE
     }
 }
 
@@ -656,8 +671,8 @@ static void __gui_win32_set_position(&GuiWindowState st, int x, int y) {
         // x/y place the client area; move the frame so that it lands there.
         struct Win32Rect r;
         r.left = 0; r.top = 0; r.right = 0; r.bottom = 0;
-        AdjustWindowRectEx((void*)&r, w->style, 0, w->exStyle);
-        SetWindowPos(w->hwnd, (void*)0, (int)((double)x * st.scale) + r.left, (int)((double)y * st.scale) + r.top,
+        AdjustWindowRectEx(&r, w->style, 0, w->exStyle);
+        SetWindowPos(w->hwnd, (HWND_*)0, (int)((double)x * st.scale) + r.left, (int)((double)y * st.scale) + r.top,
                      0, 0, 0x0001U | 0x0004U | 0x0010U);              // NOSIZE|NOZORDER|NOACTIVATE
     }
 }
@@ -694,7 +709,7 @@ static void __gui_win32_focus(&GuiWindowState st) {
 static void __gui_win32_set_cursor(&GuiWindowState st, int c) {
     // Takes effect on the next WM_SETCURSOR; apply now if the pointer is in.
     unsafe {
-        if (st.hovered) { SetCursor(c == GUI_CURSOR_HIDDEN ? (void*)0 : gW32Cursors[c]); }
+        if (st.hovered) { SetCursor(c == GUI_CURSOR_HIDDEN ? (HCURSOR_*)0 : gW32Cursors[c]); }
     }
 }
 
@@ -702,10 +717,10 @@ static int __gui_win32_drain() {
     int any = 0;
     unsafe {
         struct Win32Msg msg;
-        while (PeekMessageW((void*)&msg, (void*)0, 0U, 0U, 1U /* PM_REMOVE */)) {
-            if (msg.hwnd == (void*)0 && msg.message == GUI_WM_USER) { continue; }   // wake()
-            TranslateMessage((const void*)&msg);
-            DispatchMessageW((const void*)&msg);
+        while (PeekMessageW(&msg, (HWND_*)0, 0U, 0U, 1U /* PM_REMOVE */)) {
+            if (msg.hwnd == (HWND_*)0 && msg.message == GUI_WM_USER) { continue; }   // wake()
+            TranslateMessage(&msg);
+            DispatchMessageW(&msg);
             any = 1;
         }
     }
@@ -724,7 +739,7 @@ static int __gui_win32_pump(int timeoutMs) {
                 if (left <= 0) { break; }
                 wait = (unsigned int)left;
             }
-            unsigned int r = MsgWaitForMultipleObjects(0U, (const void*)0, 0, wait, 0x04FFU /* QS_ALLINPUT */);
+            unsigned int r = MsgWaitForMultipleObjects(0U, (WinHandle_* const*)0, 0, wait, 0x04FFU /* QS_ALLINPUT */);
             int drained = __gui_win32_drain();
             if (drained) { got = 1; }
             if (r == 0x102U /* WAIT_TIMEOUT */) { break; }
@@ -740,16 +755,16 @@ static void __gui_win32_wake() {
 
 static long long __gui_win32_now_ns() { return time_mono_ns(); }
 
-static void* __gui_win32_any_hwnd() {
+static HWND_* __gui_win32_any_hwnd() {
     ?&GuiWindowState ost = gui_backend_window_at(0UL);
     match (ost) {
-        case null: return (void*)0;
+        case null: return (HWND_*)0;
         case some(st): {
             struct GuiWin32Window* w = __gui_win32_win(st);
-            unsafe { return w != (struct GuiWin32Window*)0 ? w->hwnd : (void*)0; }
+            unsafe { return w != (struct GuiWin32Window*)0 ? w->hwnd : (HWND_*)0; }
         }
     }
-    return (void*)0;
+    return (HWND_*)0;
 }
 
 static int __gui_win32_clip_set(const &char utf8, unsigned long n) {
@@ -774,13 +789,13 @@ static int __gui_win32_clip_set(const &char utf8, unsigned long n) {
         int ok = 0;
         if (OpenClipboard(__gui_win32_any_hwnd())) {
             EmptyClipboard();
-            void* mem = GlobalAlloc(0x0002U /* GMEM_MOVEABLE */, (unsigned long long)((o + 1UL) * 2UL));
-            if (mem != (void*)0) {
-                unsigned short* dst = (unsigned short*)GlobalLock(mem);
+            HGLOBAL_* mem = GlobalAlloc(0x0002U /* GMEM_MOVEABLE */, (unsigned long long)((o + 1UL) * 2UL));
+            if (mem != (HGLOBAL_*)0) {
+                unsigned short* dst = GlobalLock(mem);
                 unsigned long k = 0UL;
                 while (k <= o) { dst[k] = buf[k]; k = k + 1UL; }
                 GlobalUnlock(mem);
-                if (SetClipboardData(13U /* CF_UNICODETEXT */, mem) != (void*)0) { ok = 1; }
+                if (SetClipboardData(13U /* CF_UNICODETEXT */, mem) != (HGLOBAL_*)0) { ok = 1; }
                 else { GlobalFree(mem); }
             }
             CloseClipboard();
@@ -795,9 +810,9 @@ static int __gui_win32_clip_get(&String out) {
     unsafe {
         if (!OpenClipboard(__gui_win32_any_hwnd())) { return 0; }
         int ok = 0;
-        void* mem = GetClipboardData(13U);
-        if (mem != (void*)0) {
-            unsigned short* src = (unsigned short*)GlobalLock(mem);
+        HGLOBAL_* mem = GetClipboardData(13U);
+        if (mem != (HGLOBAL_*)0) {
+            unsigned short* src = GlobalLock(mem);
             if (src != (unsigned short*)0) {
                 unsigned long i = 0UL;
                 while (src[i] != (unsigned short)0) {
