@@ -80,8 +80,8 @@ struct AudioStreamState_ {
     void* user_buf[2];                // what the callback sees
     void* device_buf[2];              // what the backend reads/writes (== user_buf if !convert)
 
-    void* callback;                   // AudioCallbackRaw_
-    void* user;
+    AudioCallbackRaw_ callback;       // the user's fn int(&AudioIo, ?&T), erased
+    ?&Erased user;
 
     int state;                        // (rt) AUDIO_STREAM_*
     int stop_request;                 // (rt) 0, AUDIO_CB_STOP or AUDIO_CB_ABORT (from control or callback)

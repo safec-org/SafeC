@@ -11,6 +11,7 @@
 // lock-free: up to MIDI_DUMMY_BUSES buses with MIDI_DUMMY_LISTENERS
 // receivers each.
 #pragma once
+#include <std/mem.h>
 #include <std/audio/midi_backend.h>
 #include <std/audio/audio_sys.h>
 

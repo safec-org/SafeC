@@ -28,7 +28,7 @@
 // with the callback
 //
 //   int render(&AudioIo io, ?&Synth s) {
-//       struct Slice<float> out = io.output_f32();     // frames * channels, interleaved
+//       []float out = io.output_f32();                 // frames * channels, interleaved
 //       ... fill it ...
 //       return AUDIO_CB_CONTINUE;                      // or AUDIO_CB_STOP / AUDIO_CB_ABORT
 //   }
@@ -54,11 +54,12 @@
 // (i16/i24/i32/f32/f64), (de)interleaves and applies the channel offsets
 // on its side. Interleaved (the default): frame-major, 'channels' samples per
 // frame. With AUDIO_FLAG_NONINTERLEAVED: channel-major, 'frames' samples per
-// channel. AUDIO_FORMAT_I24 is packed 3-byte little-endian samples (read
-// them through output_bytes()/input_bytes() or audio_convert.h).
+// channel. AUDIO_FORMAT_I24 is packed 3-byte little-endian samples: S24
+// (std/audio/s24.h), reached through output_i24()/input_i24().
 #pragma once
 #include <std/audio/audio_error.h>
-#include <std/collections/slice.h>
+#include <std/audio/s24.h>
+#include <std/erased.h>
 #include <std/result.h>
 
 // ── APIs ─────────────────────────────────────────────────────────────────
@@ -158,8 +159,8 @@ struct AudioStreamOptions {
 
 // What the callback gets: the buffers for this period plus its context.
 struct AudioIo {
-    ?&void       output;        // user-format output buffer (null for input-only)
-    ?&void       input;         // user-format input buffer (null for output-only)
+    []unsigned char output_;    // the user-format output buffer's bytes (empty for input-only)
+    []unsigned char input_;     // the user-format input buffer's bytes (empty for output-only)
     unsigned int frames;        // frames in this period
     double       stream_time;   // seconds of audio processed before this period
     unsigned int status;        // AUDIO_STATUS_* since the last callback
@@ -171,34 +172,37 @@ struct AudioIo {
 
     // The buffers, typed: empty when the stream's format is another one.
     // frames * channels samples; interleaved or channel-major as opened.
-    struct Slice<float>          output_f32();
-    struct Slice<float>          input_f32();
-    struct Slice<double>         output_f64();
-    struct Slice<double>         input_f64();
-    struct Slice<short>          output_i16();
-    struct Slice<short>          input_i16();
-    struct Slice<int>            output_i32();
-    struct Slice<int>            input_i32();
-    struct Slice<signed char>    output_i8();
-    struct Slice<signed char>    input_i8();
-    // Raw bytes, any format (I24 is only reachable this way).
-    struct Slice<unsigned char>  output_bytes();
-    struct Slice<unsigned char>  input_bytes();
+    // The input buffers are read-only.
+    []float                 output_f32() const;
+    []const float           input_f32() const;
+    []double                output_f64() const;
+    []const double          input_f64() const;
+    []short                 output_i16() const;
+    []const short           input_i16() const;
+    []int                   output_i32() const;
+    []const int             input_i32() const;
+    []signed char           output_i8() const;
+    []const signed char     input_i8() const;
+    []S24                   output_i24() const;
+    []const S24             input_i24() const;
+    // Raw bytes, any format.
+    []unsigned char         output_bytes() const;
+    []const unsigned char   input_bytes() const;
     // One channel of a non-interleaved f32 stream ('frames' samples);
     // empty when interleaved, out of range or another format.
-    struct Slice<float>          output_channel_f32(int channel);
-    struct Slice<float>          input_channel_f32(int channel);
+    []float                 output_channel_f32(int channel) const;
+    []const float           input_channel_f32(int channel) const;
     // Zeroes the output buffer.
-    void                         clear_output();
+    void                    clear_output() const;
 };
 
-// The callback: return AUDIO_CB_CONTINUE / _STOP / _ABORT.
-typedef fn int(&AudioIo, void*) AudioCallbackRaw_;
+// The callback, erased (see std/erased.h): return AUDIO_CB_CONTINUE / _STOP / _ABORT.
+typedef fn int(&AudioIo, ?&Erased) AudioCallbackRaw_;
 
 // An open stream: a handle onto state open_stream() allocated. Copies refer
 // to the same stream; close() it once.
 struct AudioStream {
-    ?&void impl;    // std-private; null when closed
+    ?&struct AudioStreamState_ impl;    // std-private; null when closed
 
     // A closed (never-opened) stream.
     static struct AudioStream closed();
@@ -240,7 +244,7 @@ struct AudioStream {
 // A connection to one audio API: its device list and the streams it opens.
 struct Audio {
     int  api_id;    // AUDIO_API_*, 0 when closed
-    ?&void impl;    // std-private; null when closed
+    ?&struct AudioHost_ impl;    // std-private; null when closed
 
     // Opens 'api' (AUDIO_API_UNSPECIFIED: audio_default_api(), then the
     // other compiled APIs, then dummy) and probes its devices. A machine
@@ -273,8 +277,8 @@ struct Audio {
                                                        ?&AudioStreamOptions opts);
     struct Result<AudioStream, AudioError> open_stream_raw_(?&AudioStreamParams output, ?&AudioStreamParams input,
                                                             unsigned int format, unsigned int sample_rate,
-                                                            &unsigned int frames, void* callback, void* user,
-                                                            ?&AudioStreamOptions opts);
+                                                            &unsigned int frames, AudioCallbackRaw_ callback,
+                                                            ?&Erased user, ?&AudioStreamOptions opts);
 
     // Releases the device list. Streams opened from it stay valid.
     void close();
@@ -287,15 +291,16 @@ struct Result<AudioStream, AudioError> Audio::open_stream(?&AudioStreamParams ou
                                                           fn int(&AudioIo, ?&T) callback, ?&T user,
                                                           ?&AudioStreamOptions opts) {
     unsafe {
-        return self.open_stream_raw_(output, input, format, sample_rate, frames, (void*)callback, (void*)user, opts);
+        return self.open_stream_raw_(output, input, format, sample_rate, frames,
+                                     (AudioCallbackRaw_)callback, (?&Erased)user, opts);
     }
 }
 
 // ── API helpers ──────────────────────────────────────────────────────────
 
 // The APIs compiled into this build, in preference order; returns how many
-// were written to 'out' (up to 'cap').
-int audio_compiled_apis(&int out, int cap);
+// were written to 'out' (up to out.len).
+int audio_compiled_apis([]int out);
 int audio_api_compiled(int api);
 // The platform's usual API: Core Audio, WASAPI, WebAudio, ALSA (JACK when
 // its server is running and SAFEC_AUDIO_API isn't set otherwise); the

@@ -452,10 +452,10 @@ void t_comb_audio_timer() {
         Fixed frames[8];
         int i = 0;
         while (i < 8) { frames[i] = fixed_from_int(i); i = i + 1; }
-        ASSERT_EQ(ab.write_frames(frames, 4UL), 4);
+        ASSERT_EQ(ab.write_frames(frames[0..8]), 4);
         ASSERT_EQ(ab.readable_frames(), 4);
         Fixed outf[8];
-        ASSERT_EQ(ab.read_frames(outf, 2UL), 2);
+        ASSERT_EQ(ab.read_frames(outf[0..4]), 2);
         ASSERT_EQ(fixed_to_int(outf[3]), 3);
         ASSERT_EQ(ab.readable_frames(), 2);
         dealloc(abq);
@@ -1034,12 +1034,12 @@ void t_dsp_extras() {
         struct AudioBuffer ab = AudioBuffer::new(1UL);
         Fixed frames[3];
         frames[0] = fixed_from_int(1); frames[1] = fixed_from_int(2); frames[2] = fixed_from_int(3);
-        ASSERT_EQ(ab.write_frames(&frames[0], 3UL), 3);
+        ASSERT_EQ(ab.write_frames(frames[0..3]), 3);
         Fixed peek[2];
-        ASSERT_EQ(ab.peek_frames(&peek[0], 2UL), 2);
+        ASSERT_EQ(ab.peek_frames(peek[0..2]), 2);
         ASSERT_EQ(fixed_to_int(peek[1]), 2);
         Fixed rd[3];
-        ASSERT_EQ(ab.read_frames(&rd[0], 3UL), 3);   // peek didn't consume
+        ASSERT_EQ(ab.read_frames(rd[0..3]), 3);   // peek didn't consume
         ASSERT_EQ(fixed_to_int(rd[0]), 1);
     }
 }
