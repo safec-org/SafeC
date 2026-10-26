@@ -142,8 +142,8 @@ void t_pool() {
         if (aq.is_null() || bq.is_null()) return;
         &char a = std::expect_ref(aq, "aq is null");
         &char b = std::expect_ref(bq, "bq is null");
-        safe_memset(a, 1, 100UL);
-        safe_memset(b, 2, 200UL);
+        safe_memset(((char*)a)[0..100], 1);
+        safe_memset(((char*)b)[0..200], 2);
         ASSERT_EQ(a[99], 1);
         p.dealloc((?&heap void)aq);
         p.dealloc((?&heap void)bq);
@@ -165,7 +165,7 @@ void t_tlsf() {
         while (i < 64) {
             ptrs[i] = (?&heap unsigned char)t.alloc((unsigned long)(16 + i * 13), 1UL);
             if (ptrs[i].is_null()) break;
-            safe_memset(std::expect_ref(ptrs[i], "tlsf"), i, (unsigned long)(16 + i * 13));
+            unsafe { safe_memset(((unsigned char*)std::expect_ref(ptrs[i], "tlsf"))[0..(unsigned long)(16 + i * 13)], i); }
             i = i + 1;
         }
         ASSERT_EQ(i, 64);
@@ -207,7 +207,7 @@ void t_heap_result() {
         ASSERT_FALSE(pq.is_null());
         if (pq.is_null()) return;
         &char p = std::expect_ref(pq, "pq is null");
-        str_copy(p, "heap", 100UL);
+        unsafe { str_copy(((char*)p)[0..100], "heap"); }
         ?&heap char q = (?&heap char)heap_realloc((&heap void)p, 1000UL);
         ASSERT_FALSE(q.is_null());
         if (q.is_null()) return;

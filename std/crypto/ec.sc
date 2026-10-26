@@ -274,9 +274,9 @@ static void ec_pt_mul_(const &EcCurve_ c, &EcPt_ r, const &EcPt_ P, const unsign
         }
     }
     *r = acc;
-    mem_zero_secure(&acc, sizeof(struct EcPt_));
-    mem_zero_secure(&t, sizeof(struct EcPt_));
-    mem_zero_secure(&d, sizeof(struct EcPt_));
+    mem_zero_secure_obj(&acc);
+    mem_zero_secure_obj(&t);
+    mem_zero_secure_obj(&d);
 }
 
 static void ec_pt_gen_(const &EcCurve_ c, &EcPt_ g) {
@@ -547,7 +547,7 @@ static int ec_rfc6979_(H fresh, const &EcCurve_ c, const unsigned char* x, const
                 while (j < hl && tlen < c.sz) { k[tlen] = V[j]; tlen = tlen + 1UL; j = j + 1UL; }
             }
             if (ec_scalar_ok_(c, (const unsigned char*)k)) {
-                mem_zero_secure(&K[0], 64UL);
+                mem_zero_secure(K[0..64UL]);
                 return 1;
             }
             struct Hmac<H> m2 = Hmac::new(fresh, &K[0], hl);
@@ -641,10 +641,10 @@ int ecdsa_sign_der(int curve, const &unsigned char priv, const &unsigned char ha
             }
         }
     }
-    mem_zero_secure(&k[0], (unsigned long)EC_MAX_SCALAR);
-    mem_zero_secure(&kk[0], sizeof(unsigned int) * (unsigned long)EC_LIMBS_);
-    mem_zero_secure(&ki[0], sizeof(unsigned int) * (unsigned long)EC_LIMBS_);
-    mem_zero_secure(&d[0], sizeof(unsigned int) * (unsigned long)EC_LIMBS_);
+    mem_zero_secure(k[0..(unsigned long)EC_MAX_SCALAR]);
+    mem_zero_secure(kk[0..(unsigned long)EC_LIMBS_]);
+    mem_zero_secure(ki[0..(unsigned long)EC_LIMBS_]);
+    mem_zero_secure(d[0..(unsigned long)EC_LIMBS_]);
     return good;
 }
 
@@ -712,7 +712,7 @@ int EcPrivateKey::init_der(const &unsigned char der, unsigned long len) {
 }
 
 void EcPrivateKey::destroy() {
-    mem_zero_secure(&self.d[0], (unsigned long)EC_MAX_SCALAR);
+    mem_zero_secure(self.d[0..(unsigned long)EC_MAX_SCALAR]);
 }
 
 } // namespace std

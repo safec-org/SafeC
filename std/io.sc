@@ -157,27 +157,51 @@ inline void eprint_float(double v) {
 
 // ── Buffer formatting (snprintf wrappers) ─────────────────────────────────────
 
-inline int io_fmt_int(&char buf, int n, long long v) {
+inline int io_fmt_int([]char buf_s, long long v) {
+    int n = buf_s.len > 2147483647UL ? 2147483647 : (int)buf_s.len;
+    char buf_d_[1];
+    &char buf = &buf_d_[0];
+    if (n > 0) { unsafe { buf = (&char)buf_s.ptr; } }
     unsafe { return snprintf(buf, (unsigned long)n, "%lld", v); }
 }
 
-inline int io_fmt_uint(&char buf, int n, unsigned long long v) {
+inline int io_fmt_uint([]char buf_s, unsigned long long v) {
+    int n = buf_s.len > 2147483647UL ? 2147483647 : (int)buf_s.len;
+    char buf_d_[1];
+    &char buf = &buf_d_[0];
+    if (n > 0) { unsafe { buf = (&char)buf_s.ptr; } }
     unsafe { return snprintf(buf, (unsigned long)n, "%llu", v); }
 }
 
-inline int io_fmt_float(&char buf, int n, double v) {
+inline int io_fmt_float([]char buf_s, double v) {
+    int n = buf_s.len > 2147483647UL ? 2147483647 : (int)buf_s.len;
+    char buf_d_[1];
+    &char buf = &buf_d_[0];
+    if (n > 0) { unsafe { buf = (&char)buf_s.ptr; } }
     unsafe { return snprintf(buf, (unsigned long)n, "%g", v); }
 }
 
-inline int io_fmt_float_prec(&char buf, int n, double v, int prec) {
+inline int io_fmt_float_prec([]char buf_s, double v, int prec) {
+    int n = buf_s.len > 2147483647UL ? 2147483647 : (int)buf_s.len;
+    char buf_d_[1];
+    &char buf = &buf_d_[0];
+    if (n > 0) { unsafe { buf = (&char)buf_s.ptr; } }
     unsafe { return snprintf(buf, (unsigned long)n, "%.*f", prec, v); }
 }
 
-inline int io_fmt_hex(&char buf, int n, unsigned long long v) {
+inline int io_fmt_hex([]char buf_s, unsigned long long v) {
+    int n = buf_s.len > 2147483647UL ? 2147483647 : (int)buf_s.len;
+    char buf_d_[1];
+    &char buf = &buf_d_[0];
+    if (n > 0) { unsafe { buf = (&char)buf_s.ptr; } }
     unsafe { return snprintf(buf, (unsigned long)n, "0x%llx", v); }
 }
 
-inline int io_fmt_str(&char buf, int n, const &char s) {
+inline int io_fmt_str([]char buf_s, const &char s) {
+    int n = buf_s.len > 2147483647UL ? 2147483647 : (int)buf_s.len;
+    char buf_d_[1];
+    &char buf = &buf_d_[0];
+    if (n > 0) { unsafe { buf = (&char)buf_s.ptr; } }
     unsafe { return snprintf(buf, (unsigned long)n, "%s", s); }
 }
 
@@ -195,7 +219,11 @@ inline int io_ungetc(int c) {
 
 // Read a line (up to n-1 chars + NUL) from stdin.
 // Returns the number of characters read (excluding NUL), or -1 on EOF/error.
-inline int io_read_line(&char buf, int n) {
+inline int io_read_line([]char buf_s) {
+    int n = buf_s.len > 2147483647UL ? 2147483647 : (int)buf_s.len;
+    char buf_d_[1];
+    &char buf = &buf_d_[0];
+    if (n > 0) { unsafe { buf = (&char)buf_s.ptr; } }
     if (n <= 0) { return -1; }
     unsafe {
         if (fgets(buf, n, SAFEC_STDIN_) == (char*)0) { return -1; }
@@ -211,7 +239,11 @@ inline int io_read_line(&char buf, int n) {
 
 // Read one whitespace-delimited token from stdin into buf[0..n-1].
 // Returns number of chars read, 0 = EOF before any token, -1 = buffer too small.
-inline int io_read_token(&char buf, int n) {
+inline int io_read_token([]char buf_s) {
+    int n = buf_s.len > 2147483647UL ? 2147483647 : (int)buf_s.len;
+    char buf_d_[1];
+    &char buf = &buf_d_[0];
+    if (n > 0) { unsafe { buf = (&char)buf_s.ptr; } }
     if (n <= 1) { return -1; }   // needs room for a char + NUL ("%0s" is invalid)
     unsafe {
         int c = getchar();

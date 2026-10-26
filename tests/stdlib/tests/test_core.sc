@@ -36,15 +36,18 @@ void t_mem() {
         if (pq.is_null() || zq.is_null()) return;
         &char p = std::expect_ref(pq, "pq is null");
         &char z = std::expect_ref(zq, "zq is null");
-        safe_memset(p, 7, 64UL);
+        safe_memset(((char*)p)[0..64], 7);
         ASSERT_EQ(p[63], 7);
         ASSERT_EQ(z[0], 0);
         ASSERT_EQ(z[31], 0);
-        safe_memcpy(z, "hello", 6UL);
+        []char zs = ((char*)z)[0..32];
+        ASSERT_EQ(safe_memcpy(zs, ((const char*)"hello")[0..6]), 6);
         ASSERT_STR_EQ(z, "hello");
-        safe_memmove(&z[1], z, 5UL);
+        ASSERT_EQ(safe_memmove(zs[1..6], zs[0..5]), 5);
         ASSERT_EQ(z[1], 'h');
-        ASSERT_EQ(safe_memcmp("abc", "abd", 3UL) < 0, 1);
+        ASSERT_EQ(safe_memcmp(str_bytes("abc"), str_bytes("abd")) < 0, 1);
+        ASSERT_EQ(safe_memcmp(str_bytes("ab"), str_bytes("abc")) < 0, 1);   // shorter prefix first
+        ASSERT_EQ(safe_memcmp(str_bytes("abc"), str_bytes("abc")), 0);
         ?&heap char rq = realloc_buf(pq, 4096UL);
         ASSERT_FALSE(rq.is_null());
         if (rq.is_null()) return;
@@ -67,11 +70,16 @@ void t_str() {
         ASSERT_TRUE(str_cmp("a", "b") < 0);
         ASSERT_EQ(str_ncmp("abcx", "abcy", 3UL), 0);
         char buf[32];
-        str_copy((char*)buf, "foo", 32UL);
-        str_cat((char*)buf, "bar");
+        ASSERT_EQ(str_copy(buf[..], "foo"), 1);
+        ASSERT_EQ(str_cat(buf[..], "bar"), 1);
         ASSERT_STR_EQ((const char*)buf, "foobar");
-        str_ncat((char*)buf, "bazqux", 3UL);
+        ASSERT_EQ(str_ncat(buf[..], "bazqux", 3UL), 1);
         ASSERT_STR_EQ((const char*)buf, "foobarbaz");
+        char small[4];
+        ASSERT_EQ(str_copy(small[..], "toolong"), 0);      // truncated, still terminated
+        ASSERT_STR_EQ((const char*)small, "too");
+        ASSERT_EQ(str_cat(small[..], "x"), 0);
+        ASSERT_STR_EQ((const char*)small, "too");
         ASSERT_STR_EQ(str_find("hello world", "wor"), "world");
         ASSERT_TRUE(str_find("hello", "xyz") == (const char*)0);
         ASSERT_STR_EQ(str_find_char("a.b.c", '.'), ".b.c");
@@ -87,7 +95,7 @@ void t_str() {
         ASSERT_STR_EQ(nd, "abc");
         dealloc(nd);
         char tok[32];
-        str_copy(tok, "a,b,,c", 32UL);
+        str_copy(tok[..], "a,b,,c");
         ?&char save = null;
         ?&char t1 = str_tok(tok, ",", &save);
         ?&char t2 = str_tok(null, ",", &save);
@@ -103,24 +111,24 @@ void t_str() {
 void t_fmt() {
     unsafe {
         char buf[64];
-        fmt_int((char*)buf, 64UL, -1234LL);
+        fmt_int(buf[0..64], -1234LL);
         ASSERT_STR_EQ((const char*)buf, "-1234");
-        fmt_uint((char*)buf, 64UL, 18446744073709551615ULL);
+        fmt_uint(buf[0..64], 18446744073709551615ULL);
         ASSERT_STR_EQ((const char*)buf, "18446744073709551615");
-        fmt_hex((char*)buf, 64UL, 0xdeadbeefULL);
+        fmt_hex(buf[0..64], 0xdeadbeefULL);
         ASSERT_TRUE(str_find((const char*)buf, "deadbeef") != (const char*)0);
-        fmt_float((char*)buf, 64UL, 3.14159, 2);
+        fmt_float(buf[0..64], 3.14159, 2);
         ASSERT_STR_EQ((const char*)buf, "3.14");
-        fmt_bool((char*)buf, 64UL, 1);
+        fmt_bool(buf[0..64], 1);
         ASSERT_STR_EQ((const char*)buf, "true");
-        fmt_str((char*)buf, 64UL, "ab");
-        fmt_append((char*)buf, 64UL, "cd");
+        fmt_str(buf[0..64], "ab");
+        fmt_append(buf[0..64], "cd");
         ASSERT_STR_EQ((const char*)buf, "abcd");
         // Truncation must never overflow and must NUL-terminate.
         char small[4];
-        fmt_str((char*)small, 4UL, "abcdefgh");
+        fmt_str(small[0..4], "abcdefgh");
         ASSERT_EQ(str_len((const char*)small) < 4, 1);
-        io_fmt_int((char*)buf, 64, -42LL);
+        io_fmt_int(buf[0..64], -42LL);
         ASSERT_STR_EQ((const char*)buf, "-42");
     }
 }
@@ -305,12 +313,12 @@ void t_core_extra() {
         dealloc(nd);
         ASSERT_STR_EQ(str_find_any("hello, world", ",!"), ", world");
         ASSERT_TRUE(str_find_any("abc", "xyz").is_null());
-        const ?&unsigned char hit = mem_chr((const &unsigned char)"abcdef", 'd', 6UL);
+        const ?&unsigned char hit = mem_chr(str_bytes("abcdef"), 'd');
         match (hit) {
             case null: { ASSERT_TRUE(0); }
             case some(h): { ASSERT_EQ(h[0], 'd'); ASSERT_EQ(h[1], 'e'); }
         }
-        ASSERT_TRUE(mem_chr((const &unsigned char)"abc", 'z', 3UL).is_null());
+        ASSERT_TRUE(mem_chr(str_bytes("abc"), 'z').is_null());
 
         // float_clamp_to_ll rounds to nearest and handles NaN / the top end.
         ASSERT_EQ(float_clamp_to_ll(2.6, 0LL, 100LL), 3);
@@ -425,17 +433,17 @@ void t_core_extra() {
         ASSERT_EQ(lt.cmp(&x, &x), 0);
 
         char hb[32];
-        fmt_hex_upper((char*)hb, 32UL, 0xabcULL);
+        fmt_hex_upper(hb[0..32], 0xabcULL);
         ASSERT_STR_EQ((const char*)hb, "ABC");
-        io_fmt_float((char*)hb, 32, 0.5);
+        io_fmt_float(hb[0..32], 0.5);
         ASSERT_STR_EQ((const char*)hb, "0.5");
-        io_fmt_hex((char*)hb, 32, 255ULL);
+        io_fmt_hex(hb[0..32], 255ULL);
         ASSERT_STR_EQ((const char*)hb, "0xff");
-        io_fmt_uint((char*)hb, 32, 7ULL);
+        io_fmt_uint(hb[0..32], 7ULL);
         ASSERT_STR_EQ((const char*)hb, "7");
-        io_fmt_float_prec((char*)hb, 32, 1.25, 1);
+        io_fmt_float_prec(hb[0..32], 1.25, 1);
         ASSERT_STR_EQ((const char*)hb, "1.2");
-        io_fmt_str((char*)hb, 32, "xy");
+        io_fmt_str(hb[0..32], "xy");
         ASSERT_STR_EQ((const char*)hb, "xy");
     }
 }

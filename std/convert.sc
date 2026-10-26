@@ -132,7 +132,7 @@ inline ?&heap char int_to_str(long long v) {
     unsafe {
         // -9223372036854775808 is 20 digits + sign + NUL = 22 bytes
         char* buf = (char*)alloc_raw_((unsigned long)22);
-        if (buf != (char*)0) fmt_int(buf, (unsigned long)22, v);
+        if (buf != (char*)0) fmt_int(((char*)buf)[0..(unsigned long)22], v);
         return buf;
     }
 }
@@ -140,7 +140,7 @@ inline ?&heap char int_to_str(long long v) {
 inline ?&heap char uint_to_str(unsigned long long v) {
     unsafe {
         char* buf = (char*)alloc_raw_((unsigned long)21);
-        if (buf != (char*)0) fmt_uint(buf, (unsigned long)21, v);
+        if (buf != (char*)0) fmt_uint(((char*)buf)[0..(unsigned long)21], v);
         return buf;
     }
 }
@@ -148,7 +148,7 @@ inline ?&heap char uint_to_str(unsigned long long v) {
 inline ?&heap char float_to_str(double v, int decimals) {
     unsafe {
         char* buf = (char*)alloc_raw_((unsigned long)64);
-        if (buf != (char*)0) fmt_float(buf, (unsigned long)64, v, decimals);
+        if (buf != (char*)0) fmt_float(((char*)buf)[0..(unsigned long)64], v, decimals);
         return buf;
     }
 }

@@ -316,7 +316,7 @@ void t_biquad_filters() {
         double coeffs[4];
         coeffs[0] = 0.1; coeffs[1] = 0.2; coeffs[2] = 0.3; coeffs[3] = 0.4;
         double hist[4];
-        safe_memset(&hist[0], 0, sizeof(double) * 4UL);
+        safe_memset(hist[0..4], 0);
         struct FirFilter fir = FirFilter::new(coeffs[0..4UL], hist[0..4UL]);
         ASSERT_TRUE(near_d(fir.process(1.0), 0.1, 1e-12));
         ASSERT_TRUE(near_d(fir.process(0.0), 0.2, 1e-12));
@@ -332,8 +332,8 @@ void t_biquad_filters() {
         ac[0] = 1.0; ac[1] = ref.a1; ac[2] = ref.a2;
         double xh[3];
         double yh[3];
-        safe_memset(&xh[0], 0, sizeof(double) * 3UL);
-        safe_memset(&yh[0], 0, sizeof(double) * 3UL);
+        safe_memset(xh[0..3], 0);
+        safe_memset(yh[0..3], 0);
         struct IirFilter iir = IirFilter::new(bc[0..3UL], ac[0..3UL], xh[0..3UL], yh[0..3UL]);
         double maxErr = 0.0;
         i = 0;
@@ -435,7 +435,7 @@ static void on_timer(?&int ctx) { unsafe { g_fired = g_fired + 1; } }
 void t_comb_audio_timer() {
     unsafe {
         double hist[3];
-        safe_memset(&hist[0], 0, sizeof(double) * 3UL);
+        safe_memset(hist[0..3], 0);
         struct CombFF ff = CombFF::new(hist[0..3UL], 0.5);
         ASSERT_TRUE(near_d(ff.process(1.0), 1.0, 1e-12));
         ff.process(0.0);
@@ -481,7 +481,7 @@ void t_imaging_cqt_cwt_minphase() {
         int i = 0;
         while (i < 16) { img[i] = (double)i; i = i + 1; }
         double k[9];
-        safe_memset(&k[0], 0, sizeof(double) * 9UL);
+        safe_memset(k[0..9], 0);
         k[4] = 1.0;   // identity
         double out[16];
         conv2d(img[0..16UL], 4UL, 4UL, k[0..9UL], 3UL, 3UL, out[0..16UL]);

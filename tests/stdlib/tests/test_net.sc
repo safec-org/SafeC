@@ -144,8 +144,8 @@ void t_ipv6() {
         init_macs();
         struct Ipv6Addr a;
         struct Ipv6Addr b;
-        safe_memset((&Ipv6Addr)&a, 0, sizeof(struct Ipv6Addr));
-        safe_memset((&Ipv6Addr)&b, 0, sizeof(struct Ipv6Addr));
+        safe_memset_obj(&a, 0);
+        safe_memset_obj(&b, 0);
         ASSERT_TRUE(ipv6_addr_is_unspecified(&a));
         a.bytes[15] = (unsigned char)1;
         ASSERT_TRUE(ipv6_addr_is_loopback(&a));
@@ -195,7 +195,7 @@ void t_dns() {
         ans[6] = (unsigned char)0; ans[7] = (unsigned char)0; ans[8] = (unsigned char)0x0E; ans[9] = (unsigned char)0x10;
         ans[10] = (unsigned char)0; ans[11] = (unsigned char)4;
         ans[12] = (unsigned char)93; ans[13] = (unsigned char)184; ans[14] = (unsigned char)216; ans[15] = (unsigned char)34;
-        safe_memcpy(&pkt.data[end], &ans[0], 16UL);
+        safe_memcpy(pkt.data[end..end + 16UL], ans[0..16]);
         pkt.len = end + 16UL;
         unsigned int got = 0u;
         ASSERT_EQ(dns_parse_reply(&pkt, q, (unsigned short)0xBEEF, &got), 1);
@@ -208,10 +208,10 @@ void t_dhcp() {
     unsafe {
         init_macs();
         struct DhcpClient c;
-        safe_memset((&DhcpClient)&c, 0, sizeof(struct DhcpClient));
+        safe_memset_obj(&c, 0);
         c.state = DHCP_STATE_IDLE;
         c.xid = 0x12345678u;
-        safe_memcpy((&unsigned char)c.mac, (&unsigned char)MAC_A, 6UL);
+        safe_memcpy(c.mac[0..6], MAC_A[0..6]);
         struct PacketBuf pkt;
         pkt.reset();
         c.discover(&pkt, MAC_B);
@@ -239,7 +239,7 @@ void t_dhcp() {
         opts[15] = (unsigned char)51; opts[16] = (unsigned char)4;
         opts[17] = (unsigned char)0; opts[18] = (unsigned char)0; opts[19] = (unsigned char)0x0E; opts[20] = (unsigned char)0x10;
         opts[21] = (unsigned char)255;
-        safe_memcpy(&pkt.data[o], &opts[0], 22UL);
+        safe_memcpy(pkt.data[o..o + 22UL], opts[0..22]);
         pkt.len = o + 22UL;
         ASSERT_EQ(c.parse_reply(&pkt, d), DHCP_ACK);
         ASSERT_TRUE(c.is_bound());
@@ -294,7 +294,7 @@ void t_tcp() {
         ASSERT_EQ(hop(a, b, MAC_A, MAC_B), 1);    // data
         ASSERT_TRUE(b.rx_ready());
         unsigned char got[16];
-        safe_memset((&unsigned char)got, 0, 16UL);
+        safe_memset(got[..], 0);
         ASSERT_EQ(b.read(got[0..16]), 9);
         ASSERT_STR_EQ((const char*)got, "hello tcp");
         a.close();
@@ -371,8 +371,8 @@ void t_build_parse() {
 
         struct Ipv6Addr a;
         struct Ipv6Addr b;
-        safe_memset((&Ipv6Addr)&a, 0, sizeof(struct Ipv6Addr));
-        safe_memset((&Ipv6Addr)&b, 0, sizeof(struct Ipv6Addr));
+        safe_memset_obj(&a, 0);
+        safe_memset_obj(&b, 0);
         a.bytes[15] = (unsigned char)1;
         b.bytes[0] = (unsigned char)0x20; b.bytes[1] = (unsigned char)0x01;
         pkt.reset();

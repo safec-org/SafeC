@@ -268,7 +268,7 @@ int tls_pem_private_key_(const &char text, &Vec<unsigned char> der, &int kind) {
             found = 1;
         }
     }
-    mem_zero_secure(body.as_ptr(), body.length());
+    unsafe { mem_zero_secure_raw_((void*)body.as_ptr(), body.length()); }
     lab.free();
     body.free();
     return found;
@@ -368,7 +368,7 @@ void TlsConfig::free() {
     self.server_name.free();
     self.alpn.free();
     self.cert_pem.free();
-    mem_zero_secure(self.key_pem.as_ptr(), self.key_pem.length());
+    unsafe { mem_zero_secure_raw_((void*)self.key_pem.as_ptr(), self.key_pem.length()); }
     self.key_pem.free();
 }
 
@@ -397,7 +397,7 @@ void TlsServerConfig::set_alpn(const &char protocols) { self.alpn.clear(); self.
 
 void TlsServerConfig::free() {
     self.cert_pem.free();
-    mem_zero_secure(self.key_pem.as_ptr(), self.key_pem.length());
+    unsafe { mem_zero_secure_raw_((void*)self.key_pem.as_ptr(), self.key_pem.length()); }
     self.key_pem.free();
     self.alpn.free();
     self.client_ca_pem.free();

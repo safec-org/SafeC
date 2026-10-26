@@ -203,19 +203,19 @@ inline int String::push_str(&String other) {
 
 inline int String::push_int(long long v) {
     char buf[32];
-    unsafe { fmt_int((char*)buf, 32UL, v); }
+    fmt_int(buf[0..32], v);
     return self.push(&buf[0]);
 }
 
 inline int String::push_uint(unsigned long long v) {
     char buf[32];
-    unsafe { fmt_uint((char*)buf, 32UL, v); }
+    fmt_uint(buf[0..32], v);
     return self.push(&buf[0]);
 }
 
 inline int String::push_float(double v, int decimals) {
     char buf[64];
-    unsafe { fmt_float((char*)buf, 64UL, v, decimals); }
+    fmt_float(buf[0..64], v, decimals);
     return self.push(&buf[0]);
 }
 

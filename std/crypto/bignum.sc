@@ -307,9 +307,9 @@ int bn_mod_exp_secret(const &BnMont m, const &unsigned char base, unsigned long 
         }
     }
     bn_from_mont_out_(m, &acc[0], out);
-    mem_zero_secure(&table[0], sizeof(unsigned int) * (unsigned long)(16 * BN_LIMBS_MAX));
-    mem_zero_secure(&acc[0], sizeof(unsigned int) * (unsigned long)BN_LIMBS_MAX);
-    mem_zero_secure(&sel[0], sizeof(unsigned int) * (unsigned long)BN_LIMBS_MAX);
+    mem_zero_secure(table[0..(unsigned long)(16 * BN_LIMBS_MAX)]);
+    mem_zero_secure(acc[0..(unsigned long)BN_LIMBS_MAX]);
+    mem_zero_secure(sel[0..(unsigned long)BN_LIMBS_MAX]);
     return 1;
 }
 

@@ -69,8 +69,8 @@ static void cc_block_(const unsigned char* key, const unsigned char* nonce, unsi
     unsafe {
         while (i < 16) { cc_store32_(out + i * 4, x[i] + s[i]); i = i + 1; }
     }
-    mem_zero_secure(&s[0], 64UL);
-    mem_zero_secure(&x[0], 64UL);
+    mem_zero_secure(s[0..16]);
+    mem_zero_secure(x[0..16]);
 }
 
 void chacha20_block(const &unsigned char key, const &unsigned char nonce, unsigned int counter,
@@ -93,7 +93,7 @@ void chacha20_xor(const &unsigned char key, const &unsigned char nonce, unsigned
             counter = counter + 1U;
         }
     }
-    mem_zero_secure(&ks[0], 64UL);
+    mem_zero_secure(ks[0..64UL]);
 }
 
 // ── Poly1305 (RFC 8439 §2.5; 26-bit limbs, poly1305-donna's 32-bit form) ─────
@@ -261,7 +261,7 @@ void Poly1305::finish(&unsigned char tag) {
         cc_store32_(t + 8, w2);
         cc_store32_(t + 12, w3);
     }
-    mem_zero_secure(self, sizeof(struct Poly1305));
+    mem_zero_secure_obj(self);
 }
 
 void poly1305(const &unsigned char key, const ?&unsigned char msg, unsigned long len, &unsigned char tag) {
@@ -281,7 +281,7 @@ static void aead_tag_(const unsigned char* key, const unsigned char* nonce,
     unsigned char block0[64];
     unsafe { cc_block_(key, nonce, 0U, &block0[0]); }
     struct Poly1305 p = Poly1305::new(&block0[0]);
-    mem_zero_secure(&block0[0], 64UL);
+    mem_zero_secure(block0[0..64UL]);
     match (aad) {
         case some(a): { if (aad_len > 0UL) { p.update(a, aad_len); } }
         case null: { }
@@ -321,7 +321,7 @@ int chacha20_poly1305_open(const &unsigned char key, const &unsigned char nonce,
                   (const unsigned char*)data, len, &want[0]);
     }
     int good = ct_eq(&want[0], tag, 16UL);
-    mem_zero_secure(&want[0], 16UL);
+    mem_zero_secure(want[0..16UL]);
     if (!good) { return 0; }
     chacha20_xor(key, nonce, 1U, data, len);
     return 1;

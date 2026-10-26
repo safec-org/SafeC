@@ -33,7 +33,7 @@ static double alpha_sum(&GuiImage img) {
 }
 
 static void wipe(&GuiImage img) {
-    unsafe { safe_memset((void*)img.pixels, 0, (unsigned long)(img.width * img.height * 4)); }
+    unsafe { safe_memset(((unsigned char*)img.pixels)[0..(unsigned long)(img.width * img.height * 4)], 0); }
 }
 
 void t_rects() {

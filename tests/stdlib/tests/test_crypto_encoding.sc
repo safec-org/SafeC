@@ -306,7 +306,7 @@ void t_rng_kat() {
         q.init_seed(seed);
         unsigned char all[116];
         q.fill(&all[0], 116UL);
-        ASSERT_EQ(safe_memcmp(&buf[0], &all[16], 100UL), 0);
+        ASSERT_EQ(safe_memcmp(buf[..], all[16..116]), 0);
         ASSERT_EQ(r.rand_range(1UL), 0);
     }
 }
@@ -459,11 +459,12 @@ void t_tls_record() {
         while (round < 3) {
             n = a.encode_record((unsigned char)TLS_APPLICATION_DATA, (const unsigned char*)"secret data", 11UL, &out[0], 256UL);
             ASSERT_EQ(n, 5UL + 11UL + 1UL + 16UL);
-            if (round == 0) { ASSERT_EQ(safe_memcmp(&out[0], &kTlsRecord[0], 33UL), 0); }   // RFC 8446 wire format
+            if (round == 0) { ASSERT_EQ(safe_memcmp(out[0..33], kTlsRecord[0..33]), 0); }   // RFC 8446 wire format
             ASSERT_EQ(out[0], TLS_APPLICATION_DATA);
             ASSERT_EQ(b.decode_record(&out[0], n, &ct, &got[0], 256UL), 11);
             ASSERT_EQ(ct, TLS_APPLICATION_DATA);
-            ASSERT_EQ(safe_memcmp((const &unsigned char)&got[0], (const &unsigned char)"secret data", 11UL), 0);
+            []const unsigned char want = str_bytes("secret data");
+            ASSERT_EQ(safe_memcmp(got[0..11], want), 0);
             round = round + 1;
         }
         // A tampered record fails authentication and doesn't advance read_seq.
@@ -516,7 +517,7 @@ void t_crypto_misc() {
         ASSERT_EQ(sa.available(), 4);
         ?&heap void p = sa.alloc(32UL, 8UL);
         ASSERT_FALSE(p.is_null());
-        match (p) { case null: { } case some(r): { safe_memset((&unsigned char)r, 0x5A, 32UL); } }
+        match (p) { case null: { } case some(r): { unsafe { safe_memset(((unsigned char*)r)[0..32], 0x5A); } } }
         ASSERT_EQ(sa.available(), 3);
         sa.dealloc(p);
         ASSERT_EQ(sa.available(), 4);

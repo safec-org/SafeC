@@ -884,8 +884,8 @@ static void t13_handshake_secrets_(&T13_ t, const unsigned char* shared, unsigne
         t13_expand_label_(t.hash, &hs[0], t.hlen, "derived", &empty_hash[0], t.hlen, &derived[0], t.hlen);
         t13_extract_(t.hash, &derived[0], t.hlen, &zeros[0], t.hlen, (unsigned char*)&t.master[0]);
     }
-    mem_zero_secure(&hs[0], 48UL);
-    mem_zero_secure(&early[0], 48UL);
+    mem_zero_secure(hs[0..48UL]);
+    mem_zero_secure(early[0..48UL]);
 }
 
 // c_ap / s_ap from the transcript through the server Finished.
@@ -907,7 +907,7 @@ static void t13_finished_(&T13_ t, const unsigned char* base, unsigned char* out
     }
     t13_tr_hash_(t, &th[0]);
     t13_hmac_(t.hash, &fk[0], t.hlen, &th[0], t.hlen, out);
-    mem_zero_secure(&fk[0], 48UL);
+    mem_zero_secure(fk[0..48UL]);
 }
 
 static void t13_put_finished_(&T13_ t, const unsigned char* base, &Vec<unsigned char> msg) {
@@ -1109,8 +1109,8 @@ static int t13_on_server_hello_(&TlsStream s, &T13_ t, &T13Rd_ r, const unsigned
     unsigned long sl = t13_shared_(t, group, key, keyLen, &shared[0]);
     if (sl == 0UL) { return t13_fail_(s, TLS_ERR_HANDSHAKE, T13_A_ILLEGAL_PARAM_, "invalid server key share"); }
     t13_handshake_secrets_(t, &shared[0], sl);
-    mem_zero_secure(&shared[0], 64UL);
-    mem_zero_secure(&t.x_priv[0], 32UL);
+    mem_zero_secure(shared[0..64UL]);
+    mem_zero_secure(t.x_priv[0..32UL]);
     t13_set_read_(t, &t.s_hs[0]);
     t.st = T13_C_WAIT_EE_;
     return 0;
@@ -1431,7 +1431,7 @@ static int t13_on_client_hello_(&TlsStream s, &T13_ t, &T13Rd_ r, const unsigned
         t13_queue_record_(t, (unsigned int)T13_CT_CCS_, &ccs, 1UL, 1);
     }
     t13_handshake_secrets_(t, &shared[0], sl);
-    mem_zero_secure(&shared[0], 64UL);
+    mem_zero_secure(shared[0..64UL]);
     t13_set_write_(t, &t.s_hs[0]);
     t13_set_read_(t, &t.c_hs[0]);
     // EncryptedExtensions
@@ -1547,7 +1547,7 @@ static int t13_post_hs_(&TlsStream s, &T13_ t, unsigned int type, &T13Rd_ r) {
             unsafe { t13_expand_label_(t.hash, (const unsigned char*)&t.wr_secret[0], t.hlen, "traffic upd", (const unsigned char*)0, 0UL, &next[0], t.hlen); }
             t13_set_write_(t, &next[0]);
         }
-        mem_zero_secure(&next[0], 48UL);
+        mem_zero_secure(next[0..48UL]);
         return 0;
     }
     return t13_fail_(s, TLS_ERR_PROTOCOL, T13_A_UNEXPECTED_, "unexpected post-handshake message");
@@ -1906,7 +1906,7 @@ void tls_safec_free_(&TlsStream s) {
         tls_der_list_free_(&t.peer_chain);
         t.cr_context.free();
         if (t.acc != (struct T13Acc_*)0) { t13_acc_unref_(t.acc); }
-        mem_zero_secure((void*)tp, sizeof(struct T13_));
+        mem_zero_secure_raw_((void*)tp, sizeof(struct T13_));
         dealloc_raw_((void*)tp);
     }
     s.impl_ = null;

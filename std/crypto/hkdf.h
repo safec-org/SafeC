@@ -34,7 +34,7 @@ void hkdf_extract(H fresh, const ?&unsigned char salt, unsigned long salt_len,
     }
     m.update(ikm, ikm_len);
     m.finish(prk);
-    mem_zero_secure(&m, sizeof(struct Hmac<H>));
+    mem_zero_secure_obj(&m);
 }
 
 // OKM = T(1) || T(2) || ... truncated to out_len bytes, T(i) =
@@ -59,7 +59,7 @@ int hkdf_expand(H fresh, const &unsigned char prk, unsigned long prk_len,
         }
         m.update(&counter, 1UL);
         m.finish(&t[0]);
-        mem_zero_secure(&m, sizeof(struct Hmac<H>));
+        mem_zero_secure_obj(&m);
         tlen = hl;
         unsigned long n = out_len - done < hl ? out_len - done : hl;
         unsafe {
@@ -70,7 +70,7 @@ int hkdf_expand(H fresh, const &unsigned char prk, unsigned long prk_len,
         done = done + n;
         counter = (unsigned char)(counter + (unsigned char)1);
     }
-    mem_zero_secure(&t[0], (unsigned long)HMAC_MAX_DIGEST_);
+    mem_zero_secure(t[0..(unsigned long)HMAC_MAX_DIGEST_]);
     return 1;
 }
 

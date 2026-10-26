@@ -186,7 +186,7 @@ int RsaPrivateKey::init_der(const &unsigned char der, unsigned long len) {
 }
 
 void RsaPrivateKey::destroy() {
-    mem_zero_secure(&self.d[0], (unsigned long)RSA_MAX_BYTES);
+    mem_zero_secure(self.d[0..(unsigned long)RSA_MAX_BYTES]);
     self.d_len = 0UL;
 }
 

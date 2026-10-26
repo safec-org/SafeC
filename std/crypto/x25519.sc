@@ -64,8 +64,8 @@ static void fe_pack_(&unsigned char out, const &Fe25519_ n) {
             i = i + 1;
         }
     }
-    mem_zero_secure(&t, sizeof(struct Fe25519_));
-    mem_zero_secure(&m, sizeof(struct Fe25519_));
+    mem_zero_secure_obj(&t);
+    mem_zero_secure_obj(&m);
 }
 
 static void fe_unpack_(&Fe25519_ o, const &unsigned char n) {
@@ -185,13 +185,13 @@ static void x25519_raw_(&unsigned char q, const &unsigned char n, const &unsigne
     struct Fe25519_ res;
     fe_mul_(&res, &a, &ci);
     fe_pack_(q, &res);
-    mem_zero_secure(&z[0], 32UL);
-    mem_zero_secure(&a, sizeof(struct Fe25519_));
-    mem_zero_secure(&b, sizeof(struct Fe25519_));
-    mem_zero_secure(&c, sizeof(struct Fe25519_));
-    mem_zero_secure(&d, sizeof(struct Fe25519_));
-    mem_zero_secure(&e, sizeof(struct Fe25519_));
-    mem_zero_secure(&f, sizeof(struct Fe25519_));
+    mem_zero_secure(z[0..32UL]);
+    mem_zero_secure_obj(&a);
+    mem_zero_secure_obj(&b);
+    mem_zero_secure_obj(&c);
+    mem_zero_secure_obj(&d);
+    mem_zero_secure_obj(&e);
+    mem_zero_secure_obj(&f);
 }
 
 int x25519(&unsigned char out, const &unsigned char scalar, const &unsigned char point) {

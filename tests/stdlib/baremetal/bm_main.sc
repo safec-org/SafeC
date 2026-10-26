@@ -75,9 +75,9 @@ static void t_core() {
     CHECK(std::char_to_upper('q') == 'Q');
     unsafe {
         char buf[32];
-        std::fmt_int(buf, 32UL, -9223372036854775807LL);
+        std::fmt_int(buf[0..32], -9223372036854775807LL);
         CHECK(str_is(buf, "-9223372036854775807"));
-        std::fmt_hex(buf, 32UL, 0xDEADBEEFCAFEULL);
+        std::fmt_hex(buf[0..32], 0xDEADBEEFCAFEULL);
         CHECK(std::str_find(buf, "deadbeefcafe") != null);
         int ok = 0;
         CHECK(std::str_to_int("-123456789012", &ok) == -123456789012LL);

@@ -348,7 +348,7 @@ static void on_change(&Widget w, ?&int counter) {
 
 static struct GuiEvent mouse(int kind, double x, double y) {
     struct GuiEvent e;
-    unsafe { safe_memset(&e, 0, sizeof(struct GuiEvent)); }
+    safe_memset_obj(&e, 0);
     e.kind = kind;
     e.x = x;
     e.y = y;
