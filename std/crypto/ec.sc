@@ -342,7 +342,7 @@ static void ec_encode_pub_(const &EcCurve_ c, const unsigned char* x, const unsi
     }
 }
 
-int ec_public_key(int curve, const &unsigned char priv, &unsigned char pub) {
+int ec_public_key_n_(int curve, const &unsigned char priv, &unsigned char pub) {
     struct EcCurve_ c;
     if (!ec_curve_(curve, &c)) { return 0; }
     unsigned char x[EC_MAX_SCALAR];
@@ -359,26 +359,44 @@ int ec_public_key(int curve, const &unsigned char priv, &unsigned char pub) {
     return 1;
 }
 
-int ec_keygen(int curve, &RngCtx rng, &unsigned char priv, &unsigned char pub) {
+int ec_public_key(int curve, []const unsigned char priv_s, []unsigned char pub_s) {
+    const &unsigned char priv = crypto_in_(priv_s, ec_scalar_size(curve));
+    &unsigned char pub = crypto_out_(pub_s, ec_point_size(curve));
+    return ec_public_key_n_(curve, priv, pub);
+}
+
+int ec_keygen_n_(int curve, &RngCtx rng, &unsigned char priv, &unsigned char pub) {
     struct EcCurve_ c;
     if (!ec_curve_(curve, &c)) { return 0; }
     int tries = 0;
     while (tries < 64) {
-        rng.fill(priv, c.sz);
-        unsafe { if (ec_scalar_ok_(&c, (const unsigned char*)priv)) { return ec_public_key(curve, priv, pub); } }
+        rng.fill_n_(priv, c.sz);
+        unsafe { if (ec_scalar_ok_(&c, (const unsigned char*)priv)) { return ec_public_key_n_(curve, priv, pub); } }
         tries = tries + 1;
     }
     return 0;
 }
 
-int ec_point_valid(int curve, const &unsigned char pub, unsigned long len) {
+int ec_keygen(int curve, &RngCtx rng, []unsigned char priv_s, []unsigned char pub_s) {
+    &unsigned char priv = crypto_out_(priv_s, ec_scalar_size(curve));
+    &unsigned char pub = crypto_out_(pub_s, ec_point_size(curve));
+    return ec_keygen_n_(curve, rng, priv, pub);
+}
+
+int ec_point_valid_n_(int curve, const &unsigned char pub, unsigned long len) {
     struct EcCurve_ c;
     if (!ec_curve_(curve, &c)) { return 0; }
     struct EcPt_ P;
     unsafe { return ec_pt_decode_(&c, &P, (const unsigned char*)pub, len); }
 }
 
-int ecdh_shared(int curve, const &unsigned char priv, const &unsigned char peer, unsigned long peer_len,
+int ec_point_valid(int curve, []const unsigned char pub_s) {
+    unsigned long len = pub_s.len;
+    const &unsigned char pub = crypto_in_(pub_s, 0UL);
+    return ec_point_valid_n_(curve, pub, len);
+}
+
+int ecdh_shared_n_(int curve, const &unsigned char priv, const &unsigned char peer, unsigned long peer_len,
                 &unsigned char out) {
     struct EcCurve_ c;
     if (!ec_curve_(curve, &c)) { return 0; }
@@ -390,6 +408,14 @@ int ecdh_shared(int curve, const &unsigned char priv, const &unsigned char peer,
         ec_pt_mul_(&c, &r, &P, (const unsigned char*)priv);
         return ec_pt_affine_(&c, &r, (unsigned char*)out, (unsigned char*)0);
     }
+}
+
+int ecdh_shared(int curve, []const unsigned char priv_s, []const unsigned char peer_s, []unsigned char out_s) {
+    const &unsigned char priv = crypto_in_(priv_s, ec_scalar_size(curve));
+    unsigned long peer_len = peer_s.len;
+    const &unsigned char peer = crypto_in_(peer_s, 0UL);
+    &unsigned char out = crypto_out_(out_s, ec_scalar_size(curve));
+    return ecdh_shared_n_(curve, priv, peer, peer_len, out);
 }
 
 // ── ECDSA ─────────────────────────────────────────────────────────────────────
@@ -438,7 +464,7 @@ static void ec_q_inv_(const &EcCurve_ c, unsigned int* r, const unsigned int* a)
     }
 }
 
-int ecdsa_verify(int curve, const &unsigned char pub, unsigned long pub_len,
+int ecdsa_verify_n_(int curve, const &unsigned char pub, unsigned long pub_len,
                  const &unsigned char hash, unsigned long hash_len,
                  const &unsigned char r, const &unsigned char s) {
     struct EcCurve_ c;
@@ -480,6 +506,16 @@ int ecdsa_verify(int curve, const &unsigned char pub, unsigned long pub_len,
     }
 }
 
+int ecdsa_verify(int curve, []const unsigned char pub_s, []const unsigned char hash_s, []const unsigned char r_s, []const unsigned char s_s) {
+    unsigned long pub_len = pub_s.len;
+    const &unsigned char pub = crypto_in_(pub_s, 0UL);
+    unsigned long hash_len = hash_s.len;
+    const &unsigned char hash = crypto_in_(hash_s, 0UL);
+    const &unsigned char r = crypto_in_(r_s, ec_scalar_size(curve));
+    const &unsigned char s = crypto_in_(s_s, ec_scalar_size(curve));
+    return ecdsa_verify_n_(curve, pub, pub_len, hash, hash_len, r, s);
+}
+
 // INTEGER magnitude into a fixed sz-byte big-endian buffer.
 static int ec_der_int_(&Asn1_ in, unsigned char* out, unsigned long sz) {
     struct Asn1_ m;
@@ -494,7 +530,7 @@ static int ec_der_int_(&Asn1_ in, unsigned char* out, unsigned long sz) {
     return 1;
 }
 
-int ecdsa_verify_der(int curve, const &unsigned char pub, unsigned long pub_len,
+int ecdsa_verify_der_n_(int curve, const &unsigned char pub, unsigned long pub_len,
                      const &unsigned char hash, unsigned long hash_len,
                      const &unsigned char sig, unsigned long sig_len) {
     unsigned long sz = ec_scalar_size(curve);
@@ -508,7 +544,17 @@ int ecdsa_verify_der(int curve, const &unsigned char pub, unsigned long pub_len,
         if (!asn1_get_(&in, (unsigned char)ASN1_TAG_SEQUENCE, &seq) || in.len != 0UL) { return 0; }
         if (!ec_der_int_(&seq, &r[0], sz) || !ec_der_int_(&seq, &s[0], sz) || seq.len != 0UL) { return 0; }
     }
-    return ecdsa_verify(curve, pub, pub_len, hash, hash_len, &r[0], &s[0]);
+    return ecdsa_verify_n_(curve, pub, pub_len, hash, hash_len, &r[0], &s[0]);
+}
+
+int ecdsa_verify_der(int curve, []const unsigned char pub_s, []const unsigned char hash_s, []const unsigned char sig_s) {
+    unsigned long pub_len = pub_s.len;
+    const &unsigned char pub = crypto_in_(pub_s, 0UL);
+    unsigned long hash_len = hash_s.len;
+    const &unsigned char hash = crypto_in_(hash_s, 0UL);
+    unsigned long sig_len = sig_s.len;
+    const &unsigned char sig = crypto_in_(sig_s, 0UL);
+    return ecdsa_verify_der_n_(curve, pub, pub_len, hash, hash_len, sig, sig_len);
 }
 
 // RFC 6979 §3.2 nonce generation with HMAC over H, for the private key x
@@ -524,25 +570,25 @@ static int ec_rfc6979_(H fresh, const &EcCurve_ c, const unsigned char* x, const
     int round = 0;
     unsafe {
         while (round < 2) {
-            struct Hmac<H> m = Hmac::new(fresh, &K[0], hl);
-            m.update(&V[0], hl);
+            struct Hmac<H> m = Hmac::new(fresh, K[0..hl]);
+            m.update(V[0..hl]);
             sep = (unsigned char)round;
-            m.update(&sep, 1UL);
-            m.update((const &unsigned char)x, c.sz);
-            m.update((const &unsigned char)h1, c.sz);
-            m.finish(&K[0]);
-            m = Hmac::new(fresh, &K[0], hl);
-            m.update(&V[0], hl);
-            m.finish(&V[0]);
+            m.update(((const unsigned char*)&sep)[0..1]);
+            m.update(x[0..c.sz]);
+            m.update(h1[0..c.sz]);
+            m.finish(K[..]);
+            m = Hmac::new(fresh, K[0..hl]);
+            m.update(V[0..hl]);
+            m.finish(V[..]);
             round = round + 1;
         }
         int tries = 0;
         while (tries < 64) {
             unsigned long tlen = 0UL;
             while (tlen < c.sz) {
-                struct Hmac<H> m = Hmac::new(fresh, &K[0], hl);
-                m.update(&V[0], hl);
-                m.finish(&V[0]);
+                struct Hmac<H> m = Hmac::new(fresh, K[0..hl]);
+                m.update(V[0..hl]);
+                m.finish(V[..]);
                 unsigned long j = 0UL;
                 while (j < hl && tlen < c.sz) { k[tlen] = V[j]; tlen = tlen + 1UL; j = j + 1UL; }
             }
@@ -550,14 +596,14 @@ static int ec_rfc6979_(H fresh, const &EcCurve_ c, const unsigned char* x, const
                 mem_zero_secure(K[0..64UL]);
                 return 1;
             }
-            struct Hmac<H> m2 = Hmac::new(fresh, &K[0], hl);
-            m2.update(&V[0], hl);
+            struct Hmac<H> m2 = Hmac::new(fresh, K[0..hl]);
+            m2.update(V[0..hl]);
             sep = (unsigned char)0;
-            m2.update(&sep, 1UL);
-            m2.finish(&K[0]);
-            m2 = Hmac::new(fresh, &K[0], hl);
-            m2.update(&V[0], hl);
-            m2.finish(&V[0]);
+            m2.update(((const unsigned char*)&sep)[0..1]);
+            m2.finish(K[..]);
+            m2 = Hmac::new(fresh, K[0..hl]);
+            m2.update(V[0..hl]);
+            m2.finish(V[..]);
             tries = tries + 1;
         }
     }
@@ -581,7 +627,7 @@ static unsigned long ec_put_int_(unsigned char* out, const unsigned char* v, uns
     }
 }
 
-int ecdsa_sign_der(int curve, const &unsigned char priv, const &unsigned char hash, unsigned long hash_len,
+int ecdsa_sign_der_n_(int curve, const &unsigned char priv, const &unsigned char hash, unsigned long hash_len,
                    &unsigned char sig, unsigned long sig_cap, &unsigned long sig_len) {
     struct EcCurve_ c;
     if (!ec_curve_(curve, &c)) { return 0; }
@@ -648,6 +694,15 @@ int ecdsa_sign_der(int curve, const &unsigned char priv, const &unsigned char ha
     return good;
 }
 
+int ecdsa_sign_der(int curve, []const unsigned char priv_s, []const unsigned char hash_s, []unsigned char sig_s, &unsigned long sig_len) {
+    const &unsigned char priv = crypto_in_(priv_s, ec_scalar_size(curve));
+    unsigned long hash_len = hash_s.len;
+    const &unsigned char hash = crypto_in_(hash_s, 0UL);
+    unsigned long sig_cap = sig_s.len;
+    &unsigned char sig = crypto_out_(sig_s, 0UL);
+    return ecdsa_sign_der_n_(curve, priv, hash, hash_len, sig, sig_cap, sig_len);
+}
+
 // ── Private keys (RFC 5915 / PKCS#8) ──────────────────────────────────────────
 
 static int ec_curve_of_oid_(const &Asn1_ oid) {
@@ -682,12 +737,12 @@ static int ec_parse_sec1_(&EcPrivateKey k, struct Asn1_ in, int curve) {
         i = 0UL;
         while (i < d.len) { k.d[sz - d.len + i] = d.p[i]; i = i + 1UL; }
     }
-    if (!ec_public_key(curve, &k.d[0], &k.pub[0])) { return 0; }
+    if (!ec_public_key_n_(curve, &k.d[0], &k.pub[0])) { return 0; }
     k.pub_len = ec_point_size(curve);
     return 1;
 }
 
-int EcPrivateKey::init_der(const &unsigned char der, unsigned long len) {
+int EcPrivateKey::init_der_n_(const &unsigned char der, unsigned long len) {
     struct Asn1_ in;
     unsafe { in = asn1_view_((const unsigned char*)der, len); }
     struct Asn1_ probe = in;
@@ -709,6 +764,12 @@ int EcPrivateKey::init_der(const &unsigned char der, unsigned long len) {
     if (curve == 0) { return 0; }
     if (!asn1_get_(&seq, (unsigned char)ASN1_TAG_OCTET_STRING, &inner)) { return 0; }
     return ec_parse_sec1_(self, inner, curve);
+}
+
+int EcPrivateKey::init_der([]const unsigned char der_s) {
+    unsigned long len = der_s.len;
+    const &unsigned char der = crypto_in_(der_s, 0UL);
+    return self.init_der_n_(der, len);
 }
 
 void EcPrivateKey::destroy() {

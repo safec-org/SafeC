@@ -2,6 +2,7 @@
 // Parses the minimum fields needed for TLS: subject, issuer, validity, public key, SAN.
 // Freestanding-safe; no dynamic allocation.
 #pragma once
+#include <std/crypto/buf.h>
 
 #define X509_MAX_NAME_LEN   128
 #define X509_MAX_SAN        8
@@ -56,7 +57,9 @@ struct X509Cert {
     // Parse a DER-encoded certificate from `der` (len bytes) into this
     // struct in place (zeroed first).  Returns 0 on success, negative on
     // error.
-    int  init(const &unsigned char der, unsigned long len);
+    int  init([]const unsigned char der_ref);
+    // internal: the (reference, length) core of init()
+    int  init_n_(const &unsigned char der, unsigned long len);
 
     // Does this certificate's issuer name match `issuer_cert`'s subject?
     // A structural check only: X509Cert keeps no signature. Verify
@@ -134,16 +137,22 @@ struct X509Parsed {
 };
 
 // Parses a DER certificate. 0 on success, X509_ERR_* otherwise.
-int x509_parse(const &unsigned char der, unsigned long len, &X509Parsed out);
+int x509_parse([]const unsigned char der, &X509Parsed out);
+// internal: the (reference, length) core of x509_parse()
+int x509_parse_n_(const &unsigned char der, unsigned long len, &X509Parsed out);
 
 // 1 if the signature on cert (der/c) verifies with issuer's public key
 // (issuer_der/issuer); 0 otherwise (bad signature, unsupported algorithm,
 // SHA-1, or an RSA key under 1024 bits).
-int x509_verify_signed_by(const &unsigned char der, const &X509Parsed c,
+int x509_verify_signed_by([]const unsigned char der, const &X509Parsed c, []const unsigned char issuer_der, const &X509Parsed issuer);
+// internal: the (reference, length) core of x509_verify_signed_by()
+int x509_verify_signed_by_n_(const &unsigned char der, const &X509Parsed c,
                           const &unsigned char issuer_der, const &X509Parsed issuer);
 
 // 1 if cert's issuer name is byte-for-byte issuer's subject name.
-int x509_issued_by(const &unsigned char der, const &X509Parsed c,
+int x509_issued_by([]const unsigned char der, const &X509Parsed c, []const unsigned char issuer_der, const &X509Parsed issuer);
+// internal: the (reference, length) core of x509_issued_by()
+int x509_issued_by_n_(const &unsigned char der, const &X509Parsed c,
                    const &unsigned char issuer_der, const &X509Parsed issuer);
 
 // 1 if 'host' (a DNS name, or an IPv4/IPv6 literal) matches the
@@ -152,6 +161,8 @@ int x509_issued_by(const &unsigned char der, const &X509Parsed c,
 // public-suffix-like two-label pattern), IP literals against iPAddress
 // SANs; the subject CN is consulted only when the certificate has no DNS
 // or IP SAN at all.
-int x509_match_host(const &unsigned char der, const &X509Parsed c, const &char host);
+int x509_match_host([]const unsigned char der, const &X509Parsed c, const &char host);
+// internal: the (reference, length) core of x509_match_host()
+int x509_match_host_n_(const &unsigned char der, const &X509Parsed c, const &char host);
 
 } // namespace std

@@ -196,22 +196,21 @@ static void t_crypto() {
     unsafe {
         unsigned char d[64];
         char h[160];
-        std::sha256((const unsigned char*)"abc", 3UL, d);
+        std::sha256(str_bytes("abc"), d[..]);
         hex(d, 32UL, h);
         CHECK(str_is(h, "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"));
-        std::sha512((const unsigned char*)"abc", 3UL, d);
+        std::sha512(str_bytes("abc"), d[..]);
         hex(d, 64UL, h);
         CHECK(str_is(h, "ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f"));
-        std::hmac_sha256((const unsigned char*)"Jefe", 4UL,
-                         (const unsigned char*)"what do ya want for nothing?", 28UL, (unsigned char*)d);
+        std::hmac_sha256(str_bytes("Jefe"), str_bytes("what do ya want for nothing?"), d[..]);
         hex(d, 32UL, h);
         CHECK(str_is(h, "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843"));
         unsigned char key[16];
         unsigned char blk[16];
         int i = 0;
         while (i < 16) { key[i] = (unsigned char)i; blk[i] = (unsigned char)(i * 17); i = i + 1; }
-        struct AesCtx c = std::AesCtx::new_128(key);
-        c.encrypt_block(blk);
+        struct AesCtx c = std::AesCtx::new_128(key[..]);
+        c.encrypt_block(blk[..]);
         hex(blk, 16UL, h);
         CHECK(str_is(h, "69c4e0d86a7b0430d8cdb78070b4c55a"));
 

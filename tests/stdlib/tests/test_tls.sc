@@ -130,14 +130,14 @@ void t_rfc8448() {
         unsigned char zeros[32]; unsigned char early[32]; unsigned char empty[32]; unsigned char derived[32];
         unsigned char hs[32]; unsigned char th[32]; unsigned char t[32];
         int i = 0; while (i < 32) { zeros[i] = (unsigned char)0; i = i + 1; }
-        hkdf_extract(Sha256Ctx::new(), null, 0UL, zeros, 32UL, early);
+        hkdf_extract(Sha256Ctx::new(), str_bytes(""), ((const unsigned char*)zeros)[0..32UL], early[..]);
         hx(early, 32UL, h);
         ASSERT_STR_EQ(h, "33ad0a1c607ec03b09e6cd9893680ce210adf300aa1f2660e1b22e10f170f92a");
-        sha256((const unsigned char*)"", 0UL, empty);
+        sha256(str_bytes(""), empty[..]);
         tls13_expand_label_(DIGEST_SHA256, early, 32UL, "derived", empty, 32UL, derived, 32UL);
         hx(derived, 32UL, h);
         ASSERT_STR_EQ(h, "6f2615a108c702c5678f54fc9dbab69716c076189c48250cebeac3576c3611ba");
-        hkdf_extract(Sha256Ctx::new(), derived, 32UL, shared, 32UL, hs);
+        hkdf_extract(Sha256Ctx::new(), ((const unsigned char*)derived)[0..32UL], ((const unsigned char*)shared)[0..32UL], hs[..]);
         hx(hs, 32UL, h);
         ASSERT_STR_EQ(h, "1dc826e93606aa6fdc0aadc12f741b01046aa6b99f691ed221a9f0ca043fbeac");
         // Transcript-Hash(ClientHello, ServerHello) from the trace.
@@ -150,7 +150,7 @@ void t_rfc8448() {
         ASSERT_STR_EQ(h, "b67b7d690cc16c4e75e54213cb2d37b4e9c912bcded9105d42befd59d391ad38");
         tls13_expand_label_(DIGEST_SHA256, hs, 32UL, "derived", empty, 32UL, derived, 32UL);
         unsigned char master[32];
-        hkdf_extract(Sha256Ctx::new(), derived, 32UL, zeros, 32UL, master);
+        hkdf_extract(Sha256Ctx::new(), ((const unsigned char*)derived)[0..32UL], ((const unsigned char*)zeros)[0..32UL], master[..]);
         hx(master, 32UL, h);
         ASSERT_STR_EQ(h, "18df06843d13a08bf2a449844c5f8a478001bc4d4c627984d5a41da8d0402919");
         // The server handshake traffic key and IV (AES-128-GCM).
@@ -181,10 +181,10 @@ void t_x509() {
         struct X509Parsed ica;
         &Vec<unsigned char> l = c.at(0UL);
         &Vec<unsigned char> i = c.at(1UL);
-        const &unsigned char ld = (const &unsigned char)(const unsigned char*)l.data;
-        const &unsigned char id = (const &unsigned char)(const unsigned char*)i.data;
-        ASSERT_EQ(x509_parse(ld, l.len, &leaf), 0);
-        ASSERT_EQ(x509_parse(id, i.len, &ica), 0);
+        []const unsigned char ld = ((const unsigned char*)l.data)[0..l.len];
+        []const unsigned char id = ((const unsigned char*)i.data)[0..i.len];
+        ASSERT_EQ(x509_parse(ld[0..l.len], &leaf), 0);
+        ASSERT_EQ(x509_parse(id[0..i.len], &ica), 0);
         ASSERT_EQ(leaf.key_type, X509_KEY_EC_P256);
         ASSERT_EQ(leaf.sig_type, X509_SIG_ECDSA);
         ASSERT_EQ(leaf.sig_hash, DIGEST_SHA384);
@@ -195,24 +195,24 @@ void t_x509() {
         ASSERT_TRUE(leaf.has_eku && leaf.eku_server && !leaf.eku_client);
         ASSERT_TRUE((leaf.key_usage & X509_KU_DIGITAL_SIGNATURE) != 0);
         ASSERT_TRUE(leaf.not_after > 4000000000ULL);   // ~2122: GeneralizedTime
-        ASSERT_EQ(x509_issued_by(ld, &leaf, id, &ica), 1);
-        ASSERT_EQ(x509_verify_signed_by(ld, &leaf, id, &ica), 1);
-        ASSERT_EQ(x509_verify_signed_by(id, &ica, ld, &leaf), 0);
+        ASSERT_EQ(x509_issued_by(ld[..], &leaf, id[..], &ica), 1);
+        ASSERT_EQ(x509_verify_signed_by(ld[..], &leaf, id[..], &ica), 1);
+        ASSERT_EQ(x509_verify_signed_by(id[..], &ica, ld[..], &leaf), 0);
         // host names: SAN DNS (exact, wildcard), IPv4, IPv6; no CN fallback with SANs
-        ASSERT_EQ(x509_match_host(ld, &leaf, "localhost"), 1);
-        ASSERT_EQ(x509_match_host(ld, &leaf, "LocalHost."), 1);
-        ASSERT_EQ(x509_match_host(ld, &leaf, "a.test.example"), 1);
-        ASSERT_EQ(x509_match_host(ld, &leaf, "a.b.test.example"), 0);
-        ASSERT_EQ(x509_match_host(ld, &leaf, "test.example"), 0);
-        ASSERT_EQ(x509_match_host(ld, &leaf, "127.0.0.1"), 1);
-        ASSERT_EQ(x509_match_host(ld, &leaf, "127.0.0.2"), 0);
-        ASSERT_EQ(x509_match_host(ld, &leaf, "::1"), 1);
-        ASSERT_EQ(x509_match_host(ld, &leaf, "[0:0::1]"), 1);
-        ASSERT_EQ(x509_match_host(ld, &leaf, "::2"), 0);
-        ASSERT_EQ(x509_match_host(ld, &leaf, "example.com"), 0);
+        ASSERT_EQ(x509_match_host(ld[..], &leaf, "localhost"), 1);
+        ASSERT_EQ(x509_match_host(ld[..], &leaf, "LocalHost."), 1);
+        ASSERT_EQ(x509_match_host(ld[..], &leaf, "a.test.example"), 1);
+        ASSERT_EQ(x509_match_host(ld[..], &leaf, "a.b.test.example"), 0);
+        ASSERT_EQ(x509_match_host(ld[..], &leaf, "test.example"), 0);
+        ASSERT_EQ(x509_match_host(ld[..], &leaf, "127.0.0.1"), 1);
+        ASSERT_EQ(x509_match_host(ld[..], &leaf, "127.0.0.2"), 0);
+        ASSERT_EQ(x509_match_host(ld[..], &leaf, "::1"), 1);
+        ASSERT_EQ(x509_match_host(ld[..], &leaf, "[0:0::1]"), 1);
+        ASSERT_EQ(x509_match_host(ld[..], &leaf, "::2"), 0);
+        ASSERT_EQ(x509_match_host(ld[..], &leaf, "example.com"), 0);
         // the X509Cert summary works on the same bytes
         struct X509Cert sum;
-        ASSERT_EQ(sum.init(ld, l.len), 0);
+        ASSERT_EQ(sum.init(ld[0..l.len]), 0);
         ASSERT_STR_EQ(sum.subject.cn, "localhost");
         ASSERT_STR_EQ(sum.issuer.cn, "SafeC Test Intermediate");
         // RSA-PSS signed leaf
@@ -224,22 +224,22 @@ void t_x509() {
         &Vec<unsigned char> rr = root.at(0UL);
         struct X509Parsed rp;
         struct X509Parsed rootp;
-        const &unsigned char rld = (const &unsigned char)(const unsigned char*)rl.data;
-        const &unsigned char rrd = (const &unsigned char)(const unsigned char*)rr.data;
-        ASSERT_EQ(x509_parse(rld, rl.len, &rp), 0);
-        ASSERT_EQ(x509_parse(rrd, rr.len, &rootp), 0);
+        []const unsigned char rld = ((const unsigned char*)rl.data)[0..rl.len];
+        []const unsigned char rrd = ((const unsigned char*)rr.data)[0..rr.len];
+        ASSERT_EQ(x509_parse(rld[0..rl.len], &rp), 0);
+        ASSERT_EQ(x509_parse(rrd[0..rr.len], &rootp), 0);
         ASSERT_EQ(rp.sig_type, X509_SIG_RSA_PSS);
         ASSERT_EQ(rp.sig_hash, DIGEST_SHA256);
         ASSERT_EQ(rp.pss_salt, 32);
         ASSERT_EQ(rp.key_type, X509_KEY_RSA);
-        ASSERT_EQ(x509_verify_signed_by(rld, &rp, rrd, &rootp), 1);
-        ASSERT_EQ(x509_verify_signed_by(id, &ica, rrd, &rootp), 1);
+        ASSERT_EQ(x509_verify_signed_by(rld[..], &rp, rrd[..], &rootp), 1);
+        ASSERT_EQ(x509_verify_signed_by(id[..], &ica, rrd[..], &rootp), 1);
         // corrupt the signature
         unsigned char* p = (unsigned char*)l.data;
         p[leaf.sig.off + 10UL] = p[leaf.sig.off + 10UL] ^ (unsigned char)1;
-        ASSERT_EQ(x509_verify_signed_by(ld, &leaf, id, &ica), 0);
+        ASSERT_EQ(x509_verify_signed_by(ld[..], &leaf, id[..], &ica), 0);
         // truncated DER doesn't parse
-        ASSERT_TRUE(x509_parse(ld, l.len - 5UL, &leaf) != 0);
+        ASSERT_TRUE(x509_parse(ld[0..l.len - 5UL], &leaf) != 0);
         tls_der_list_free_(&c);
         tls_der_list_free_(&r);
         tls_der_list_free_(&root);

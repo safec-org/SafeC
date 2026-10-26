@@ -196,7 +196,7 @@ static void x25519_raw_(&unsigned char q, const &unsigned char n, const &unsigne
 
 int x25519(&unsigned char out, const &unsigned char scalar, const &unsigned char point) {
     x25519_raw_(out, scalar, point);
-    return !ct_is_zero(out, 32UL);
+    return !ct_is_zero_n_(out, 32UL);
 }
 
 void x25519_public(&unsigned char out, const &unsigned char scalar) {

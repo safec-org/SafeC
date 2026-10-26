@@ -170,7 +170,7 @@ struct MultipartBuilder MultipartBuilder::new() {
     unsafe { rok = rng.init(); }
     int i = 0;
     while (i < 12) { rnd[i] = (unsigned char)(i * 37 + 11); i = i + 1; }
-    if (rok) { unsafe { rng.fill(&rnd[0], 12UL); } }
+    if (rok) { unsafe { rng.fill_n_(&rnd[0], 12UL); } }
     const &char digits = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
     i = 0;
     while (i < 12) {

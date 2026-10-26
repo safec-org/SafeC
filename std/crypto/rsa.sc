@@ -24,7 +24,7 @@ static unsigned long rsa_bits_(const &BnMont m) {
     return bits;
 }
 
-int RsaPublicKey::init_der(const &unsigned char der, unsigned long len) {
+int RsaPublicKey::init_der_n_(const &unsigned char der, unsigned long len) {
     struct Asn1_ in;
     unsafe { in = asn1_view_((const unsigned char*)der, len); }
     struct Asn1_ seq;
@@ -36,7 +36,7 @@ int RsaPublicKey::init_der(const &unsigned char der, unsigned long len) {
     unsafe {
         if ((ee.p[ee.len - 1UL] & (unsigned char)1) == (unsigned char)0) { return 0; }
         if (ee.len == 1UL && ee.p[0] == (unsigned char)1) { return 0; }
-        if (!self.n.init((const &unsigned char)nn.p, nn.len)) { return 0; }
+        if (!self.n.init_n_((const &unsigned char)nn.p, nn.len)) { return 0; }
         unsigned long i = 0UL;
         while (i < ee.len) { self.e[i] = ee.p[i]; i = i + 1UL; }
     }
@@ -46,11 +46,17 @@ int RsaPublicKey::init_der(const &unsigned char der, unsigned long len) {
     return 1;
 }
 
+int RsaPublicKey::init_der([]const unsigned char der_s) {
+    unsigned long len = der_s.len;
+    const &unsigned char der = crypto_in_(der_s, 0UL);
+    return self.init_der_n_(der, len);
+}
+
 // s^e mod n into em (k bytes). 0 if sig is the wrong length or >= n.
 static int rsa_public_op_(const &RsaPublicKey key, const &unsigned char sig, unsigned long sig_len,
                           &unsigned char em) {
     if (sig_len != key.n.bytes) { return 0; }
-    return bn_mod_exp_public(&key.n, sig, sig_len, &key.e[0], key.e_len, em);
+    return bn_mod_exp_public_n_(&key.n, sig, sig_len, &key.e[0], key.e_len, em);
 }
 
 static int rsa_digest_info_(int alg, &unsigned char* prefix, &unsigned long plen) {
@@ -90,17 +96,25 @@ static int rsa_pkcs1_encode_(int alg, const &unsigned char hash, unsigned long h
     return 1;
 }
 
-int rsa_verify_pkcs1(const &RsaPublicKey key, int alg, const &unsigned char hash, unsigned long hash_len,
+int rsa_verify_pkcs1_n_(const &RsaPublicKey key, int alg, const &unsigned char hash, unsigned long hash_len,
                      const &unsigned char sig, unsigned long sig_len) {
     unsigned char em[RSA_MAX_BYTES];
     unsigned char want[RSA_MAX_BYTES];
     unsigned long k = key.n.bytes;
     if (!rsa_public_op_(key, sig, sig_len, &em[0])) { return 0; }
     if (!rsa_pkcs1_encode_(alg, hash, hash_len, &want[0], k)) { return 0; }
-    return ct_eq(&em[0], &want[0], k);
+    return ct_eq_n_(&em[0], &want[0], k);
 }
 
-int rsa_verify_pss(const &RsaPublicKey key, int alg, const &unsigned char hash, unsigned long hash_len,
+int rsa_verify_pkcs1(const &RsaPublicKey key, int alg, []const unsigned char hash_s, []const unsigned char sig_s) {
+    unsigned long hash_len = hash_s.len;
+    const &unsigned char hash = crypto_in_(hash_s, 0UL);
+    unsigned long sig_len = sig_s.len;
+    const &unsigned char sig = crypto_in_(sig_s, 0UL);
+    return rsa_verify_pkcs1_n_(key, alg, hash, hash_len, sig, sig_len);
+}
+
+int rsa_verify_pss_n_(const &RsaPublicKey key, int alg, const &unsigned char hash, unsigned long hash_len,
                    const &unsigned char sig, unsigned long sig_len, unsigned long salt_len) {
     unsigned char out[RSA_MAX_BYTES];
     unsigned long hl = digest_size(alg);
@@ -121,7 +135,7 @@ int rsa_verify_pss(const &RsaPublicKey key, int alg, const &unsigned char hash, 
         unsigned long top = 8UL * em_len - em_bits;   // 0..7 bits that must be zero
         unsigned char top_mask = (unsigned char)(0xFFU >> (unsigned int)top);
         if ((em[0] & (unsigned char)~top_mask) != (unsigned char)0) { return 0; }
-        mgf1_xor(alg, (const &unsigned char)h, hl, (&unsigned char)em, db_len);
+        mgf1_xor_n_(alg, (const &unsigned char)h, hl, (&unsigned char)em, db_len);
         em[0] = em[0] & top_mask;
         unsigned long ps = db_len - salt_len - 1UL;
         unsigned long i = 0UL;
@@ -132,18 +146,26 @@ int rsa_verify_pss(const &RsaPublicKey key, int alg, const &unsigned char hash, 
         i = 0UL;
         while (i < 8UL) { zeros[i] = (unsigned char)0; i = i + 1UL; }
         struct DigestCtx c = DigestCtx::new(alg);
-        c.update(&zeros[0], 8UL);
-        c.update(hash, hl);
-        if (salt_len > 0UL) { c.update((const &unsigned char)(em + ps + 1UL), salt_len); }
+        c.update_n_(&zeros[0], 8UL);
+        c.update_n_(hash, hl);
+        if (salt_len > 0UL) { c.update_n_((const &unsigned char)(em + ps + 1UL), salt_len); }
         unsigned char h2[DIGEST_MAX_SIZE];
-        c.finish(&h2[0]);
-        return ct_eq((const &unsigned char)h, &h2[0], hl);
+        c.finish_n_(&h2[0]);
+        return ct_eq_n_((const &unsigned char)h, &h2[0], hl);
     }
+}
+
+int rsa_verify_pss(const &RsaPublicKey key, int alg, []const unsigned char hash_s, []const unsigned char sig_s, unsigned long salt_len) {
+    unsigned long hash_len = hash_s.len;
+    const &unsigned char hash = crypto_in_(hash_s, 0UL);
+    unsigned long sig_len = sig_s.len;
+    const &unsigned char sig = crypto_in_(sig_s, 0UL);
+    return rsa_verify_pss_n_(key, alg, hash, hash_len, sig, sig_len, salt_len);
 }
 
 // ── Private keys ──────────────────────────────────────────────────────────────
 
-int RsaPrivateKey::init_der(const &unsigned char der, unsigned long len) {
+int RsaPrivateKey::init_der_n_(const &unsigned char der, unsigned long len) {
     struct Asn1_ in;
     unsafe { in = asn1_view_((const unsigned char*)der, len); }
     struct Asn1_ seq;
@@ -159,7 +181,7 @@ int RsaPrivateKey::init_der(const &unsigned char der, unsigned long len) {
         if (!asn1_get_(&algId, (unsigned char)ASN1_TAG_OID, &oid)) { return 0; }
         unsafe { if (!asn1_oid_is_(&oid, &rsa_oid_enc_[0], 9UL)) { return 0; } }
         if (!asn1_get_(&seq, (unsigned char)ASN1_TAG_OCTET_STRING, &inner)) { return 0; }
-        unsafe { return self.init_der((const &unsigned char)inner.p, inner.len); }
+        unsafe { return self.init_der_n_((const &unsigned char)inner.p, inner.len); }
     }
     struct Asn1_ nn;
     struct Asn1_ ee;
@@ -167,7 +189,7 @@ int RsaPrivateKey::init_der(const &unsigned char der, unsigned long len) {
     if (!asn1_uint_(&seq, &nn) || !asn1_uint_(&seq, &ee) || !asn1_uint_(&seq, &dd)) { return 0; }
     if (nn.len > (unsigned long)RSA_MAX_BYTES || ee.len > 8UL || ee.len == 0UL || dd.len > nn.len) { return 0; }
     unsafe {
-        if (!self.pub.n.init((const &unsigned char)nn.p, nn.len)) { return 0; }
+        if (!self.pub.n.init_n_((const &unsigned char)nn.p, nn.len)) { return 0; }
         unsigned long i = 0UL;
         while (i < ee.len) { self.pub.e[i] = ee.p[i]; i = i + 1UL; }
         self.pub.e_len = ee.len;
@@ -185,6 +207,12 @@ int RsaPrivateKey::init_der(const &unsigned char der, unsigned long len) {
     return 1;
 }
 
+int RsaPrivateKey::init_der([]const unsigned char der_s) {
+    unsigned long len = der_s.len;
+    const &unsigned char der = crypto_in_(der_s, 0UL);
+    return self.init_der_n_(der, len);
+}
+
 void RsaPrivateKey::destroy() {
     mem_zero_secure(self.d[0..(unsigned long)RSA_MAX_BYTES]);
     self.d_len = 0UL;
@@ -195,13 +223,13 @@ void RsaPrivateKey::destroy() {
 // way, but checking is cheap).
 static int rsa_private_op_(const &RsaPrivateKey key, const &unsigned char em, &unsigned char sig) {
     unsigned long k = key.pub.n.bytes;
-    if (!bn_mod_exp_secret(&key.pub.n, em, k, &key.d[0], key.d_len, sig)) { return 0; }
+    if (!bn_mod_exp_secret_n_(&key.pub.n, em, k, &key.d[0], key.d_len, sig)) { return 0; }
     unsigned char back[RSA_MAX_BYTES];
-    if (!bn_mod_exp_public(&key.pub.n, sig, k, &key.pub.e[0], key.pub.e_len, &back[0])) { return 0; }
-    return ct_eq(&back[0], em, k);
+    if (!bn_mod_exp_public_n_(&key.pub.n, sig, k, &key.pub.e[0], key.pub.e_len, &back[0])) { return 0; }
+    return ct_eq_n_(&back[0], em, k);
 }
 
-int rsa_sign_pkcs1(const &RsaPrivateKey key, int alg, const &unsigned char hash, unsigned long hash_len,
+int rsa_sign_pkcs1_n_(const &RsaPrivateKey key, int alg, const &unsigned char hash, unsigned long hash_len,
                    &unsigned char sig, unsigned long sig_cap, &unsigned long sig_len) {
     unsigned long k = key.pub.n.bytes;
     if (sig_cap < k) { return 0; }
@@ -212,7 +240,15 @@ int rsa_sign_pkcs1(const &RsaPrivateKey key, int alg, const &unsigned char hash,
     return 1;
 }
 
-int rsa_sign_pss(const &RsaPrivateKey key, int alg, const &unsigned char hash, unsigned long hash_len,
+int rsa_sign_pkcs1(const &RsaPrivateKey key, int alg, []const unsigned char hash_s, []unsigned char sig_s, &unsigned long sig_len) {
+    unsigned long hash_len = hash_s.len;
+    const &unsigned char hash = crypto_in_(hash_s, 0UL);
+    unsigned long sig_cap = sig_s.len;
+    &unsigned char sig = crypto_out_(sig_s, 0UL);
+    return rsa_sign_pkcs1_n_(key, alg, hash, hash_len, sig, sig_cap, sig_len);
+}
+
+int rsa_sign_pss_n_(const &RsaPrivateKey key, int alg, const &unsigned char hash, unsigned long hash_len,
                  &RngCtx rng, &unsigned char sig, unsigned long sig_cap, &unsigned long sig_len) {
     unsigned long hl = digest_size(alg);
     unsigned long k = key.pub.n.bytes;
@@ -229,19 +265,19 @@ int rsa_sign_pss(const &RsaPrivateKey key, int alg, const &unsigned char hash, u
         unsigned char* em = (unsigned char*)&out[0] + off;
         unsigned long db_len = em_len - hl - 1UL;
         unsigned char* salt = em + db_len - salt_len;
-        rng.fill((&unsigned char)salt, salt_len);
+        rng.fill_n_((&unsigned char)salt, salt_len);
         // H = Hash(0x00 * 8 || mHash || salt)
         unsigned char zeros[8];
         i = 0UL;
         while (i < 8UL) { zeros[i] = (unsigned char)0; i = i + 1UL; }
         struct DigestCtx c = DigestCtx::new(alg);
-        c.update(&zeros[0], 8UL);
-        c.update(hash, hl);
-        c.update((const &unsigned char)salt, salt_len);
+        c.update_n_(&zeros[0], 8UL);
+        c.update_n_(hash, hl);
+        c.update_n_((const &unsigned char)salt, salt_len);
         unsigned char* h = em + db_len;
-        c.finish((&unsigned char)h);
+        c.finish_n_((&unsigned char)h);
         em[db_len - salt_len - 1UL] = (unsigned char)1;   // DB = PS || 0x01 || salt
-        mgf1_xor(alg, (const &unsigned char)h, hl, (&unsigned char)em, db_len);
+        mgf1_xor_n_(alg, (const &unsigned char)h, hl, (&unsigned char)em, db_len);
         unsigned long top = 8UL * em_len - em_bits;
         em[0] = em[0] & (unsigned char)(0xFFU >> (unsigned int)top);
         em[em_len - 1UL] = (unsigned char)0xbc;
@@ -249,6 +285,14 @@ int rsa_sign_pss(const &RsaPrivateKey key, int alg, const &unsigned char hash, u
     if (!rsa_private_op_(key, &out[0], sig)) { return 0; }
     *sig_len = k;
     return 1;
+}
+
+int rsa_sign_pss(const &RsaPrivateKey key, int alg, []const unsigned char hash_s, &RngCtx rng, []unsigned char sig_s, &unsigned long sig_len) {
+    unsigned long hash_len = hash_s.len;
+    const &unsigned char hash = crypto_in_(hash_s, 0UL);
+    unsigned long sig_cap = sig_s.len;
+    &unsigned char sig = crypto_out_(sig_s, 0UL);
+    return rsa_sign_pss_n_(key, alg, hash, hash_len, rng, sig, sig_cap, sig_len);
 }
 
 } // namespace std

@@ -198,7 +198,7 @@ void bn_to_be_(unsigned char* out, unsigned long len, const unsigned int* a, int
     }
 }
 
-int BnMont::init(const &unsigned char mod_be, unsigned long len) {
+int BnMont::init_n_(const &unsigned char mod_be, unsigned long len) {
     unsafe {
         const unsigned char* p = (const unsigned char*)mod_be;
         while (len > 0UL && p[0] == (unsigned char)0) { p = p + 1; len = len - 1UL; }
@@ -211,6 +211,12 @@ int BnMont::init(const &unsigned char mod_be, unsigned long len) {
         bn_rr_(&self.rr[0], &self.m[0], self.n);
     }
     return 1;
+}
+
+int BnMont::init([]const unsigned char mod_be_s) {
+    unsigned long len = mod_be_s.len;
+    const &unsigned char mod_be = crypto_in_(mod_be_s, 0UL);
+    return self.init_n_(mod_be, len);
 }
 
 // x (big-endian, < m) into Montgomery form: xm = x * R mod m.
@@ -236,7 +242,7 @@ static void bn_from_mont_out_(const &BnMont m, const unsigned int* am, &unsigned
     }
 }
 
-int bn_mod_exp_public(const &BnMont m, const &unsigned char base, unsigned long base_len,
+int bn_mod_exp_public_n_(const &BnMont m, const &unsigned char base, unsigned long base_len,
                       const &unsigned char exp, unsigned long exp_len, &unsigned char out) {
     unsigned int xm[BN_LIMBS_MAX];
     unsigned int acc[BN_LIMBS_MAX];
@@ -265,7 +271,16 @@ int bn_mod_exp_public(const &BnMont m, const &unsigned char base, unsigned long 
     return 1;
 }
 
-int bn_mod_exp_secret(const &BnMont m, const &unsigned char base, unsigned long base_len,
+int bn_mod_exp_public(const &BnMont m, []const unsigned char base_s, []const unsigned char exp_s, []unsigned char out_s) {
+    unsigned long base_len = base_s.len;
+    const &unsigned char base = crypto_in_(base_s, 0UL);
+    unsigned long exp_len = exp_s.len;
+    const &unsigned char exp = crypto_in_(exp_s, 0UL);
+    &unsigned char out = crypto_out_(out_s, m.bytes);
+    return bn_mod_exp_public_n_(m, base, base_len, exp, exp_len, out);
+}
+
+int bn_mod_exp_secret_n_(const &BnMont m, const &unsigned char base, unsigned long base_len,
                       const &unsigned char exp, unsigned long exp_len, &unsigned char out) {
     unsigned int table[16 * BN_LIMBS_MAX];
     unsigned int acc[BN_LIMBS_MAX];
@@ -311,6 +326,15 @@ int bn_mod_exp_secret(const &BnMont m, const &unsigned char base, unsigned long 
     mem_zero_secure(acc[0..(unsigned long)BN_LIMBS_MAX]);
     mem_zero_secure(sel[0..(unsigned long)BN_LIMBS_MAX]);
     return 1;
+}
+
+int bn_mod_exp_secret(const &BnMont m, []const unsigned char base_s, []const unsigned char exp_s, []unsigned char out_s) {
+    unsigned long base_len = base_s.len;
+    const &unsigned char base = crypto_in_(base_s, 0UL);
+    unsigned long exp_len = exp_s.len;
+    const &unsigned char exp = crypto_in_(exp_s, 0UL);
+    &unsigned char out = crypto_out_(out_s, m.bytes);
+    return bn_mod_exp_secret_n_(m, base, base_len, exp, exp_len, out);
 }
 
 } // namespace std

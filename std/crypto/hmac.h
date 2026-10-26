@@ -1,4 +1,5 @@
 #pragma once
+#include <std/crypto/buf.h>
 // SafeC Standard Library — HMAC (RFC 2104) over any hash.
 //
 // Hmac<H> is the HMAC construction written once over hash.h's BlockHash, so
@@ -28,23 +29,24 @@ struct Hmac {
     // An HMAC keyed by 'key' over 'fresh', a new context of the hash to use
     // (Sha256Ctx::new(), Sha512Ctx::new_384(), ...). A key longer than the
     // hash's block is hashed first, as RFC 2104 specifies.
-    static struct Hmac<H> new(H fresh, const &unsigned char key, unsigned long keyLen);
-    void          update(const &unsigned char data, unsigned long len);
-    // Writes the digest_size()-byte MAC. The context is spent after.
-    void          finish(&unsigned char mac);
+    static struct Hmac<H> new(H fresh, []const unsigned char key);
+    void          update([]const unsigned char data);
+    // Writes the digest_size()-byte MAC into mac (a shorter slice panics).
+    // The context is spent after.
+    void          finish([]unsigned char mac);
     unsigned long digest_size() const;
 };
 
 generic<H: BlockHash>
-struct Hmac<H> Hmac::new(H fresh, const &unsigned char key, unsigned long keyLen) {
+struct Hmac<H> Hmac::new(H fresh, []const unsigned char key) {
     unsigned long block = fresh.block_size();
     unsigned char keyBlock[HMAC_MAX_BLOCK_];
     unsigned long i = 0UL;
-    if (keyLen > block) {
-        hash_bytes(fresh, key, keyLen, &keyBlock[0]);
+    if (key.len > block) {
+        hash_bytes(fresh, key, keyBlock[..]);
         i = fresh.digest_size();
     } else {
-        unsafe { while (i < keyLen) { keyBlock[i] = key[i]; i = i + 1UL; } }
+        while (i < key.len) { keyBlock[i] = key[i]; i = i + 1UL; }
     }
     while (i < block) { keyBlock[i] = (unsigned char)0; i = i + 1UL; }
 
@@ -58,20 +60,20 @@ struct Hmac<H> Hmac::new(H fresh, const &unsigned char key, unsigned long keyLen
     }
     struct Hmac<H> m;
     m.inner = fresh;
-    m.inner.update(&ipad[0], block);
+    m.inner.update(ipad[0..block]);
     m.outer = fresh;
-    m.outer.update(&opad[0], block);
+    m.outer.update(opad[0..block]);
     return m;
 }
 
 generic<H: BlockHash>
-void Hmac::update(const &unsigned char data, unsigned long len) { self.inner.update(data, len); }
+void Hmac::update([]const unsigned char data) { self.inner.update(data); }
 
 generic<H: BlockHash>
-void Hmac::finish(&unsigned char mac) {
+void Hmac::finish([]unsigned char mac) {
     unsigned char innerDigest[HMAC_MAX_DIGEST_];
-    self.inner.finish(&innerDigest[0]);
-    self.outer.update(&innerDigest[0], self.inner.digest_size());
+    self.inner.finish(innerDigest[..]);
+    self.outer.update(innerDigest[0..self.inner.digest_size()]);
     self.outer.finish(mac);
 }
 
@@ -80,7 +82,9 @@ unsigned long Hmac::digest_size() const { return self.outer.digest_size(); }
 
 // Writes the 32-byte HMAC-SHA256 of 'data' (length 'dataLen') keyed by
 // 'key' (length 'keyLen') into 'out' (must be >= 32 bytes).
-void hmac_sha256(const &unsigned char key, unsigned long keyLen,
+void hmac_sha256([]const unsigned char key, []const unsigned char data, []unsigned char out);
+// internal: the (reference, length) core of hmac_sha256()
+void hmac_sha256_n_(const &unsigned char key, unsigned long keyLen,
                   const &unsigned char data, unsigned long dataLen,
                   &unsigned char out);
 

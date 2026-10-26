@@ -50,7 +50,7 @@ void t_sha1() {
     unsafe {
         unsigned char d[20];
         char hex[64];
-        sha1((const unsigned char*)"abc", 3UL, d);
+        sha1(str_bytes("abc"), d[..]);
         to_hex(d, 20UL, hex);
         ASSERT_STR_EQ(hex, "a9993e364706816aba3e25717850c26c9cd0d89d");
     }
@@ -60,19 +60,19 @@ void t_sha256() {
     unsafe {
         unsigned char d[32];
         char hex[80];
-        sha256((const unsigned char*)"abc", 3UL, d);
+        sha256(str_bytes("abc"), d[..]);
         to_hex(d, 32UL, hex);
         ASSERT_STR_EQ(hex, "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
         // Streaming in odd-size chunks must equal one-shot (448-bit message, FIPS 180-4 B.2).
         const &char msg = "abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq";
         struct Sha256Ctx c = Sha256Ctx::new();
-        c.update((const unsigned char*)&msg[0], 5UL);
-        c.update((const unsigned char*)&msg[5], 51UL);
-        c.finish(d);
+        c.update(str_bytes(msg)[0..5]);
+        c.update(str_bytes(msg)[5..56]);
+        c.finish(d[..]);
         to_hex(d, 32UL, hex);
         ASSERT_STR_EQ(hex, "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1");
         // Empty input
-        sha256((const unsigned char*)"", 0UL, d);
+        sha256(str_bytes(""), d[..]);
         to_hex(d, 32UL, hex);
         ASSERT_STR_EQ(hex, "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
     }
@@ -82,10 +82,10 @@ void t_sha512() {
     unsafe {
         unsigned char d[64];
         char hex[160];
-        sha512((const unsigned char*)"abc", 3UL, d);
+        sha512(str_bytes("abc"), d[..]);
         to_hex(d, 64UL, hex);
         ASSERT_STR_EQ(hex, "ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f");
-        sha384((const unsigned char*)"abc", 3UL, d);
+        sha384(str_bytes("abc"), d[..]);
         to_hex(d, 48UL, hex);
         ASSERT_STR_EQ(hex, "cb00753f45a35e8bb5a03d699ac65007272c32ab0eded1631a8b605a43ff5bed8086072ba1e7cc2358baeca134c825a7");
     }
@@ -95,8 +95,7 @@ void t_hmac() {
     unsafe {
         unsigned char d[32];
         char hex[80];
-        hmac_sha256((const unsigned char*)"Jefe", 4UL,
-                    (const unsigned char*)"what do ya want for nothing?", 28UL, (unsigned char*)d);
+        hmac_sha256(str_bytes("Jefe"), str_bytes("what do ya want for nothing?"), d[..]);
         to_hex(d, 32UL, hex);
         ASSERT_STR_EQ(hex, "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843");
     }
@@ -113,7 +112,7 @@ int hasher_kat(H fresh, const &unsigned char msg, unsigned long len, const &char
     int ok = 1;
     unsafe {
         if (fresh.digest_size() * 2UL != str_len(expected)) ok = 0;
-        hash_bytes(fresh, msg, len, &d[0]);
+        hash_bytes(fresh, ((const unsigned char*)msg)[0..len], d[..]);
         to_hex(&d[0], fresh.digest_size(), &hex[0]);
         if (!str_eq(&hex[0], expected)) ok = 0;
         H h = fresh;
@@ -122,12 +121,12 @@ int hasher_kat(H fresh, const &unsigned char msg, unsigned long len, const &char
         unsigned long c = 0UL;
         while (c < 4UL) {
             unsigned long n = cuts[c] < len - at ? cuts[c] : len - at;
-            h.update((const &unsigned char)((const unsigned char*)msg + at), n);
+            h.update(((const unsigned char*)(((const unsigned char*)msg + at)))[0..n]);
             at = at + n;
             c = c + 1UL;
         }
-        h.update((const &unsigned char)((const unsigned char*)msg + at), len - at);
-        h.finish(&d[0]);
+        h.update(((const unsigned char*)(((const unsigned char*)msg + at)))[0..len - at]);
+        h.finish(d[..]);
         to_hex(&d[0], fresh.digest_size(), &hex[0]);
         if (!str_eq(&hex[0], expected)) ok = 0;
     }
@@ -150,20 +149,20 @@ void t_hasher_generic() {
         // and case 6 (a 131-byte key, longer than every block: hashed first).
         const &unsigned char jefe = (const &unsigned char)"Jefe";
         const &unsigned char want = (const &unsigned char)"what do ya want for nothing?";
-        ASSERT_EQ(hasher_kat(Hmac::new(Sha1Ctx::new(), jefe, 4UL), want, 28UL, "effcdf6ae5eb2fa2d27416d5f184df9c259a7c79"), 1);
-        ASSERT_EQ(hasher_kat(Hmac::new(Sha256Ctx::new_224(), jefe, 4UL), want, 28UL, "a30e01098bc6dbbf45690f3a7e9e6d0f8bbea2a39e6148008fd05e44"), 1);
-        ASSERT_EQ(hasher_kat(Hmac::new(Sha256Ctx::new(), jefe, 4UL), want, 28UL, "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843"), 1);
-        ASSERT_EQ(hasher_kat(Hmac::new(Sha512Ctx::new_384(), jefe, 4UL), want, 28UL, "af45d2e376484031617f78d2b58a6b1b9c7ef464f5a01b47e42ec3736322445e8e2240ca5e69e2c78b3239ecfab21649"), 1);
-        ASSERT_EQ(hasher_kat(Hmac::new(Sha512Ctx::new(), jefe, 4UL), want, 28UL, "164b7a7bfcf819e2e395fbe73b56e0a387bd64222e831fd610270cd7ea2505549758bf75c05a994a6d034f65f8f0e6fdcaeab1a34d4a6b4b636e070a38bce737"), 1);
+        ASSERT_EQ(hasher_kat(Hmac::new(Sha1Ctx::new(), ((const unsigned char*)jefe)[0..4UL]), want, 28UL, "effcdf6ae5eb2fa2d27416d5f184df9c259a7c79"), 1);
+        ASSERT_EQ(hasher_kat(Hmac::new(Sha256Ctx::new_224(), ((const unsigned char*)jefe)[0..4UL]), want, 28UL, "a30e01098bc6dbbf45690f3a7e9e6d0f8bbea2a39e6148008fd05e44"), 1);
+        ASSERT_EQ(hasher_kat(Hmac::new(Sha256Ctx::new(), ((const unsigned char*)jefe)[0..4UL]), want, 28UL, "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843"), 1);
+        ASSERT_EQ(hasher_kat(Hmac::new(Sha512Ctx::new_384(), ((const unsigned char*)jefe)[0..4UL]), want, 28UL, "af45d2e376484031617f78d2b58a6b1b9c7ef464f5a01b47e42ec3736322445e8e2240ca5e69e2c78b3239ecfab21649"), 1);
+        ASSERT_EQ(hasher_kat(Hmac::new(Sha512Ctx::new(), ((const unsigned char*)jefe)[0..4UL]), want, 28UL, "164b7a7bfcf819e2e395fbe73b56e0a387bd64222e831fd610270cd7ea2505549758bf75c05a994a6d034f65f8f0e6fdcaeab1a34d4a6b4b636e070a38bce737"), 1);
         unsigned char longKey[131];
         i = 0UL;
         while (i < 131UL) { longKey[i] = (unsigned char)0xaa; i = i + 1UL; }
         const &unsigned char lk = &longKey[0];
         const &unsigned char big = (const &unsigned char)"Test Using Larger Than Block-Size Key - Hash Key First";
-        ASSERT_EQ(hasher_kat(Hmac::new(Sha1Ctx::new(), lk, 131UL), big, 54UL, "90d0dace1c1bdc957339307803160335bde6df2b"), 1);
-        ASSERT_EQ(hasher_kat(Hmac::new(Sha256Ctx::new(), lk, 131UL), big, 54UL, "60e431591ee0b67f0d8a26aacbf5b77f8e0bc6213728c5140546040f0ee37f54"), 1);
-        ASSERT_EQ(hasher_kat(Hmac::new(Sha512Ctx::new_384(), lk, 131UL), big, 54UL, "4ece084485813e9088d2c63a041bc5b44f9ef1012a2b588f3cd11f05033ac4c60c2ef6ab4030fe8296248df163f44952"), 1);
-        ASSERT_EQ(hasher_kat(Hmac::new(Sha512Ctx::new(), lk, 131UL), big, 54UL, "80b24263c7c1a3ebb71493c1dd7be8b49b46d1f41b4aeec1121b013783f8f3526b56d037e05f2598bd0fd2215d6a1e5295e64f73f63f0aec8b915a985d786598"), 1);
+        ASSERT_EQ(hasher_kat(Hmac::new(Sha1Ctx::new(), ((const unsigned char*)lk)[0..131UL]), big, 54UL, "90d0dace1c1bdc957339307803160335bde6df2b"), 1);
+        ASSERT_EQ(hasher_kat(Hmac::new(Sha256Ctx::new(), ((const unsigned char*)lk)[0..131UL]), big, 54UL, "60e431591ee0b67f0d8a26aacbf5b77f8e0bc6213728c5140546040f0ee37f54"), 1);
+        ASSERT_EQ(hasher_kat(Hmac::new(Sha512Ctx::new_384(), ((const unsigned char*)lk)[0..131UL]), big, 54UL, "4ece084485813e9088d2c63a041bc5b44f9ef1012a2b588f3cd11f05033ac4c60c2ef6ab4030fe8296248df163f44952"), 1);
+        ASSERT_EQ(hasher_kat(Hmac::new(Sha512Ctx::new(), ((const unsigned char*)lk)[0..131UL]), big, 54UL, "80b24263c7c1a3ebb71493c1dd7be8b49b46d1f41b4aeec1121b013783f8f3526b56d037e05f2598bd0fd2215d6a1e5295e64f73f63f0aec8b915a985d786598"), 1);
     }
 }
 
@@ -176,15 +175,15 @@ void t_aes() {
         while (i < 32) { key[i] = (unsigned char)i; i = i + 1; }
         i = 0;
         while (i < 16) { blk[i] = (unsigned char)(i * 17); i = i + 1; }  // 00 11 22 .. ff
-        struct AesCtx c = AesCtx::new_128(key);
-        c.encrypt_block(blk);
+        struct AesCtx c = AesCtx::new_128(key[..]);
+        c.encrypt_block(blk[..]);
         to_hex(blk, 16UL, hex);
         ASSERT_STR_EQ(hex, "69c4e0d86a7b0430d8cdb78070b4c55a");
-        c.decrypt_block(blk);
+        c.decrypt_block(blk[..]);
         ASSERT_EQ(blk[1], 0x11);
         ASSERT_EQ(blk[15], 0xff);
-        struct AesCtx c2 = AesCtx::new_256(key);
-        c2.encrypt_block(blk);
+        struct AesCtx c2 = AesCtx::new_256(key[..]);
+        c2.encrypt_block(blk[..]);
         to_hex(blk, 16UL, hex);
         ASSERT_STR_EQ(hex, "8ea2b7ca516745bfeafc49904b496089");
         // CBC round-trip
@@ -194,11 +193,11 @@ void t_aes() {
         while (i < 16) { iv[i] = (unsigned char)(255 - i); i = i + 1; }
         i = 0;
         while (i < 64) { buf[i] = (unsigned char)(i * 3); i = i + 1; }
-        c2.set_iv(iv);
-        c2.cbc_encrypt(buf, 64UL);
+        c2.set_iv(iv[..]);
+        c2.cbc_encrypt(((const unsigned char*)buf)[0..64UL]);
         ASSERT_NE(buf[0], 0);
-        c2.set_iv(iv);
-        c2.cbc_decrypt(buf, 64UL);
+        c2.set_iv(iv[..]);
+        c2.cbc_decrypt(((const unsigned char*)buf)[0..64UL]);
         int same = 1;
         i = 0;
         while (i < 64) { if (buf[i] != (unsigned char)(i * 3)) same = 0; i = i + 1; }
@@ -301,11 +300,11 @@ void t_rng_kat() {
         test_assert_eq_u(r.rand32(), 0x898E8050ULL, "chacha20 word 1", __FILE__, __LINE__);
         test_assert_eq_u(r.rand64(), 0xE06EDF0FE53152A2ULL, "chacha20 words 2-3", __FILE__, __LINE__);
         unsigned char buf[100];
-        r.fill(&buf[0], 100UL);            // crosses into the second block
+        r.fill(buf[0..100UL]);            // crosses into the second block
         struct RngCtx q;
         q.init_seed(seed);
         unsigned char all[116];
-        q.fill(&all[0], 116UL);
+        q.fill(all[0..116UL]);
         ASSERT_EQ(safe_memcmp(buf[..], all[16..116]), 0);
         ASSERT_EQ(r.rand_range(1UL), 0);
     }
@@ -351,7 +350,7 @@ static const unsigned char kCertDer[485] = {
 void t_x509() {
     unsafe {
         struct X509Cert c;
-        ASSERT_EQ(c.init(&kCertDer[0], 485UL), 0);
+        ASSERT_EQ(c.init(kCertDer[0..485UL]), 0);
         ASSERT_STR_EQ((const char*)c.subject.cn, "www.Example.com");
         ASSERT_STR_EQ((const char*)c.subject.o, "SafeC Test");
         ASSERT_STR_EQ((const char*)c.subject.c, "KR");
@@ -374,7 +373,7 @@ void t_x509() {
         ASSERT_FALSE(c.matches_hostname("a.b.example.org"));
         ASSERT_FALSE(c.matches_hostname("www.example.com"));
         ASSERT_TRUE(c.verify_chain(&c));
-        ASSERT_TRUE(c.init(&kCertDer[0], 40UL) != 0);   // truncated
+        ASSERT_TRUE(c.init(kCertDer[0..40UL]) != 0);   // truncated
     }
 }
 
@@ -391,17 +390,17 @@ void t_aes_gcm() {
         hex_to_bytes("cafebabefacedbaddecaf888", &iv[0]);
         hex_to_bytes("feedfacedeadbeeffeedfacedeadbeefabaddad2", &aad[0]);
         hex_to_bytes("d9313225f88406e5a55909c5aff5269a86a7a9531534f7da2e4c303d8a318a721c3c0c95956809532fcf0e2449a6b525b16aedf5aa0de657ba637b39", &msg[0]);
-        struct AesCtx aes = AesCtx::new_256(&key[0]);
-        aes.gcm_encrypt(&iv[0], (const ?&unsigned char)&aad[0], 20UL, &msg[0], 60UL, &tag[0]);
+        struct AesCtx aes = AesCtx::new_256(key[..]);
+        aes.gcm_encrypt(iv[..], ((const unsigned char*)((const ?&unsigned char)&aad[0]))[0..20UL], msg[0..60UL], tag[..]);
         to_hex(msg, 60UL, hex);
         ASSERT_STR_EQ(hex, "522dc1f099567d07f47f37a32a84427d643a8cdcbfe5c0c97598a2bd2555d1aa8cb08e48590dbb3da7b08b1056828838c5f61e6393ba7a0abcc9f662");
         to_hex(tag, 16UL, hex);
         ASSERT_STR_EQ(hex, "76fc6ece0f4e1768cddf8853bb2d551b");
-        ASSERT_TRUE(aes.gcm_decrypt(&iv[0], (const ?&unsigned char)&aad[0], 20UL, &msg[0], 60UL, &tag[0]));
+        ASSERT_TRUE(aes.gcm_decrypt(iv[..], ((const unsigned char*)((const ?&unsigned char)&aad[0]))[0..20UL], msg[0..60UL], tag[..]));
         ASSERT_EQ(msg[0], 0xd9);
-        aes.gcm_encrypt(&iv[0], (const ?&unsigned char)&aad[0], 20UL, &msg[0], 60UL, &tag[0]);
+        aes.gcm_encrypt(iv[..], ((const unsigned char*)((const ?&unsigned char)&aad[0]))[0..20UL], msg[0..60UL], tag[..]);
         aad[3] = aad[3] ^ (unsigned char)1;                 // tampered AAD
-        ASSERT_FALSE(aes.gcm_decrypt(&iv[0], (const ?&unsigned char)&aad[0], 20UL, &msg[0], 60UL, &tag[0]));
+        ASSERT_FALSE(aes.gcm_decrypt(iv[..], ((const unsigned char*)((const ?&unsigned char)&aad[0]))[0..20UL], msg[0..60UL], tag[..]));
         ASSERT_EQ(msg[0], 0x52);                            // left as ciphertext
         aes.destroy();
         // Empty message and AAD, zero key and IV (test case 13).
@@ -409,8 +408,8 @@ void t_aes_gcm() {
         unsigned char zk[32];
         int i = 0;
         while (i < 32) { zk[i] = (unsigned char)0; i = i + 1; }
-        z = AesCtx::new_256(&zk[0]);
-        z.gcm_encrypt(&zk[0], null, 0UL, &msg[0], 0UL, &tag[0]);
+        z = AesCtx::new_256(zk[..]);
+        z.gcm_encrypt(zk[..], str_bytes(""), msg[0..0UL], tag[..]);
         to_hex(tag, 16UL, hex);
         ASSERT_STR_EQ(hex, "530f8afbc74536b9a963b4f1c4cb738b");
     }
@@ -432,11 +431,11 @@ void t_tls_record() {
         unsigned char got[256];
         unsigned char ct = (unsigned char)0;
         // Plaintext records before the handshake.
-        unsigned long n = a.encode_record((unsigned char)TLS_HANDSHAKE, (const unsigned char*)"hello", 5UL, &out[0], 256UL);
+        unsigned long n = a.encode_record((unsigned char)TLS_HANDSHAKE, str_bytes("hello"), out[0..256UL]);
         ASSERT_EQ(n, 10);
         ASSERT_EQ(out[0], TLS_HANDSHAKE);
         ASSERT_EQ(out[4], 5);
-        ASSERT_EQ(b.decode_record(&out[0], n, &ct, &got[0], 256UL), 5);
+        ASSERT_EQ(b.decode_record(out[0..n], &ct, got[0..256UL]), 5);
         ASSERT_EQ(ct, TLS_HANDSHAKE);
         ASSERT_FALSE(a.is_established());
 
@@ -453,44 +452,44 @@ void t_tls_record() {
         ASSERT_TRUE(a.is_established());          // installing keys turns protection on
 
         // A record that doesn't fit is refused without consuming a sequence number.
-        ASSERT_EQ(a.encode_record((unsigned char)TLS_APPLICATION_DATA, (const unsigned char*)"secret data", 11UL, &out[0], 8UL), 0);
+        ASSERT_EQ(a.encode_record((unsigned char)TLS_APPLICATION_DATA, str_bytes("secret data"), out[0..8UL]), 0);
         ASSERT_EQ(a.write_seq, 0);
         int round = 0;
         while (round < 3) {
-            n = a.encode_record((unsigned char)TLS_APPLICATION_DATA, (const unsigned char*)"secret data", 11UL, &out[0], 256UL);
+            n = a.encode_record((unsigned char)TLS_APPLICATION_DATA, str_bytes("secret data"), out[0..256UL]);
             ASSERT_EQ(n, 5UL + 11UL + 1UL + 16UL);
             if (round == 0) { ASSERT_EQ(safe_memcmp(out[0..33], kTlsRecord[0..33]), 0); }   // RFC 8446 wire format
             ASSERT_EQ(out[0], TLS_APPLICATION_DATA);
-            ASSERT_EQ(b.decode_record(&out[0], n, &ct, &got[0], 256UL), 11);
+            ASSERT_EQ(b.decode_record(out[0..n], &ct, got[0..256UL]), 11);
             ASSERT_EQ(ct, TLS_APPLICATION_DATA);
             []const unsigned char want = str_bytes("secret data");
             ASSERT_EQ(safe_memcmp(got[0..11], want), 0);
             round = round + 1;
         }
         // A tampered record fails authentication and doesn't advance read_seq.
-        n = a.encode_record((unsigned char)TLS_HANDSHAKE, (const unsigned char*)"hs", 2UL, &out[0], 256UL);
+        n = a.encode_record((unsigned char)TLS_HANDSHAKE, str_bytes("hs"), out[0..256UL]);
         out[7] = out[7] ^ (unsigned char)0x40;
-        ASSERT_EQ(b.decode_record(&out[0], n, &ct, &got[0], 256UL), 0);
+        ASSERT_EQ(b.decode_record(out[0..n], &ct, got[0..256UL]), 0);
         ASSERT_EQ(b.read_seq, 3);
         out[7] = out[7] ^ (unsigned char)0x40;
-        ASSERT_EQ(b.decode_record(&out[0], n, &ct, &got[0], 256UL), 2);
+        ASSERT_EQ(b.decode_record(out[0..n], &ct, got[0..256UL]), 2);
         ASSERT_EQ(ct, TLS_HANDSHAKE);                     // inner type, outer is application_data
         ASSERT_EQ(out[0], TLS_APPLICATION_DATA);
-        n = a.build_alert((unsigned char)TLS_ALERT_FATAL, (unsigned char)TLS_ALERT_CLOSE_NOTIFY, &out[0], 256UL);
-        ASSERT_EQ(b.decode_record(&out[0], n, &ct, &got[0], 256UL), 2);
+        n = a.build_alert((unsigned char)TLS_ALERT_FATAL, (unsigned char)TLS_ALERT_CLOSE_NOTIFY, out[0..256UL]);
+        ASSERT_EQ(b.decode_record(out[0..n], &ct, got[0..256UL]), 2);
         ASSERT_EQ(ct, TLS_ALERT);
         ASSERT_EQ(got[0], TLS_ALERT_FATAL);
-        ASSERT_EQ(b.decode_record(&out[0], 4UL, &ct, &got[0], 256UL), 0);   // short header
+        ASSERT_EQ(b.decode_record(out[0..4UL], &ct, got[0..256UL]), 0);   // short header
         unsigned char nonce[12];
         a.compute_nonce(nonce, 1);
         ASSERT_EQ(nonce[11], iv1[11] ^ 5);   // write_seq is 5 now
 
         struct TlsTranscript tr;
         tr.hash = Sha256Ctx::new();
-        tr.update((const unsigned char*)"abc", 3UL);
+        tr.update(str_bytes("abc"));
         unsigned char d[32];
         char hex[80];
-        tr.finish(d);
+        tr.finish(d[..]);
         to_hex(d, 32UL, hex);
         ASSERT_STR_EQ(hex, "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
     }
@@ -501,15 +500,15 @@ void t_crypto_misc() {
         unsigned char d[64];
         char hex[160];
         struct Sha1Ctx s1 = Sha1Ctx::new();
-        s1.update((const unsigned char*)"a", 1UL);
-        s1.update((const unsigned char*)"bc", 2UL);
-        s1.finish(d);
+        s1.update(str_bytes("a"));
+        s1.update(str_bytes("bc"));
+        s1.finish(d[..]);
         to_hex(d, 20UL, hex);
         ASSERT_STR_EQ(hex, "a9993e364706816aba3e25717850c26c9cd0d89d");
         struct Sha512Ctx s5 = Sha512Ctx::new();
-        s5.update((const unsigned char*)"ab", 2UL);
-        s5.update((const unsigned char*)"c", 1UL);
-        s5.finish(d);
+        s5.update(str_bytes("ab"));
+        s5.update(str_bytes("c"));
+        s5.finish(d[..]);
         to_hex(d, 64UL, hex);
         ASSERT_STR_EQ(hex, "ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f");
 

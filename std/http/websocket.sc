@@ -43,7 +43,7 @@ static struct String ws_compute_accept_(const char* key) {
     }
     unsigned char digest[20];
     unsafe {
-        sha1((const unsigned char*)combined.as_ptr(), combined.length(), digest);
+        sha1_n_((const unsigned char*)combined.as_ptr(), combined.length(), digest);
     }
     combined.free();
     return base64_encode(digest[0..20]);
@@ -93,7 +93,7 @@ struct WsConn WsConn::connect_tls(const &char host, unsigned short port, const &
         if (!rngOk) {
             good = 0;
         } else {
-            unsafe { rng.fill(&keyRaw[0], 16UL); }
+            unsafe { rng.fill_n_(&keyRaw[0], 16UL); }
             struct String encoded = base64_encode(keyRaw[0..16]);
             keyB64.free();
             keyB64 = encoded;
@@ -319,7 +319,7 @@ static int ws_write_frame_(struct WsConn* conn, int opcode,
         int rngOk;
         unsafe { rngOk = rng.init(); }
         if (!rngOk) { return 0; }
-        unsafe { rng.fill(&maskKey[0], 4UL); }
+        unsafe { rng.fill_n_(&maskKey[0], 4UL); }
         if (!write_all(&out, maskKey[0..4UL])) { return 0; }
 
         // Masked a chunk at a time (a multiple of 4, so the key lines up).

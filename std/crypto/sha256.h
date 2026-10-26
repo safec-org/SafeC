@@ -2,6 +2,7 @@
 // Freestanding-safe.  No dynamic allocation.
 // Sha256Ctx conforms to hash.h's Hasher and BlockHash (generic hashing, Hmac).
 #pragma once
+#include <std/crypto/buf.h>
 
 #define SHA256_DIGEST_SIZE  32   // bytes
 #define SHA224_DIGEST_SIZE  28   // bytes
@@ -22,12 +23,16 @@ struct Sha256Ctx {
     static struct Sha256Ctx new_224();
 
     // Feed `len` bytes of data into the hash.
-    void update(const &unsigned char data, unsigned long len);
+    void update([]const unsigned char data);
+    // internal: the (reference, length) core of update()
+    void update_n_(const &unsigned char data, unsigned long len);
 
     // Finalise and write the digest.
     // For SHA-256: digest must be at least 32 bytes.
     // For SHA-224: digest must be at least 28 bytes.
-    void finish(&unsigned char digest);
+    void finish([]unsigned char digest);
+    // internal: the (reference, length) core of finish()
+    void finish_n_(&unsigned char digest);
 
     // 32 (SHA-256) or 28 (SHA-224) / SHA256_BLOCK_SIZE (hash.h's BlockHash).
     unsigned long digest_size() const;
@@ -35,7 +40,9 @@ struct Sha256Ctx {
 };
 
 // Convenience: hash `len` bytes and write 32-byte digest.
-void sha256(const &unsigned char data, unsigned long len,
+void sha256([]const unsigned char data, []unsigned char digest);
+// internal: the (reference, length) core of sha256()
+void sha256_n_(const &unsigned char data, unsigned long len,
             &unsigned char digest);
 
 } // namespace std

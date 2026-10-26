@@ -696,7 +696,7 @@ int TlsStream::peer_certificate(&X509Cert out) const {
     match (self.peer_der_.data) {
         case some(d): {
             if (self.peer_der_.len == 0UL) { return 0; }
-            return out.init(d, self.peer_der_.len) == 0;
+            return out.init_n_(d, self.peer_der_.len) == 0;
         }
         case null: { }
     }

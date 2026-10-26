@@ -68,7 +68,7 @@ struct String jwt_sign(const &Value claims, const &char secret) {
 
     unsigned char sig[HMAC_SHA256_SIZE];
     unsafe {
-        hmac_sha256((const unsigned char*)secret, str_len(secret),
+        hmac_sha256_n_((const unsigned char*)secret, str_len(secret),
                     (const unsigned char*)signingInput.data, signingInput.len, sig);
     }
     struct String sigB64 = __b64url_encode((const unsigned char*)sig, (unsigned long)HMAC_SHA256_SIZE);
@@ -146,7 +146,7 @@ struct Value jwt_verify(const &char token_ref, const &char secret, ?&int ok) { c
 
     unsigned char expectedSig[HMAC_SHA256_SIZE];
     unsafe {
-        hmac_sha256((const unsigned char*)secret, str_len(secret),
+        hmac_sha256_n_((const unsigned char*)secret, str_len(secret),
                     (const unsigned char*)signingInput.data, signingInput.len, expectedSig);
     }
     struct String expectedSigB64 = __b64url_encode((const unsigned char*)expectedSig, (unsigned long)HMAC_SHA256_SIZE);

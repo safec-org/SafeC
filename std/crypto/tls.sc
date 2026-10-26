@@ -40,11 +40,17 @@ static void put_u64_be_(unsigned char* p, unsigned long long v) {
 
 // ── TlsTranscript ─────────────────────────────────────────────────────────────
 
-inline void TlsTranscript::update(const &unsigned char data, unsigned long len) {
-    unsafe { self.hash.update((const &unsigned char)data, len); }
+inline void TlsTranscript::update_n_(const &unsigned char data, unsigned long len) {
+    unsafe { self.hash.update_n_((const &unsigned char)data, len); }
 }
 
-inline void TlsTranscript::finish(unsigned char out[32]) {
+inline void TlsTranscript::update([]const unsigned char data_s) {
+    unsigned long len = data_s.len;
+    const &unsigned char data = crypto_in_(data_s, 0UL);
+    self.update_n_(data, len);
+}
+
+inline void TlsTranscript::finish([]unsigned char out) {
     // Finish on a copy so the transcript can continue to be used.
     struct Sha256Ctx snap;
     unsafe { memcpy((void*)&snap, (const void*)&self.hash, (unsigned long)sizeof(struct Sha256Ctx)); }
@@ -120,7 +126,7 @@ static void tls_header_(unsigned char* out, unsigned char type, unsigned long le
     }
 }
 
-unsigned long TlsSession::encode_record(unsigned char content_type,
+unsigned long TlsSession::encode_record_n_(unsigned char content_type,
                                          const &unsigned char payload_ref,
                                          unsigned long payload_len,
                                          &unsigned char out_ref,
@@ -149,12 +155,12 @@ unsigned long TlsSession::encode_record(unsigned char content_type,
 
     unsigned char nonce[TLS_IV_LEN];
     self.compute_nonce((unsigned char*)nonce, 1);
-    struct AesCtx aes = AesCtx::new_256(self.write_key);
+    struct AesCtx aes = AesCtx::new_256_n_(self.write_key);
     unsafe {
         tls_header_(out, (unsigned char)TLS_APPLICATION_DATA, rec_len);
         memmove((void*)(out + 5), (const void*)payload, payload_len);
         out[5UL + payload_len] = content_type;                  // TLSInnerPlaintext.type
-        aes.gcm_encrypt((const &unsigned char)&nonce[0], (const ?&unsigned char)out, 5UL,
+        aes.gcm_encrypt_n_((const &unsigned char)&nonce[0], (const ?&unsigned char)out, 5UL,
                         (&unsigned char)(out + 5), inner_len, (&unsigned char)(out + 5UL + inner_len));
     }
     aes.destroy();
@@ -162,9 +168,17 @@ unsigned long TlsSession::encode_record(unsigned char content_type,
     return total;
 }
 
+unsigned long TlsSession::encode_record(unsigned char content_type, []const unsigned char payload_s, []unsigned char out_s) {
+    unsigned long payload_len = payload_s.len;
+    const &unsigned char payload = crypto_in_(payload_s, 0UL);
+    unsigned long out_cap = out_s.len;
+    &unsigned char out = crypto_out_(out_s, 0UL);
+    return self.encode_record_n_(content_type, payload, payload_len, out, out_cap);
+}
+
 // ── decode_record ──────────────────────────────────────────────────────────────
 
-unsigned long TlsSession::decode_record(const &unsigned char data_ref,
+unsigned long TlsSession::decode_record_n_(const &unsigned char data_ref,
                                          unsigned long data_len,
                                          &unsigned char content_type_out,
                                          &unsigned char out_ref,
@@ -202,11 +216,11 @@ unsigned long TlsSession::decode_record(const &unsigned char data_ref,
     unsigned char plain[16640];   // TLS_MAX_RECORD_LEN + 256
     unsigned char nonce[TLS_IV_LEN];
     self.compute_nonce((unsigned char*)nonce, 0);
-    struct AesCtx aes = AesCtx::new_256(self.read_key);
+    struct AesCtx aes = AesCtx::new_256_n_(self.read_key);
     int ok = 0;
     unsafe {
         memcpy((void*)plain, (const void*)(data + 5), inner_len);
-        ok = aes.gcm_decrypt((const &unsigned char)&nonce[0], (const ?&unsigned char)data, 5UL,
+        ok = aes.gcm_decrypt_n_((const &unsigned char)&nonce[0], (const ?&unsigned char)data, 5UL,
                              (&unsigned char)&plain[0], inner_len,
                              (const &unsigned char)(data + 5UL + inner_len));
     }
@@ -227,9 +241,17 @@ unsigned long TlsSession::decode_record(const &unsigned char data_ref,
     return payload_len;
 }
 
+unsigned long TlsSession::decode_record([]const unsigned char data_s, &unsigned char content_type_out, []unsigned char out_s) {
+    unsigned long data_len = data_s.len;
+    const &unsigned char data = crypto_in_(data_s, 0UL);
+    unsigned long out_cap = out_s.len;
+    &unsigned char out = crypto_out_(out_s, 0UL);
+    return self.decode_record_n_(data, data_len, content_type_out, out, out_cap);
+}
+
 // ── build_alert ───────────────────────────────────────────────────────────────
 
-unsigned long TlsSession::build_alert(unsigned char level,
+unsigned long TlsSession::build_alert_n_(unsigned char level,
                                        unsigned char desc,
                                        &unsigned char out_ref,
                                        unsigned long out_cap) {
@@ -239,10 +261,16 @@ unsigned long TlsSession::build_alert(unsigned char level,
         alert_body[0] = level;
         alert_body[1] = desc;
     }
-    return self.encode_record((unsigned char)TLS_ALERT,
+    return self.encode_record_n_((unsigned char)TLS_ALERT,
                                alert_body,
                                (unsigned long)2,
                                out_ref, out_cap);
+}
+
+unsigned long TlsSession::build_alert(unsigned char level, unsigned char desc, []unsigned char out_s) {
+    unsigned long out_cap = out_s.len;
+    &unsigned char out = crypto_out_(out_s, 0UL);
+    return self.build_alert_n_(level, desc, out, out_cap);
 }
 
 } // namespace std

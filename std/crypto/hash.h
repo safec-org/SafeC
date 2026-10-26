@@ -13,17 +13,18 @@
 //              requires — Sha1Ctx, Sha256Ctx, Sha512Ctx
 //
 //   unsigned char d[SHA384_DIGEST_SIZE];
-//   hash_bytes(Sha512Ctx::new_384(), msg, len, &d[0]);
-//   struct Hmac<Sha512Ctx> mac = Hmac::new(Sha512Ctx::new(), key, keyLen);
-//   mac.update(part1, n1); mac.update(part2, n2); mac.finish(&tag[0]);
+//   hash_bytes(Sha512Ctx::new_384(), msg, d[..]);      // msg: []const unsigned char
+//   struct Hmac<Sha512Ctx> mac = Hmac::new(Sha512Ctx::new(), key);
+//   mac.update(part1); mac.update(part2); mac.finish(tag[..]);
 
 namespace std {
 
 trait Hasher {
-    // Feeds 'len' bytes of the message.
-    void update(const &unsigned char data, unsigned long len);
-    // Writes the digest (digest_size() bytes). The context is spent after.
-    void finish(&unsigned char digest);
+    // Feeds bytes of the message.
+    void update([]const unsigned char data);
+    // Writes the digest into digest[0..digest_size()] (a shorter slice
+    // panics). The context is spent after.
+    void finish([]unsigned char digest);
     // Bytes finish() writes.
     unsigned long digest_size() const;
 }
@@ -33,11 +34,11 @@ trait BlockHash : Hasher {
     unsigned long block_size() const;
 }
 
-// The digest of 'len' bytes with a fresh context 'h' (taken by value, so
-// the caller's copy stays fresh): hash_bytes(Sha256Ctx::new(), ...).
+// The digest of data with a fresh context 'h' (taken by value, so the
+// caller's copy stays fresh): hash_bytes(Sha256Ctx::new(), ...).
 generic<H: Hasher>
-void hash_bytes(H h, const &unsigned char data, unsigned long len, &unsigned char digest) {
-    h.update(data, len);
+void hash_bytes(H h, []const unsigned char data, []unsigned char digest) {
+    h.update(data);
     h.finish(digest);
 }
 
