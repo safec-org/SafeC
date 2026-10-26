@@ -31,7 +31,8 @@ enum ShapeKind { SHAPE_SQUARE = 1, SHAPE_CIRCLE };
 /// The largest coordinate a [Point] may hold.
 #define GEO_MAX_COORD 1000000
 
-/// Area of a shape of `kind` and size `s`, rounded down.
+/// Area of a shape of `kind` and size `s`, rounded down: `s` is the side
+/// of a [SHAPE_SQUARE] and the radius of a [ShapeKind::SHAPE_CIRCLE].
 ///
 /// # Examples
 ///

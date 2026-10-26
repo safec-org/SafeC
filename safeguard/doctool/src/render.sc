@@ -18,8 +18,20 @@ struct String rel_href(const &String from, const &String target) {
     if (target.contains("://") || target.starts_with("#") || target.starts_with("mailto:")) {
         return target.clone();
     }
-    struct String r = util_root_prefix(from);
-    r.push_str(target);
+    // The shortest relative path: drop the directories 'from' and the
+    // target share, then one "../" per remaining directory of 'from'.
+    unsigned long common = 0UL;
+    unsigned long i = 0UL;
+    while (i < from.len && i < target.len && from.char_at(i) == target.char_at(i)) {
+        if (from.char_at(i) == (int)'/') { common = i + 1UL; }
+        i = i + 1UL;
+    }
+    struct String rest_from = from.substr(common, from.len);
+    struct String r = util_root_prefix(&rest_from);
+    rest_from.free();
+    struct String rest = target.substr(common, target.len);
+    r.push_str(&rest);
+    rest.free();
     // Same page: just the fragment.
     long long hash = target.find_char('#');
     if (hash >= 0LL) {

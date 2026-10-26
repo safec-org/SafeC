@@ -175,6 +175,10 @@ static void link_item(&Crate c, const &Value it, const &String url) {
                 k2.push(util_vstr(m, "name", ""));
                 add_link(c, &k2, &murl);
                 add_link(c, &k1, &murl);
+                // Enumerators are names of their own in C: [SHAPE_CIRCLE].
+                struct String mk = String::from(util_vstr(m, "kind", ""));
+                if (mk.eq_cstr("variant")) { add_link_cstr(c, util_vstr(m, "name", ""), &murl); }
+                mk.free();
                 k1.free(); k2.free(); murl.free();
             }
         }

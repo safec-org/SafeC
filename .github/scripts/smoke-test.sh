@@ -862,6 +862,7 @@ if sg_in "$DOCW/geo" /tmp/sg_doc.txt doc; then
     grep -q 'horizontal coordinate' "$G/geo/point/struct.Point.html" || { DOC_OK=0; echo "    trailing ///< field doc missing"; }
     grep -q 'Points and vectors in the plane' "$G/geo/point/index.html" || { DOC_OK=0; echo "    //! module doc missing"; }
     grep -q 'tok-kw' "$G/geo/point/fn.shape_area.html" || { DOC_OK=0; echo "    code example not highlighted"; }
+    grep -q 'href="enum.ShapeKind.html#variant.SHAPE_SQUARE"' "$G/geo/point/fn.shape_area.html" || { DOC_OK=0; echo "    [SHAPE_SQUARE] not linked"; }
     grep -q 'Start with <a href="geo/point/struct.Point.html">' "$G/index.html" || { DOC_OK=0; echo "    README intra-doc link not resolved"; }
     DOC_TOOL="$(find "$SAFEGUARD_CACHE" -type f \( -name safec-doc -o -name safec-doc.exe \) -path '*/build/*' | head -1)"
     if [[ -n "$DOC_TOOL" ]] && "$DOC_TOOL" check "$G" >/tmp/sg_doc_check.txt 2>&1; then :; else DOC_OK=0; cat /tmp/sg_doc_check.txt 2>/dev/null; fi
