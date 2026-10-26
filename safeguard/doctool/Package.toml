@@ -1,0 +1,9 @@
+[package]
+name        = "safec-doc"
+version     = "0.1.0"
+author      = "SafeC Contributors"
+description = "API reference generator for SafeC libraries (what 'safeguard doc' runs), written in SafeC"
+license     = "MIT"
+
+[build]
+edition = "2026"
