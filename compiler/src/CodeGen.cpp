@@ -2766,6 +2766,11 @@ llvm::Value *CodeGen::genUnary(UnaryExpr &e, FnEnv &env) {
             auto *val = genExpr(*e.operand, env);
             return builder_.CreateExtractValue(val, {0}, "force_unwrap");
         }
+        // '?fn' -> 'fn': the same pointer, nothing to load.
+        if (operandTy && operandTy->kind == TypeKind::Reference &&
+            static_cast<ReferenceType &>(*operandTy).base &&
+            static_cast<ReferenceType &>(*operandTy).base->kind == TypeKind::Function)
+            return genExpr(*e.operand, env);
         // Pointer or nullable Reference: both lower to a plain opaque ptr
         // (see lowerType) — '!' just dereferences it, same as '*x'.
         auto *ptrVal = genExpr(*e.operand, env);

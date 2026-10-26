@@ -2667,6 +2667,12 @@ TypePtr Sema::checkUnary(UnaryExpr &e) {
         }
         if (isNullableRef) {
             auto &rt = static_cast<ReferenceType &>(*operandTy);
+            // '?fn' -> 'fn': a function reference unwraps to the non-null
+            // function reference itself (there is no function value to load).
+            if (rt.base && rt.base->kind == TypeKind::Function) {
+                e.isLValue = false;
+                return makeReference(rt.base, rt.region, /*nullable=*/false, rt.mut, rt.arenaName);
+            }
             e.isLValue = rt.mut;
             return rt.base;
         }

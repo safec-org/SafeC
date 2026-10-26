@@ -19,3 +19,14 @@ int main() {
     if (!none_.is_null()) return 1;
     return call_or(some_, (?&Ctx)&c, 3) - 6 + call_or(none_, (?&Ctx)&c, 3) + 1;
 }
+
+// '!' (inside unsafe) unwraps a '?fn' to the 'fn' itself, through a field
+// reached by reference too.
+struct Hook { ?fn int(?&Ctx, int) f; };
+int run_hook(&Hook h, int x) {
+    if (h.f.is_null()) return 0;
+    fn int(?&Ctx, int) g;
+    unsafe { g = h.f!; }
+    return g(null, x);
+}
+// CHECK: define {{.*}}@run_hook(
