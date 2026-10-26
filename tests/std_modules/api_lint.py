@@ -20,6 +20,14 @@ except:
     ("Internal:", "std-private", "Not a public header", "do not edit"),
     and the FFI binding headers listed in INTERNAL below.
 
+Separately, 'void*' -- and '&void' in any spelling ('?&void', '&heap void',
+'&static void', ...) -- is not used anywhere in std, public or not:
+every header and every .sc file, FFI externs and internal helpers included,
+is checked (comments and strings aside). Untyped memory is bytes
+('unsigned char*'), a foreign object is an opaque struct, a callback is a
+fn type and a type-erased context is '?&Erased' (std/erased.h). The paths in
+VOID_EXEMPT are still being converted and are skipped for now.
+
 Usage: api_lint.py [--list] [SAFEC_HOME]
   --list  print every finding, also in allowed places (the audit view)
 Exit status 1 when a public declaration has a raw pointer.
@@ -46,11 +54,22 @@ INTERNAL = {
     "std/errno_compat.h",
     "std/stderr_compat.h",
 }
+# TEMPORARY: directories whose void* removal lands on other branches. Remove
+# each entry once that branch is merged; the list must end up empty.
+VOID_EXEMPT = (
+    "std/ml/",
+    "std/gui/",
+    "std/dsp/fft_cuda",
+    "std/dsp/fft_rocm",
+)
+
 INTERNAL_MARK = re.compile(r"^//\s*(Internal: included|.*\bstd-private\b|.*\bNot a public header\b|.*\bdo not edit\b)", re.I | re.M)
 
 POINTER = re.compile(r"(\bvoid|\w|>|\))\s*\*+(?!\s*\*)")
 # '&void' / '?&void' is void* by another spelling.
 VOIDREF = re.compile(r"&\s*(const\s+|volatile\s+)?void\b")
+# Any void pointer or reference, region and qualifiers included.
+ANYVOID = re.compile(r"\bvoid\s*\*|&\s*(?:(?:const|volatile|heap|static|stack)\s+|arena\s*<[^<>]*>\s*)*void\b")
 
 
 def strip(src):
@@ -93,6 +112,53 @@ def strip(src):
         out.append(c)
         i += 1
     return "".join(out)
+
+
+def strip_keep_pp(src):
+    """Comments and strings blanked (newlines kept), preprocessor lines kept."""
+    out = []
+    i, n = 0, len(src)
+    while i < n:
+        c = src[i]
+        if src.startswith("//", i):
+            j = src.find("\n", i)
+            i = n if j < 0 else j
+            continue
+        if src.startswith("/*", i):
+            j = src.find("*/", i + 2)
+            j = n if j < 0 else j + 2
+            out.append("\n" * src.count("\n", i, j))
+            i = j
+            continue
+        if c in "\"'":
+            j = i + 1
+            while j < n and src[j] != c and src[j] != "\n":
+                j += 2 if src[j] == "\\" else 1
+            out.append(c + c)
+            i = j + 1
+            continue
+        out.append(c)
+        i += 1
+    return "".join(out)
+
+
+def void_uses():
+    """'rel:line: text' for every void pointer/reference in std's sources."""
+    found = []
+    for dirpath, _, files in os.walk(std):
+        for f in sorted(files):
+            if not (f.endswith(".h") or f.endswith(".sc")):
+                continue
+            path = os.path.join(dirpath, f)
+            rel = os.path.relpath(path, home).replace(os.sep, "/")
+            if rel.startswith(VOID_EXEMPT):
+                continue
+            src = open(path, encoding="utf-8", errors="replace").read()
+            raw = src.split("\n")
+            for k, text in enumerate(strip_keep_pp(src).split("\n")):
+                if ANYVOID.search(text):
+                    found.append(f"{rel}:{k + 1}: {raw[k].strip()}")
+    return found
 
 
 def declarations(text):
@@ -235,11 +301,19 @@ def main():
                         print(f"[{why}] {rel}:{line}: {one}")
     for b in bad:
         print(b)
+    voids = void_uses()
+    for v in voids:
+        print(v)
     if bad:
         print(f"api_lint: {len(bad)} public std declaration(s) expose a raw pointer "
               f"(use &T / ?&T / []T / fn types; keep erasure in *_raw_ functions)", file=sys.stderr)
+    if voids:
+        print(f"api_lint: {len(voids)} void pointer(s)/reference(s) in std (use unsigned char* for bytes, "
+              f"an opaque struct for a foreign object, a fn type, or ?&Erased)", file=sys.stderr)
+    if bad or voids:
         return 1
-    print(f"api_lint: no raw pointers in public std declarations ({allowed} allowed: FFI externs, *_raw_, internal headers)")
+    print(f"api_lint: no raw pointers in public std declarations ({allowed} allowed: FFI externs, *_raw_, internal headers), "
+          f"no void* in std (outside {len(VOID_EXEMPT)} exempt paths)")
     return 0
 
 

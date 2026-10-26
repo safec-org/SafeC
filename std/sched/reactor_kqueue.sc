@@ -31,7 +31,7 @@ struct KEvent {
     unsigned short  flags;
     unsigned int    fflags;
     long            data;     // intptr_t
-    unsigned char*  udata;    // void*: std never sets it (null)
+    ?&Erased       udata;    // std never sets it (null)
 };
 
 struct TimeSpec {
@@ -104,7 +104,7 @@ inline void Reactor::add(int fd, int filter) {
     ev.flags  = (unsigned short)(SAFEC_EV_ADD | SAFEC_EV_ENABLE);
     ev.fflags = 0U;
     ev.data   = 0L;
-    unsafe { ev.udata = (unsigned char*)0; }
+    unsafe { ev.udata = null; }
     unsafe {
         kevent(self.kq, &ev, 1, (KEvent*)0, 0, (const TimeSpec*)0);
     }
@@ -117,7 +117,7 @@ inline void Reactor::remove(int fd, int filter) {
     ev.flags  = (unsigned short)SAFEC_EV_DELETE;
     ev.fflags = 0U;
     ev.data   = 0L;
-    unsafe { ev.udata = (unsigned char*)0; }
+    unsafe { ev.udata = null; }
     unsafe {
         kevent(self.kq, &ev, 1, (KEvent*)0, 0, (const TimeSpec*)0);
     }
