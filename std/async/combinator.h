@@ -363,9 +363,10 @@ struct Poll<?T> Timeout::poll(&Context cx) {
     if (p.ready_ != 0) {
         self.sleep.drop();
         self.finished = 1;
-        ?T v = p.value;
+        ?T v = p.take();
         return Poll::ready(v);
     }
+    p.drop();
     struct Poll<Unit> s = self.sleep.poll(cx);
     if (s.ready_ != 0) {
         self.inner.drop();

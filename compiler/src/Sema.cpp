@@ -4392,10 +4392,12 @@ TypePtr Sema::checkMember(MemberExpr &e) {
 
     // Auto-dereference references for dot access (SafeC references are non-null
     // and always valid — dot access on a reference implicitly dereferences it)
+    bool throughRef = false;
     if (!e.isArrow && baseTy->kind == TypeKind::Reference) {
         auto &rt = static_cast<ReferenceType &>(*baseTy);
         checkNullabilityDeref(baseTy, e.loc);
         e.isLValue = rt.mut;
+        throughRef = true;
         baseTy = rt.base;
     }
 
@@ -4458,7 +4460,10 @@ TypePtr Sema::checkMember(MemberExpr &e) {
         diag_.error(e.loc, "struct '" + st->name + "' has no field '" + e.field + "'");
         return makeError();
     }
-    if (!e.isArrow) e.isLValue = e.base->isLValue;
+    // Through a reference the field is a place in the referent, whatever the
+    // base expression is ('v.at(0).name' names the element's field, not a
+    // copy's); otherwise it is a place when the base is.
+    if (!e.isArrow && !throughRef) e.isLValue = e.base->isLValue;
     return fd->type;
 }
 

@@ -139,19 +139,19 @@ void t_poll_waker() {
     ASSERT_TRUE(p.take().is_none());
 
     int hits = 0;
-    struct Waker w = Waker::new(count_wake_, (?&int)&hits, 1UL);
+    struct Waker w = Waker::new(count_wake_, (?&int)&hits, 1UL); defer drop(w);
     w.wake_by_ref();
     w.wake_by_ref();
     ASSERT_EQ(hits, 2);
     struct Waker w2 = w.clone();
     ASSERT_TRUE(w.will_wake(&w2));
-    struct Waker w3 = Waker::new(count_wake_, (?&int)&hits, 5UL);
+    struct Waker w3 = Waker::new(count_wake_, (?&int)&hits, 5UL); defer drop(w3);
     ASSERT_FALSE(w.will_wake(&w3));
-    w2.wake();                 // consumes
+    w2.wake();                 // consumes (using w2 after this is rejected)
     ASSERT_EQ(hits, 3);
-    w2.wake_by_ref();          // a dropped waker wakes nothing
-    ASSERT_EQ(hits, 3);
-    ASSERT_TRUE(Waker::noop().is_noop());
+    struct Waker nw = Waker::noop();
+    ASSERT_TRUE(nw.is_noop());
+    nw.drop();
     ASSERT_FALSE(w.is_noop());
 
     // Counted wakers: clone/drop hooks run once per copy.
@@ -169,8 +169,8 @@ void t_poll_waker() {
 
     // WakerSlot keeps one; re-registering the same waker doesn't clone again.
     g_clones = 0;
-    struct WakerSlot slot = WakerSlot::new();
-    struct Waker cw = Waker::counted(count_wake_, count_clone_, count_drop_, (?&int)&hits, 10UL);
+    struct WakerSlot slot = WakerSlot::new(); defer drop(slot);
+    struct Waker cw = Waker::counted(count_wake_, count_clone_, count_drop_, (?&int)&hits, 10UL); defer drop(cw);
     slot.register_(&cw);
     slot.register_(&cw);
     ASSERT_EQ(g_clones, 1);
@@ -179,7 +179,7 @@ void t_poll_waker() {
     ASSERT_EQ(slot.wake(), 0);
 
     // WaitList: ids, stale ids, wake_one fairness, full list.
-    struct WaitList wl = WaitList::new();
+    struct WaitList wl = WaitList::new(); defer drop(wl);
     int a = wl.add(0, &w);
     int b = wl.add(0, &w3);
     ASSERT_TRUE(a > 0 && b > 0 && a != b);
@@ -204,14 +204,14 @@ void t_poll_waker() {
     ASSERT_EQ(wl.wake_all(), ASYNC_WAITERS);
 
     // Leaf futures.
-    struct Context cx = Context::noop();
-    struct Ready<int> rd = Ready::new(3);
+    struct Context cx = Context::noop(); defer drop(cx);
+    struct Ready<int> rd = Ready::new(3); defer drop(rd);
     ASSERT_EQ(rd.poll(&cx).take().default(0), 3);
-    struct Pending<int> pn = Pending::new();
+    struct Pending<int> pn = Pending::new(); defer drop(pn);
     ASSERT_TRUE(pn.poll(&cx).is_pending());
     hits = 0;
-    struct Context cx2 = Context::from_waker(Waker::new(count_wake_, (?&int)&hits, 1UL));
-    struct YieldNow y = YieldNow::new();
+    struct Context cx2 = Context::from_waker(Waker::new(count_wake_, (?&int)&hits, 1UL)); defer drop(cx2);
+    struct YieldNow y = YieldNow::new(); defer drop(y);
     ASSERT_TRUE(y.poll(&cx2).is_pending());
     ASSERT_EQ(hits, 1);                // woke itself
     ASSERT_TRUE(y.poll(&cx2).is_ready());
@@ -262,12 +262,16 @@ struct Poll<int> Coro::poll(&Context cx) {
     ASYNC_END;
 }
 
-void Coro::drop() { self.st = ASYNC_DONE; }
+void Coro::drop() {
+    if (self.st == 1) self.y.drop();
+    if (self.st == 2) self.r.drop();
+    self.st = ASYNC_DONE;
+}
 
 void t_coroutine() {
     int hits = 0;
-    struct Context cx = Context::from_waker(Waker::new(count_wake_, (?&int)&hits, 1UL));
-    struct Coro c = Coro::new();
+    struct Context cx = Context::from_waker(Waker::new(count_wake_, (?&int)&hits, 1UL)); defer drop(cx);
+    struct Coro c = Coro::new(); defer drop(c);
     int polls = 0;
     struct Poll<int> p = c.poll(&cx);
     polls = 1;
@@ -284,15 +288,15 @@ static struct AsyncTask<struct Ticker, int> g_tt[4];
 
 void t_executor_order() {
     log_reset_();
-    struct LocalExecutor ex = LocalExecutor::new();
+    struct LocalExecutor ex = LocalExecutor::new(); defer drop(ex);
     struct VirtualClock clk = VirtualClock::new(0LL);
     // Yielding tickers interleave round-robin in spawn order.
     g_tt[0] = AsyncTask::new(Ticker::new(1, 3, 0LL));
     g_tt[1] = AsyncTask::new(Ticker::new(2, 2, 0LL));
     g_tt[2] = AsyncTask::new(Ticker::new(3, 3, 0LL));
-    struct JoinHandle<int> h0 = ex.spawn(&g_tt[0]);
-    ex.spawn(&g_tt[1]);
-    ex.spawn(&g_tt[2]);
+    struct JoinHandle<int> h0 = ex.spawn(&g_tt[0]); defer drop(h0);
+    drop(ex.spawn(&g_tt[1]));
+    drop(ex.spawn(&g_tt[2]));
     ASSERT_EQ(ex.live_count(), 3);
     ex.run(&clk);
     int want[8] = {100, 200, 300, 101, 201, 301, 102, 302};
@@ -307,8 +311,8 @@ void t_executor_order() {
     log_reset_();
     g_tt[0] = AsyncTask::new(Ticker::new(1, 3, 30LL));   // logs at 0, 30, 60
     g_tt[1] = AsyncTask::new(Ticker::new(2, 4, 20LL));   // 0, 20, 40, 60
-    ex.spawn(&g_tt[0]);
-    ex.spawn(&g_tt[1]);
+    drop(ex.spawn(&g_tt[0]));
+    drop(ex.spawn(&g_tt[1]));
     ex.run(&clk);
     int want2[7] = {100, 200, 201, 101, 202, 102, 203};
     ASSERT_TRUE(log_is_(&want2[0], 7));
@@ -323,6 +327,7 @@ struct Parent {
     struct AsyncTask<struct Val, int> child;
     struct JoinHandle<int>    ch;
     ?int                      child_got;
+    int                       spawned;   // child/ch hold a task
     static struct Parent new(struct JoinHandle<int> h);
     struct Poll<int> poll(&Context cx);
     void drop();
@@ -334,6 +339,7 @@ struct Parent Parent::new(struct JoinHandle<int> h) {
     p.h = h;
     p.got = null;
     p.child_got = null;
+    p.spawned = 0;
     return p;
 }
 
@@ -342,26 +348,31 @@ struct Poll<int> Parent::poll(&Context cx) {
     AWAIT_INTO(1, self.got, self.h);
     self.child = AsyncTask::new(Val::new(5, 10LL));
     self.ch = async_spawn(cx, &self.child);
+    self.spawned = 1;
     AWAIT_INTO(2, self.child_got, self.ch);
     ASYNC_RETURN(self.got.default(-100) + self.child_got.default(-1000));
     ASYNC_END;
 }
 
-void Parent::drop() { self.st = ASYNC_DONE; }
+void Parent::drop() {
+    self.h.drop();
+    if (self.spawned != 0) { self.ch.drop(); self.child.drop(); self.spawned = 0; }
+    self.st = ASYNC_DONE;
+}
 
 static struct AsyncTask<struct Val, int> g_vt[4];
 static struct AsyncTask<struct Parent, int> g_pt;
 
 void t_executor_join_abort() {
     log_reset_();
-    struct LocalExecutor ex = LocalExecutor::new();
+    struct LocalExecutor ex = LocalExecutor::new(); defer drop(ex);
     struct VirtualClock clk = VirtualClock::new(1000LL);
     g_vt[0] = AsyncTask::new(Val::new(40, 25LL));
     g_vt[1] = AsyncTask::new(Val::new(41, 500LL));
     struct JoinHandle<int> h0 = ex.spawn(&g_vt[0]);
-    struct JoinHandle<int> h1 = ex.spawn(&g_vt[1]);
+    struct JoinHandle<int> h1 = ex.spawn(&g_vt[1]); defer drop(h1);
     g_pt = AsyncTask::new(Parent::new(h0));
-    ex.spawn(&g_pt);
+    drop(ex.spawn(&g_pt));
     // Run to t=1100, then abort the 500 ms one: its timer goes away with it.
     while (clk.now < 1100LL && ex.live_count() > 0) {
         ex.turn(clk.now);
@@ -380,12 +391,15 @@ void t_executor_join_abort() {
     ASSERT_EQ(g_drops, 1);
     ASSERT_EQ(ex.timers.pending(), 0);
     ASSERT_EQ(clk.now, 1100LL);                 // no park waited for the aborted timer
-    // Aborting a finished task changes nothing.
-    h0.abort();
+    // Aborting a finished task changes nothing (h0 itself moved into the
+    // Parent: abort through another handle to the same task).
+    struct JoinHandle<int> h0b = std::join_handle_for_(&g_vt[0]);
+    h0b.abort();
+    h0b.drop();
     ASSERT_FALSE(g_vt[0].is_aborted());
     ASSERT_EQ(g_vt[0].take().default(0), 40);
     // An aborted task's handle reports null.
-    struct Context cx = Context::noop();
+    struct Context cx = Context::noop(); defer drop(cx);
     struct Poll<?int> hp = h1.poll(&cx);
     ASSERT_TRUE(hp.is_ready());
     ASSERT_TRUE(hp.value.is_none());
@@ -393,8 +407,8 @@ void t_executor_join_abort() {
     // block_on runs the root and the spawned tasks together.
     log_reset_();
     g_vt[2] = AsyncTask::new(Val::new(7, 5LL));
-    ex.spawn(&g_vt[2]);
-    struct Val root = Val::new(9, 20LL);
+    drop(ex.spawn(&g_vt[2]));
+    struct Val root = Val::new(9, 20LL); defer drop(root);
     int r = ex.block_on(&clk, &root);
     ASSERT_EQ(r, 9);
     int want[2] = {7, 9};
@@ -440,7 +454,7 @@ void t_remote_wake() {
     unsigned long long tid = 0ULL;
     long long t0 = async_mono_ms();
     ASSERT_EQ(thread_create(&tid, send_later_, (?&int)&delay), 0);
-    struct WaitOneshot w;
+    struct WaitOneshot w; defer drop(w);
     w.st = ASYNC_INIT;
     w.got = null;
     int v = block_on(&w);
@@ -451,7 +465,7 @@ void t_remote_wake() {
     ASSERT_TRUE(dt < 2000LL);
 
     // IoDriver (the wake pipe interrupts the reactor's wait).
-    struct Runtime rt = Runtime::new();
+    struct Runtime rt = Runtime::new(); defer drop(rt);
     ASSERT_EQ(rt.init(), 0);
     g_os = Oneshot::new();
     t0 = async_mono_ms();
@@ -505,14 +519,18 @@ struct Poll<int> Ticks::poll(&Context cx) {
     ASYNC_END;
 }
 
-void Ticks::drop() { self.iv.drop(); self.st = ASYNC_DONE; }
+void Ticks::drop() {
+    if (self.st == 2) self.busy.drop();
+    self.iv.drop();
+    self.st = ASYNC_DONE;
+}
 
 static struct AsyncTask<struct Val, int> g_many[80];
 
 void t_timers() {
-    struct LocalExecutor ex = LocalExecutor::new();
+    struct LocalExecutor ex = LocalExecutor::new(); defer drop(ex);
     struct VirtualClock clk = VirtualClock::new(0LL);
-    struct Ticks tk;
+    struct Ticks tk; defer drop(tk);
     tk.st = ASYNC_INIT;
     int n = ex.block_on(&clk, &tk);
     ASSERT_EQ(n, 5);
@@ -523,16 +541,16 @@ void t_timers() {
     ASSERT_EQ(tk.stamps[4], 55LL);
 
     // TimerQueue by hand.
-    struct TimerQueue q = TimerQueue::new();
+    struct TimerQueue q = TimerQueue::new(); defer drop(q);
     q.advance(500LL);
     ASSERT_EQ(q.now_ms(), 500LL);
     ASSERT_EQ(q.next_deadline(), -1LL);
     ASSERT_EQ(q.park_timeout(), -1LL);
     int hits = 0;
-    struct Context cx = Context::from_waker(Waker::new(count_wake_, (?&int)&hits, 1UL));
+    struct Context cx = Context::from_waker(Waker::new(count_wake_, (?&int)&hits, 1UL)); defer drop(cx);
     cx.timers = &q;
     struct Sleep s1 = Sleep::new(100LL);
-    struct Sleep s2 = Sleep::new(40LL);
+    struct Sleep s2 = Sleep::new(40LL); defer drop(s2);
     ASSERT_TRUE(s1.poll(&cx).is_pending());
     ASSERT_TRUE(s2.poll(&cx).is_pending());
     ASSERT_EQ(q.pending(), 2);
@@ -548,7 +566,7 @@ void t_timers() {
     ASSERT_EQ(q.next_deadline(), 570LL);
     s1.drop();
     ASSERT_EQ(q.pending(), 0);
-    struct Sleep past = Sleep::until(100LL);
+    struct Sleep past = Sleep::until(100LL); defer drop(past);
     ASSERT_TRUE(past.poll(&cx).is_ready());   // deadline already passed
 
     // More concurrent sleeps than the wheel holds (64): the rest re-poll
@@ -557,7 +575,7 @@ void t_timers() {
     int i = 0;
     while (i < 80) {
         g_many[i] = AsyncTask::new(Val::new(i, (long long)(100 + i)));
-        ex.spawn(&g_many[i]);
+        drop(ex.spawn(&g_many[i]));
         i = i + 1;
     }
     long long start = clk.now;
@@ -576,11 +594,11 @@ static int twice_(int x) { return x * 2; }
 static struct Val after_(int x) { return Val::new(x + 1, 5LL); }
 
 void t_combinators() {
-    struct LocalExecutor ex = LocalExecutor::new();
+    struct LocalExecutor ex = LocalExecutor::new(); defer drop(ex);
     struct VirtualClock clk = VirtualClock::new(0LL);
     log_reset_();
 
-    struct Join2<struct Val, struct Val, int, int> j = join2(Val::new(1, 30LL), Val::new(2, 10LL));
+    struct Join2<struct Val, struct Val, int, int> j = join2(Val::new(1, 30LL), Val::new(2, 10LL)); defer drop(j);
     struct Both<int, int> b = ex.block_on(&clk, &j);
     ASSERT_EQ(b.first, 1);
     ASSERT_EQ(b.second, 2);
@@ -589,11 +607,12 @@ void t_combinators() {
     struct Join3<struct Val, struct Val, struct Ready<int>, int, int, int> j3 =
         join3(Val::new(3, 5LL), Val::new(4, 15LL), Ready::new(5));
     struct Both<int, struct Both<int, int>> b3 = ex.block_on(&clk, &j3);
+    j3.drop();
     ASSERT_EQ(b3.first + b3.second.first * 10 + b3.second.second * 100, 543);
     ASSERT_EQ(clk.now, 45LL);
 
     g_drops = 0;
-    struct Select2<struct Val, struct Val, int, int> s = select2(Val::new(6, 30LL), Val::new(7, 10LL));
+    struct Select2<struct Val, struct Val, int, int> s = select2(Val::new(6, 30LL), Val::new(7, 10LL)); defer drop(s);
     struct Either<int, int> e = ex.block_on(&clk, &s);
     ASSERT_EQ(e.which, 2);
     ASSERT_FALSE(e.is_left());
@@ -602,21 +621,21 @@ void t_combinators() {
     ASSERT_EQ(ex.timers.pending(), 0); // ... with its timer
     ASSERT_EQ(clk.now, 55LL);
 
-    struct Timeout<struct Val, int> t = timeout(Val::new(8, 100LL), 20LL);
+    struct Timeout<struct Val, int> t = timeout(Val::new(8, 100LL), 20LL); defer drop(t);
     ?int r = ex.block_on(&clk, &t);
     ASSERT_TRUE(r.is_none());
     ASSERT_EQ(clk.now, 75LL);
     ASSERT_EQ(ex.timers.pending(), 0);
-    struct Timeout<struct Val, int> t2 = timeout(Val::new(9, 10LL), 20LL);
+    struct Timeout<struct Val, int> t2 = timeout(Val::new(9, 10LL), 20LL); defer drop(t2);
     ?int r2 = ex.block_on(&clk, &t2);
     ASSERT_EQ(r2.default(-1), 9);
     ASSERT_EQ(clk.now, 85LL);
     ASSERT_EQ(ex.timers.pending(), 0);
 
-    struct MapFut<struct Val, int, int> m = map_fut(Val::new(21, 1LL), twice_);
+    struct MapFut<struct Val, int, int> m = map_fut(Val::new(21, 1LL), twice_); defer drop(m);
     int mv = ex.block_on(&clk, &m);
     ASSERT_EQ(mv, 42);
-    struct AndThen<struct Val, int, struct Val, int> at = and_then(Val::new(10, 5LL), after_);
+    struct AndThen<struct Val, int, struct Val, int> at = and_then(Val::new(10, 5LL), after_); defer drop(at);
     int av = ex.block_on(&clk, &at);
     ASSERT_EQ(av, 11);
     ASSERT_EQ(clk.now, 96LL);
@@ -634,6 +653,8 @@ void t_combinators() {
     ASSERT_EQ(outs[2], 32);
     ASSERT_EQ(clk.now, 121LL);
 
+    ja.drop();
+    unsafe { forget(vs); }   // join_all owned the futures behind the slice and dropped them
     g_drops = 0;
     vs[0] = Val::new(40, 15LL);
     vs[1] = Val::new(41, 5LL);
@@ -644,11 +665,13 @@ void t_combinators() {
     ASSERT_EQ(pk.value, 41);
     ASSERT_EQ(g_drops, 2);
     ASSERT_EQ(ex.timers.pending(), 0);
+    sa.drop();
+    unsafe { forget(vs); }   // select_any owned (and dropped) vs[0..3]; vs[3] was join_all's
 
     // A combinator dropped half-way drops its children.
     g_drops = 0;
     struct Join2<struct Val, struct Val, int, int> jd = join2(Val::new(1, 10LL), Val::new(2, 50LL));
-    struct Context cx = local_context_(&ex, Waker::noop());
+    struct Context cx = local_context_(&ex, Waker::noop()); defer drop(cx);
     ASSERT_TRUE(jd.poll(&cx).is_pending());
     ASSERT_EQ(ex.timers.pending(), 2);
     jd.drop();
@@ -733,30 +756,34 @@ struct Poll<int> Consumer::poll(&Context cx) {
     ASYNC_END;
 }
 
-void Consumer::drop() { self.st = ASYNC_DONE; }
+void Consumer::drop() {
+    if (self.st == 1) self.rx.drop();
+    if (self.st == 2) self.d.drop();
+    self.st = ASYNC_DONE;
+}
 
 static struct AsyncTask<struct Producer, int> g_prod[2];
 static struct AsyncTask<struct Consumer, int> g_cons[2];
 
 void t_channels() {
     // Oneshot.
-    struct Context cx = Context::noop();
-    struct Oneshot<int> o = Oneshot::new();
-    struct OneshotRecv<int> orx = o.recv();
+    struct Context cx = Context::noop(); defer drop(cx);
+    struct Oneshot<int> o = Oneshot::new(); defer drop(o);
+    struct OneshotRecv<int> orx = o.recv(); defer drop(orx);
     ASSERT_TRUE(orx.poll(&cx).is_pending());
     ASSERT_EQ(o.send(5), 1);
     ASSERT_EQ(o.send(6), 0);           // only once
     struct Poll<?int> op = orx.poll(&cx);
     ASSERT_TRUE(op.is_ready());
     ASSERT_EQ(op.value.default(0), 5);
-    struct Oneshot<int> o2 = Oneshot::new();
+    struct Oneshot<int> o2 = Oneshot::new(); defer drop(o2);
     o2.close();
-    struct OneshotRecv<int> orx2 = o2.recv();
+    struct OneshotRecv<int> orx2 = o2.recv(); defer drop(orx2);
     struct Poll<?int> op2 = orx2.poll(&cx);
     ASSERT_TRUE(op2.is_ready());
     ASSERT_TRUE(op2.value.is_none());
     ASSERT_TRUE(o2.is_closed());
-    struct Oneshot<int> o3 = Oneshot::new();
+    struct Oneshot<int> o3 = Oneshot::new(); defer drop(o3);
     o3.send(9);
     ASSERT_EQ(o3.try_recv().default(0), 9);
     ASSERT_TRUE(o3.try_recv().is_none());
@@ -779,16 +806,16 @@ void t_channels() {
     // Two producers, two consumers over a 3-slot channel; close when the
     // producers are done: consumers drain, then see null.
     g_ch = AsyncChannel::new(g_slots[0..3]);
-    struct LocalExecutor ex = LocalExecutor::new();
+    struct LocalExecutor ex = LocalExecutor::new(); defer drop(ex);
     struct VirtualClock clk = VirtualClock::new(0LL);
     g_prod[0] = AsyncTask::new(Producer::new(0));
     g_prod[1] = AsyncTask::new(Producer::new(100));
     g_cons[0] = AsyncTask::new(Consumer::new());
     g_cons[1] = AsyncTask::new(Consumer::new());
-    ex.spawn(&g_prod[0]);
-    ex.spawn(&g_prod[1]);
-    ex.spawn(&g_cons[0]);
-    ex.spawn(&g_cons[1]);
+    drop(ex.spawn(&g_prod[0]));
+    drop(ex.spawn(&g_prod[1]));
+    drop(ex.spawn(&g_cons[0]));
+    drop(ex.spawn(&g_cons[1]));
     while (g_prod[0].is_finished() == 0 || g_prod[1].is_finished() == 0) {
         ex.turn(clk.now);
         if (ex.has_ready() == 0) clk.park(ex.timers.park_timeout());
@@ -811,16 +838,16 @@ void t_channels() {
     ASSERT_EQ(clk.now, 20LL);          // 20 values, 2 consumers, 2 ms each
 
     // A send on a closed channel completes with 0; a pending one is woken by close.
-    struct AsyncChannel<int> c2 = AsyncChannel::new(g_slots[0..1]);
-    struct ChanSend<int> s1 = c2.send(1);
-    struct ChanSend<int> s2 = c2.send(2);
+    struct AsyncChannel<int> c2 = AsyncChannel::new(g_slots[0..1]); defer drop(c2);
+    struct ChanSend<int> s1 = c2.send(1); defer drop(s1);
+    struct ChanSend<int> s2 = c2.send(2); defer drop(s2);
     ASSERT_EQ(s1.poll(&cx).take().default(-1), 1);
     ASSERT_TRUE(s2.poll(&cx).is_pending());
     c2.close();
     ASSERT_EQ(s2.poll(&cx).take().default(-1), 0);
-    struct ChanRecv<int> r1 = c2.recv();
+    struct ChanRecv<int> r1 = c2.recv(); defer drop(r1);
     ASSERT_EQ(r1.poll(&cx).value.default(-1), 1);   // buffered values still drain
-    struct ChanRecv<int> r2 = c2.recv();
+    struct ChanRecv<int> r2 = c2.recv(); defer drop(r2);
     struct Poll<?int> rp = r2.poll(&cx);
     ASSERT_TRUE(rp.is_ready() && rp.value.is_none());
 }
@@ -902,7 +929,11 @@ struct Poll<int> Permits::poll(&Context cx) {
     ASYNC_END;
 }
 
-void Permits::drop() { self.st = ASYNC_DONE; }
+void Permits::drop() {
+    if (self.st == 1) self.a.drop();
+    if (self.st == 2) self.d.drop();
+    self.st = ASYNC_DONE;
+}
 
 struct Waiter {
     int             st;
@@ -936,7 +967,7 @@ static struct AsyncTask<struct Permits, int> g_pm[6];
 static struct AsyncTask<struct Waiter, int> g_wt[3];
 
 void t_sync() {
-    struct LocalExecutor ex = LocalExecutor::new();
+    struct LocalExecutor ex = LocalExecutor::new(); defer drop(ex);
     struct VirtualClock clk = VirtualClock::new(0LL);
 
     // Mutex: one holder at a time, FIFO-ish hand-off, held across awaits.
@@ -945,7 +976,7 @@ void t_sync() {
     g_inside = 0;
     g_max_inside = 0;
     int i = 0;
-    while (i < 4) { g_lk[i] = AsyncTask::new(Locker::new(i + 1)); ex.spawn(&g_lk[i]); i = i + 1; }
+    while (i < 4) { g_lk[i] = AsyncTask::new(Locker::new(i + 1)); drop(ex.spawn(&g_lk[i])); i = i + 1; }
     ex.run(&clk);
     ASSERT_EQ(g_max_inside, 1);
     ASSERT_EQ(g_nlog, 4);
@@ -961,7 +992,7 @@ void t_sync() {
     g_max_inside = 0;
     long long t0 = clk.now;
     i = 0;
-    while (i < 6) { g_pm[i] = AsyncTask::new(Permits::new(i)); ex.spawn(&g_pm[i]); i = i + 1; }
+    while (i < 6) { g_pm[i] = AsyncTask::new(Permits::new(i)); drop(ex.spawn(&g_pm[i])); i = i + 1; }
     ex.run(&clk);
     ASSERT_EQ(g_max_inside, 2);
     ASSERT_EQ(clk.now - t0, 30LL);
@@ -975,13 +1006,13 @@ void t_sync() {
     g_ntf = AsyncNotify::new();
     g_ntf.notify_one();                // no waiter: a permit for the next one
     g_wt[0] = AsyncTask::new(Waiter::new(1));
-    ex.spawn(&g_wt[0]);
+    drop(ex.spawn(&g_wt[0]));
     ex.turn(clk.now);
     ASSERT_TRUE(g_wt[0].is_finished());
     g_wt[1] = AsyncTask::new(Waiter::new(2));
     g_wt[2] = AsyncTask::new(Waiter::new(3));
-    ex.spawn(&g_wt[1]);
-    ex.spawn(&g_wt[2]);
+    drop(ex.spawn(&g_wt[1]));
+    drop(ex.spawn(&g_wt[2]));
     ex.turn(clk.now);
     ASSERT_EQ(ex.live_count(), 2);
     g_ntf.notify_one();
@@ -993,18 +1024,18 @@ void t_sync() {
     ASSERT_EQ(g_nlog, 3);
     // notify_waiters leaves no permit behind.
     struct Notified late = g_ntf.notified();
-    struct Context cx = Context::noop();
+    struct Context cx = Context::noop(); defer drop(cx);
     ASSERT_TRUE(late.poll(&cx).is_pending());
     late.drop();
 
     // CancelToken, a child, and with_cancel.
-    struct CancelToken root = CancelToken::new();
-    struct CancelToken child = CancelToken::child_of(&root);
-    struct CancelToken other = CancelToken::new();
+    struct CancelToken root = CancelToken::new(); defer drop(root);
+    struct CancelToken child = CancelToken::child_of(&root); defer drop(child);
+    struct CancelToken other = CancelToken::new(); defer drop(other);
     ASSERT_FALSE(child.is_cancelled());
-    struct Cancelled cf = child.cancelled_fut();
+    struct Cancelled cf = child.cancelled_fut(); defer drop(cf);
     int hits = 0;
-    struct Context cxw = Context::from_waker(Waker::new(count_wake_, (?&int)&hits, 1UL));
+    struct Context cxw = Context::from_waker(Waker::new(count_wake_, (?&int)&hits, 1UL)); defer drop(cxw);
     ASSERT_TRUE(cf.poll(&cxw).is_pending());
     root.cancel();                     // cancelling the parent cancels the child
     ASSERT_EQ(hits, 1);
@@ -1013,10 +1044,10 @@ void t_sync() {
     ASSERT_FALSE(other.is_cancelled());
 
     g_drops = 0;
-    struct CancelToken tok = CancelToken::new();
-    struct Cancellable<struct Val, int> wc = with_cancel(Val::new(5, 100LL), &tok);
+    struct CancelToken tok = CancelToken::new(); defer drop(tok);
+    struct Cancellable<struct Val, int> wc = with_cancel(Val::new(5, 100LL), &tok); defer drop(wc);
     g_vt[3] = AsyncTask::new(Val::new(0, 30LL));   // something to cancel at t+30
-    struct Context cxe = local_context_(&ex, Waker::noop());
+    struct Context cxe = local_context_(&ex, Waker::noop()); defer drop(cxe);
     ASSERT_TRUE(wc.poll(&cxe).is_pending());
     tok.cancel();
     struct Poll<?int> wp = wc.poll(&cxe);
@@ -1024,8 +1055,8 @@ void t_sync() {
     ASSERT_TRUE(wp.value.is_none());
     ASSERT_EQ(g_drops, 1);
     ASSERT_EQ(ex.timers.pending(), 0);
-    struct CancelToken tok2 = CancelToken::new();
-    struct Cancellable<struct Val, int> wc2 = with_cancel(Val::new(6, 10LL), &tok2);
+    struct CancelToken tok2 = CancelToken::new(); defer drop(tok2);
+    struct Cancellable<struct Val, int> wc2 = with_cancel(Val::new(6, 10LL), &tok2); defer drop(wc2);
     ?int got = ex.block_on(&clk, &wc2);
     ASSERT_EQ(got.default(-1), 6);
 }
@@ -1066,7 +1097,11 @@ struct Poll<int> PoolJob::poll(&Context cx) {
     ASYNC_END;
 }
 
-void PoolJob::drop() { if (self.st == 1) self.d.drop(); self.st = ASYNC_DONE; }
+void PoolJob::drop() {
+    if (self.st == 1) self.d.drop();
+    if (self.st == 2) self.y.drop();
+    self.st = ASYNC_DONE;
+}
 
 // Pool tasks talking through a channel.
 static int g_pslots[4];
@@ -1086,7 +1121,7 @@ struct Poll<int> PoolSender::poll(&Context cx) {
     ASYNC_RETURN(100);
     ASYNC_END;
 }
-void PoolSender::drop() { self.st = ASYNC_DONE; }
+void PoolSender::drop() { if (self.st == 1) self.tx.drop(); self.st = ASYNC_DONE; }
 struct PoolSummer {
     int st; int sum; ?int got; struct ChanRecv<int> rx;
     struct Poll<int> poll(&Context cx);
@@ -1103,7 +1138,7 @@ struct Poll<int> PoolSummer::poll(&Context cx) {
     ASYNC_RETURN(self.sum);
     ASYNC_END;
 }
-void PoolSummer::drop() { self.st = ASYNC_DONE; }
+void PoolSummer::drop() { if (self.st == 1) self.rx.drop(); self.st = ASYNC_DONE; }
 
 static struct ThreadPool g_pool;
 static struct AsyncTask<struct PoolJob, int> g_pj[32];
@@ -1116,7 +1151,7 @@ void t_thread_pool() {
     ASSERT_EQ(g_pool.start(4), 0);
     g_pool_count = 0;
     int i = 0;
-    while (i < 32) { g_pj[i] = AsyncTask::new(PoolJob::new(i)); g_pool.spawn(&g_pj[i]); i = i + 1; }
+    while (i < 32) { g_pj[i] = AsyncTask::new(PoolJob::new(i)); drop(g_pool.spawn(&g_pj[i])); i = i + 1; }
     g_pool.wait_idle();
     ASSERT_EQ(atomic_load_int(&g_pool_count), 160);
     int sum = 0;
@@ -1133,8 +1168,8 @@ void t_thread_pool() {
     pm.sum = 0;
     pm.got = null;
     g_psum = AsyncTask::new(pm);
-    g_pool.spawn(&g_psum);
-    g_pool.spawn(&g_ps);
+    drop(g_pool.spawn(&g_psum));
+    drop(g_pool.spawn(&g_ps));
     g_pool.wait_idle();
     ASSERT_EQ(g_psum.take().default(0), 5050);
 
@@ -1143,7 +1178,7 @@ void t_thread_pool() {
     ASSERT_EQ(pb, 7);
     g_drops = 0;
     g_pv = AsyncTask::new(Val::new(1, 10000LL));
-    struct JoinHandle<int> h = g_pool.spawn(&g_pv);
+    struct JoinHandle<int> h = g_pool.spawn(&g_pv); defer drop(h);
     thread_sleep_ms(20UL);
     h.abort();
     g_pool.wait_idle();
@@ -1176,7 +1211,7 @@ struct Poll<int> Spinner::poll(&Context cx) {
     ASYNC_END;
 }
 
-void Spinner::drop() { self.st = ASYNC_DONE; }
+void Spinner::drop() { if (self.st == 1) self.y.drop(); self.st = ASYNC_DONE; }
 
 struct FlagAfter {
     int          st;
@@ -1202,15 +1237,16 @@ static struct AsyncTask<struct Spinner, int> g_sp;
 void t_no_starvation() {
     // LocalExecutor with the real clock: the spinner is the block_on root.
     atomic_store_int(&g_flag, 0);
-    struct LocalExecutor ex = LocalExecutor::new();
+    struct LocalExecutor ex = LocalExecutor::new(); defer drop(ex);
     struct HostPark park = HostPark::new();
     struct FlagAfter fa;
     fa.st = ASYNC_INIT;
     g_fa = AsyncTask::new(fa);
-    ex.spawn(&g_fa);
+    drop(ex.spawn(&g_fa));
     struct Spinner sp;
     sp.st = ASYNC_INIT;
     int spins = ex.block_on(&park, &sp);
+    sp.drop();
     ASSERT_TRUE(spins < 50000000);
     ASSERT_TRUE(g_fa.is_finished());
     park.destroy();
@@ -1224,12 +1260,14 @@ void t_no_starvation() {
         case some(p): {
             *p = ThreadPool::new();
             ASSERT_EQ(p.start(1), 0);
-            sp.st = ASYNC_INIT;
-            g_sp = AsyncTask::new(sp);
-            fa.st = ASYNC_INIT;
-            g_fa = AsyncTask::new(fa);
-            p.spawn(&g_sp);
-            p.spawn(&g_fa);
+            struct Spinner sp2;
+            sp2.st = ASYNC_INIT;
+            g_sp = AsyncTask::new(sp2);
+            struct FlagAfter fa2;
+            fa2.st = ASYNC_INIT;
+            g_fa = AsyncTask::new(fa2);
+            drop(p.spawn(&g_sp));
+            drop(p.spawn(&g_fa));
             p.wait_idle();
             ASSERT_TRUE(g_sp.take().default(50000000) < 50000000);
             p.shutdown();
@@ -1240,7 +1278,7 @@ void t_no_starvation() {
 
 void t_host_block_on() {
     long long t0 = async_mono_ms();
-    struct Ticker tk = Ticker::new(9, 3, 15LL);   // three real 15 ms sleeps
+    struct Ticker tk = Ticker::new(9, 3, 15LL); defer drop(tk);   // three real 15 ms sleeps
     log_reset_();
     int bv = block_on(&tk);
     ASSERT_EQ(bv, 9);
@@ -1315,9 +1353,9 @@ struct Poll<int> EchoServer::poll(&Context cx) {
         {
             struct EchoConn ec;
             ec.st = ASYNC_INIT;
-            ec.c = self.c;
+            ec.c = std::replace(&self.c, AsyncTcpStream::from_fd(-1));
             self.conns[self.accepted] = AsyncTask::new(ec);
-            async_spawn(cx, &self.conns[self.accepted]);
+            drop(async_spawn(cx, &self.conns[self.accepted]));
         }
         self.accepted = self.accepted + 1;
     }
@@ -1326,7 +1364,14 @@ struct Poll<int> EchoServer::poll(&Context cx) {
     ASYNC_END;
 }
 
-void EchoServer::drop() { if (self.st == 1) self.acc.drop(); self.l.close(); self.st = ASYNC_DONE; }
+void EchoServer::drop() {
+    if (self.st == 1) self.acc.drop();
+    self.c.drop();
+    int i = 0;
+    while (i < self.accepted) { self.conns[i].drop(); i = i + 1; }   // finished echo tasks
+    self.l.close();
+    self.st = ASYNC_DONE;
+}
 
 struct EchoClient {
     int                   st;
@@ -1442,7 +1487,14 @@ struct Poll<int> HttpOnce::poll(&Context cx) {
     ASYNC_END;
 }
 
-void HttpOnce::drop() { self.c.close(); self.l.close(); self.st = ASYNC_DONE; }
+void HttpOnce::drop() {
+    if (self.st == 1) self.acc.drop();
+    if (self.st == 2) self.rd.drop();
+    if (self.st == 3) self.wr.drop();
+    self.c.close();
+    self.l.close();
+    self.st = ASYNC_DONE;
+}
 
 struct HttpGet {
     int                   st;
@@ -1481,7 +1533,13 @@ struct Poll<int> HttpGet::poll(&Context cx) {
     ASYNC_END;
 }
 
-void HttpGet::drop() { self.s.close(); self.st = ASYNC_DONE; }
+void HttpGet::drop() {
+    if (self.st == 1) self.cn.drop();
+    if (self.st == 2) self.wr.drop();
+    if (self.st == 3) self.rd.drop();
+    self.s.close();
+    self.st = ASYNC_DONE;
+}
 
 static struct Runtime g_rt;
 static struct AsyncTask<struct EchoServer, int> g_srv;
@@ -1495,13 +1553,15 @@ void t_net_loopback() {
     // Echo: ECHO_CLIENTS concurrent clients, a handler task per connection.
     struct EchoServer srv;
     srv.st = ASYNC_INIT;
+    srv.accepted = 0;
+    srv.c = AsyncTcpStream::from_fd(-1);
     srv.expect = ECHO_CLIENTS;
     srv.l = AsyncTcpListener::bind((unsigned short)0);
     ASSERT_TRUE(srv.l.fd >= 0);
     unsigned short port = srv.l.local_port();
     ASSERT_TRUE(port != (unsigned short)0);
     g_srv = AsyncTask::new(srv);
-    g_rt.spawn(&g_srv);
+    drop(g_rt.spawn(&g_srv));
     int i = 0;
     while (i < ECHO_CLIENTS) {
         struct EchoClient c;
@@ -1509,7 +1569,7 @@ void t_net_loopback() {
         c.id = i + 1;
         c.port = port;
         g_cli[i] = AsyncTask::new(c);
-        g_rt.spawn(&g_cli[i]);
+        drop(g_rt.spawn(&g_cli[i]));
         i = i + 1;
     }
     g_rt.run();
@@ -1529,7 +1589,7 @@ void t_net_loopback() {
     ASSERT_TRUE(g_rt.io.events > 0LL);
 
     // A refused connect (the listener above is closed now).
-    struct EchoClient refused;
+    struct EchoClient refused; defer drop(refused);
     refused.st = ASYNC_INIT;
     refused.id = 1;
     refused.port = port;
@@ -1541,22 +1601,24 @@ void t_net_loopback() {
     struct AsyncTcpListener idle = AsyncTcpListener::bind((unsigned short)0);
     struct Timeout<struct AcceptFut, struct AsyncTcpStream> ta = timeout(idle.accept(), 30LL);
     long long t0 = async_mono_ms();
-    ?struct AsyncTcpStream none = g_rt.block_on(&ta);
+    ?struct AsyncTcpStream none = g_rt.block_on(&ta); defer drop(none);
     ASSERT_TRUE(none.is_none());
     ASSERT_TRUE(async_mono_ms() - t0 >= 25LL);
     ASSERT_EQ(g_rt.io.waiting(), 0);
+    ta.drop();   // before the listener its accept future refers to
     idle.close();
 
     // A tiny HTTP exchange.
     struct HttpOnce h;
     h.st = ASYNC_INIT;
+    h.c = AsyncTcpStream::from_fd(-1);
     h.l = AsyncTcpListener::bind((unsigned short)0);
     ASSERT_TRUE(h.l.fd >= 0);
-    struct HttpGet g;
+    struct HttpGet g; defer drop(g);
     g.st = ASYNC_INIT;
     g.port = h.l.local_port();
     g_http = AsyncTask::new(h);
-    g_rt.spawn(&g_http);
+    drop(g_rt.spawn(&g_http));
     int got = g_rt.block_on(&g);
     g_rt.run();
     ASSERT_EQ(g_http.take().default(-5), 1);

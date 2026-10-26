@@ -306,6 +306,6 @@ void BST::drop() {
 }
 
 generic<K, V, C: Order>
-void BST::clear() { self.free(); }
+void BST::clear() { unsafe { self.drop(); } }   // drop in place: drop() leaves it empty
 
 } // namespace std

@@ -46,6 +46,7 @@ T block_on(&F fut) {
     struct HostPark park = HostPark::new();
     T r = ex.block_on(&park, fut);
     park.destroy();
+    ex.drop();
     return r;
 }
 

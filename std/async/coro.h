@@ -117,6 +117,13 @@ P async_finish_(&AsyncResume st, P p) {
     *st = ASYNC_DONE;
     return p;
 }
+// AWAIT's helper: 1 if 'p' is Ready, dropping the value it discards.
+generic<T>
+int async_poll_done_(struct Poll<T> p) {
+    int r = p.ready_;
+    p.drop();
+    return r;
+}
 } // namespace std
 
 #ifdef __SAFEC_COMPAT_PREPROCESSOR__   // function-like macros: compat mode only
@@ -212,15 +219,15 @@ P async_finish_(&AsyncResume st, P p) {
 #define AWAIT(k, fut)                                                          \
     *__async_st = __async_point_##k;                                           \
 __async_resume_##k:                                                            \
-    if ((fut).poll(cx).is_pending() != 0) return Poll::pending()
+    if (std::async_poll_done_((fut).poll(cx)) == 0) return Poll::pending()
 
 #define AWAIT_INTO(k, dst, fut)                                                \
     *__async_st = __async_point_##k;                                           \
 __async_resume_##k:                                                            \
     {                                                                          \
         auto __async_p = (fut).poll(cx);                                       \
-        if (__async_p.is_pending() != 0) return Poll::pending();               \
-        (dst) = __async_p.value;                                               \
+        if (__async_p.is_pending() != 0) { __async_p.drop(); return Poll::pending(); } \
+        (dst) = __async_p.unwrap();                                            \
     }
 
 #define ASYNC_YIELD(k)                                                         \

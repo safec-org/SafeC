@@ -128,6 +128,10 @@ int WakerSlot::wake() {
     return 1;
 }
 
+void WakerSlot::drop() {
+    if (self.set != 0) { self.set = 0; self.w.drop(); }
+}
+
 void WakerSlot::clear() {
     if (self.set == 0) return;
     self.set = 0;

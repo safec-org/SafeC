@@ -162,6 +162,7 @@ struct WakerSlot {
     int  wake();
     // Release it without waking.
     void clear();
+    void drop();   // clear(): a slot owns the waker it holds
 };
 
 // ── WaitList ───────────────────────────────────────────────────────────────

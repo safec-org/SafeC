@@ -74,7 +74,14 @@ T ThreadPool::block_on(F fut) {
     struct AsyncTask<F, T> t = AsyncTask::new(fut);
     self.spawn_raw_(&t.hdr);
     self.wait_task_(&t.hdr);
-    return t.out[0];
+    ?T out = t.take();
+    t.drop();
+    match (out) {
+        case some(v): return v;
+        case none: { }
+    }
+    panic_at("ThreadPool::block_on: the task was aborted", "pool.h", 0);
+    unsafe { return *(T*)(void*)&t.out[0]; }   // unreachable: panic_at doesn't return
 }
 
 } // namespace std

@@ -188,7 +188,7 @@ void List::drop() {
 }
 
 generic<T>
-void List::clear() { self.free(); }
+void List::clear() { unsafe { self.drop(); } }   // drop in place: drop() leaves it empty
 
 generic<T>
 ?&T List::find(const &T key, fn int(const &T, const &T) cmp) const {

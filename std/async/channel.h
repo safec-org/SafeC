@@ -47,8 +47,10 @@ struct Oneshot {
     // already sent or the channel was closed.
     int  send(T v);
     // No value will come: the receiver gets null.
+    void close();
+    // Closes it, releases the receiver's waker, and drops a value nobody
+    // received. Nothing may use the channel (or a future from it) after.
     void drop();
-    void close() consume;   // = drop()
     // The receive future: Ready(some(v)), or Ready(null) once closed.
     struct OneshotRecv<T> recv();
     // The value if it has arrived (and takes it), else null.
@@ -89,8 +91,10 @@ struct AsyncChannel {
     ?T   try_recv();
     // No more sends: pending and future sends get 0, receivers drain what
     // is buffered and then get null.
+    void close();
+    // Closes it, releases the waiting wakers, and drops the values still
+    // buffered. Nothing may use the channel (or a future from it) after.
     void drop();
-    void close() consume;   // = drop()
     int  is_closed() const;
     unsigned long len() const;
     unsigned long capacity() const;
@@ -102,8 +106,9 @@ struct ChanSend {
     T                 value;
     int               wait_id;
     int               done;
+    int               sent;      // 'value' moved into the channel
     struct Poll<int> poll(&Context cx);
-    void drop();
+    void drop();               // and 'value', if it was never sent
 };
 
 generic<T>
@@ -129,7 +134,7 @@ struct Oneshot<T> Oneshot::new() {
 generic<T>
 int Oneshot::send(T v) {
     self.lk.lock();
-    if (self.state != ONESHOT_EMPTY) { self.lk.unlock(); return 0; }
+    if (self.state != ONESHOT_EMPTY) { self.lk.unlock(); drop(v); return 0; }
     self.value[0] = v;
     self.state = ONESHOT_FULL;
     self.rx.wake();
@@ -138,16 +143,24 @@ int Oneshot::send(T v) {
 }
 
 generic<T>
-void Oneshot::close() { self.drop(); }
-
-generic<T>
-void Oneshot::drop() {
+void Oneshot::close() {
     self.lk.lock();
     if (self.state == ONESHOT_EMPTY) {
         self.state = ONESHOT_CLOSED;
         self.rx.wake();
     }
     self.lk.unlock();
+}
+
+generic<T>
+void Oneshot::drop() {
+    self.close();
+    if (self.state == ONESHOT_FULL) {
+        self.state = ONESHOT_TAKEN;
+        unsafe { drop(self.value[0]); }
+    }
+    unsafe { forget(self.value); }   // empty, or dropped just above
+    self.rx.drop();
 }
 
 generic<T>
@@ -162,7 +175,8 @@ generic<T>
     self.lk.lock();
     if (self.state == ONESHOT_FULL) {
         self.state = ONESHOT_TAKEN;
-        T v = self.value[0];
+        ?T v = null;
+        unsafe { v = self.value[0]; }   // moves out: TAKEN marks the slot empty
         self.lk.unlock();
         return v;
     }
@@ -181,7 +195,8 @@ struct Poll<?T> OneshotRecv::poll(&Context cx) {
             o.lk.lock();
             if (o.state == ONESHOT_FULL) {
                 o.state = ONESHOT_TAKEN;
-                ?T v = o.value[0];
+                ?T v = null;
+                unsafe { v = o.value[0]; }   // moves out: TAKEN marks the slot empty
                 o.lk.unlock();
                 return Poll::ready(v);
             }
@@ -223,12 +238,13 @@ struct AsyncChannel<T> AsyncChannel::new([]T storage) {
     return c;
 }
 
-// With the lock held: push if there is room. 1 pushed, 0 full.
+// With the lock held: push if there is room. 1 pushed (*v moved into the
+// buffer), 0 full (*v untouched).
 generic<T>
-int async_chan_push_(&AsyncChannel<T> c, T v) {
+int async_chan_push_(&AsyncChannel<T> c, &T v) {
     if (c.count >= c.buf.len) return 0;
     unsigned long at = (c.head + c.count) % c.buf.len;
-    c.buf[at] = v;
+    unsafe { c.buf[at] = *v; }
     c.count = c.count + 1UL;
     c.receivers.wake_all();
     return 1;
@@ -241,6 +257,7 @@ struct ChanSend<T> AsyncChannel::send(T v) {
     s.value = v;
     s.wait_id = 0;
     s.done = 0;
+    s.sent = 0;
     return s;
 }
 
@@ -256,9 +273,11 @@ struct ChanRecv<T> AsyncChannel::recv() {
 generic<T>
 int AsyncChannel::try_send(T v) {
     self.lk.lock();
-    if (self.closed != 0) { self.lk.unlock(); return -1; }
-    int ok = async_chan_push_(self, v);
+    if (self.closed != 0) { self.lk.unlock(); drop(v); return -1; }
+    int ok = async_chan_push_(self, &v);
     self.lk.unlock();
+    if (ok) { unsafe { forget(v); } }   // moved into the buffer
+    else drop(v);                       // full: the value is dropped
     return ok;
 }
 
@@ -266,7 +285,8 @@ generic<T>
 ?T AsyncChannel::try_recv() {
     self.lk.lock();
     if (self.count == 0UL) { self.lk.unlock(); return null; }
-    T v = self.buf[self.head];
+    ?T v = null;
+    unsafe { v = self.buf[self.head]; }   // moves out of the buffer
     self.head = (self.head + 1UL) % self.buf.len;
     self.count = self.count - 1UL;
     self.senders.wake_all();
@@ -275,15 +295,26 @@ generic<T>
 }
 
 generic<T>
-void AsyncChannel::close() { self.drop(); }
-
-generic<T>
-void AsyncChannel::drop() {
+void AsyncChannel::close() {
     self.lk.lock();
     self.closed = 1;
     self.senders.wake_all();
     self.receivers.wake_all();
     self.lk.unlock();
+}
+
+generic<T>
+void AsyncChannel::drop() {
+    self.close();
+    if const (needs_drop(T)) {
+        while (self.count > 0UL) {
+            unsafe { drop(self.buf[self.head]); }
+            self.head = (self.head + 1UL) % self.buf.len;
+            self.count = self.count - 1UL;
+        }
+    }
+    self.senders.drop();
+    self.receivers.drop();
 }
 
 generic<T>
@@ -309,7 +340,8 @@ struct Poll<int> ChanSend::poll(&Context cx) {
                 c.lk.unlock();
                 return Poll::ready(0);
             }
-            if (async_chan_push_(c, self.value) != 0) {
+            if (async_chan_push_(c, &self.value) != 0) {
+                self.sent = 1;
                 c.senders.remove(self.wait_id);
                 self.wait_id = 0;
                 self.done = 1;
@@ -333,6 +365,8 @@ void ChanSend::drop() {
     }
     self.wait_id = 0;
     self.done = 1;
+    if (self.sent == 0) { self.sent = 1; unsafe { drop(self.value); } }
+    unsafe { forget(self.value); }   // sent (the channel owns it) or dropped
 }
 
 generic<T>
@@ -342,7 +376,8 @@ struct Poll<?T> ChanRecv::poll(&Context cx) {
         case some(c): {
             c.lk.lock();
             if (c.count > 0UL) {
-                ?T v = c.buf[c.head];
+                ?T v = null;
+                unsafe { v = c.buf[c.head]; }   // moves out of the buffer
                 c.head = (c.head + 1UL) % c.buf.len;
                 c.count = c.count - 1UL;
                 c.receivers.remove(self.wait_id);
