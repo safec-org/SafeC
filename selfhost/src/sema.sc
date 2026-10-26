@@ -959,6 +959,27 @@ void check_body_decl_types() {
     while (i < g_ntop) {
         int n = g_top[i];
         i = i + 1;
+        if (g_node[n].kind == D_TRAIT) {
+            int j = 0;
+            while (j < g_node[n].nlist) {
+                int m = g_list[g_node[n].list + j];
+                j = j + 1;
+                if (g_node[m].kind != D_FUNC) { continue; }
+                int bad = unknown_name(func_type_from_node(m, 0));
+                if (bad != 0) {
+                    msg_reset();
+                    msg_lit("unknown type '");
+                    msg_str(bad);
+                    msg_lit("' in trait '");
+                    msg_str(g_node[n].sid);
+                    msg_lit("' method '");
+                    msg_str(g_node[m].sid);
+                    msg_lit("'");
+                    error_node(m);
+                }
+            }
+            continue;
+        }
         if (g_node[n].kind != D_STRUCT || g_node[n].b != 0) { continue; }
         int j = 0;
         while (j < g_node[n].nlist) {

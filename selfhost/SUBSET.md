@@ -55,8 +55,8 @@ safec:
 - Nullable references can only be used after a check (`match`, `is_null`,
   `default`), and `?T` the same way.
 - Use after `arena_reset`, `arena_destroy` or `arena_free_to`, and use
-  after `std::dealloc`. This is a simplified version of safec's
-  `MemoryFlow` analysis; see [Differences](#differences).
+  after `std::dealloc`, through aliases, struct fields and calls, as
+  safec's `MemoryFlow` analysis checks them; see [Differences](#differences).
 - `unsafe { }` is needed for raw pointer operations and for unchecked
   indexing.
 - Definite initialization, as in safec: flow-insensitive, and a global
@@ -146,13 +146,18 @@ These are not implemented, and the error is a parse or name error:
 - **Threads**: `spawn` runs the function to completion right away, and
   `join` returns its result. A program that needs real concurrency (one
   thread waiting for another) won't behave as it does natively.
-- **Memory-flow analysis**: safec's `MemoryFlow` is a path-sensitive
-  abstract interpreter with call summaries. scc's is simpler (per-variable,
-  with summaries only for resets), so it misses some uses after
-  free/reset (aliases through struct fields, calls that free their
-  argument), and in a few cases where safec sees a pointer rebound to a
-  live allocation, scc reports an error that safec doesn't. The tests that
-  differ are listed by `tests/difftest.py` as `ctests/lifetimes/*`.
+- **Memory-flow analysis**: scc's `src/memflow.sc` follows the design of
+  safec's `MemoryFlow`. It has three allocation tiers per site, per-cell
+  "may dangle" bits, field and element cells, condition splitting, defers
+  and errdefers, break and continue targets, and call summaries computed
+  to a fixpoint (frees, reads, writes, returned values, resets and
+  `free_to` through a passed mark). It is smaller than safec's: it tracks
+  at most 64 objects and 384 cells per function, and paths 4 deep. Past
+  those limits it stops tracking rather than guess, so it can miss an
+  error but does not invent one. It also does not model `goto`. On safec's
+  own `compiler/tests/lifetimes` suite, the two compilers agree on accept
+  or reject for every test, and scc reports exactly safec's diagnostics on
+  every `EXPECT-ERROR` test except the one that uses `goto`.
 - **Undefined functions**: a function that is declared but never defined,
   and isn't in the runtime, is a compile error (`undefined function 'f'`)
   when the program calls it. Natively that would be a link error.

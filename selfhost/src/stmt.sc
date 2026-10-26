@@ -423,6 +423,36 @@ void register_builtin_types() {
     g_tyreg[intern_lit("uint64_t")] = TY_U64;
 }
 
+// supertrait cycles (C++ Sema::checkTraitSupertraits): an offending edge is
+// reported and dropped (flags 1), as are unknown supertraits
+int g_tr_state[NSTR_MAX];
+
+void visit_trait(int n) {
+    int t = g_node[n].sid;
+    g_tr_state[t] = 1;
+    int sup = g_node[n].b;
+    int j = 0;
+    while (sup != 0 && j < g_node[sup].nlist) {
+        int el = g_list[g_node[sup].list + j];
+        int s = g_node[el].sid;
+        j = j + 1;
+        if (g_node[el].flags == 1 || g_trait[s] == 0) { continue; }
+        if (g_tr_state[s] == 1) {
+            msg_reset();
+            msg_lit("trait '");
+            msg_str(t);
+            msg_lit("' is its own supertrait (through '");
+            msg_str(s);
+            msg_lit("')");
+            error_node(n);
+            g_node[el].flags = 1;
+            continue;
+        }
+        if (g_tr_state[s] == 0) { visit_trait(g_trait[s]); }
+    }
+    g_tr_state[t] = 2;
+}
+
 void check_traits() {
     int i = 0;
     while (i < g_ntop) {
@@ -444,10 +474,17 @@ void check_traits() {
                     msg_str(g_node[n].sid);
                     msg_lit("'");
                     error_node(n);
+                    g_node[g_list[g_node[sup].list + j]].flags = 1;
                 }
                 j = j + 1;
             }
         }
+        i = i + 1;
+    }
+    i = 0;
+    while (i < g_ntop) {
+        int n = g_top[i];
+        if (g_node[n].kind == D_TRAIT && g_tr_state[g_node[n].sid] == 0) { visit_trait(n); }
         i = i + 1;
     }
 }

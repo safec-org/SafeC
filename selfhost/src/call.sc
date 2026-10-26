@@ -137,7 +137,7 @@ int trait_mismatch(int t, int trn) {
                 int have = g_node[g_func[f].node].nlist;
                 if ((g_func[f].flags & NF_VARIADIC) == 0 && have != g_node[m].nlist) {
                     tmp_reset(); tmp_lit("'"); tmp_str(g_node[m].sid); tmp_lit("' takes ");
-                    tmp_int((long)have); tmp_lit(" parameter(s), the trn "); tmp_int((long)g_node[m].nlist);
+                    tmp_int((long)have); tmp_lit(" parameter(s), the trait "); tmp_int((long)g_node[m].nlist);
                     return 1;
                 }
                 i = i + 1;
@@ -147,7 +147,7 @@ int trait_mismatch(int t, int trn) {
                 i = 0;
                 while (i < g_node[sup].nlist) {
                     int s = g_node[g_list[g_node[sup].list + i]].sid;
-                    if (trait_mismatch(t, s) == 1) {
+                    if (g_node[g_list[g_node[sup].list + i]].flags != 1 && trait_mismatch(t, s) == 1) {
                         if (g_tmp_len == 1 && g_tmp[0] == (unsigned char)'-') {
                             tmp_reset(); tmp_lit("not '"); tmp_str(s); tmp_lit("'");
                         } else {
