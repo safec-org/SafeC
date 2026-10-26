@@ -920,7 +920,7 @@ int parse_cast() {
 int parse_unary() {
     int t = g_p;
     int k = cur();
-    if (k == T_MINUS || k == T_BANG || k == T_TILDE || k == T_PLUS) {
+    if (k == T_MINUS || k == T_BANG || k == T_TILDE) {
         advance();
         int n = new_node(E_UNARY, t);
         g_node[n].op = k;
@@ -938,15 +938,6 @@ int parse_unary() {
         advance();
         int n = new_node(E_ADDR, t);
         g_node[n].a = parse_cast();
-        return n;
-    }
-    if (k == T_ANDAND) {
-        // '&&x' — address of an address: unusual; parse as & (& x)
-        advance();
-        int inner = new_node(E_ADDR, t);
-        g_node[inner].a = parse_cast();
-        int n = new_node(E_ADDR, t);
-        g_node[n].a = inner;
         return n;
     }
     if (k == T_STAR) {
