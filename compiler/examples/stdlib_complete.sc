@@ -129,22 +129,22 @@ int main() {
         printf("=== io_fmt ===\n");
         char buf[128];
 
-        io_fmt_int((char*)buf, 128, (long long)-42);
+        io_fmt_int(buf[..], (long long)-42);
         printf("fmt_int(-42)     = '%s'\n", buf);
 
-        io_fmt_uint((char*)buf, 128, (unsigned long long)18446744073709551615ULL);
+        io_fmt_uint(buf[..], (unsigned long long)18446744073709551615ULL);
         printf("fmt_uint(2^64-1) = '%s'\n", buf);
 
-        io_fmt_float((char*)buf, 128, 3.14159265358979);
+        io_fmt_float(buf[..], 3.14159265358979);
         printf("fmt_float(pi)    = '%s'\n", buf);
 
-        io_fmt_float_prec((char*)buf, 128, 2.71828182845904, 6);
+        io_fmt_float_prec(buf[..], 2.71828182845904, 6);
         printf("fmt_float_prec(e,6) = '%s'\n", buf);
 
-        io_fmt_hex((char*)buf, 128, (unsigned long long)3735928559);
+        io_fmt_hex(buf[..], (unsigned long long)3735928559);
         printf("fmt_hex(0xDEADBEEF) = '%s'\n", buf);
 
-        io_fmt_str((char*)buf, 128, "hello world");
+        io_fmt_str(buf[..], "hello world");
         printf("fmt_str          = '%s'\n", buf);
     }
 
@@ -185,13 +185,13 @@ int main() {
 
         // Concatenation
         char dst[128];
-        str_copy((char*)dst, "Hello", (unsigned long)128);
-        str_cat((char*)dst, ", SafeC");
+        str_copy(dst[..], "Hello");
+        str_cat(dst[..], ", SafeC");
         printf("str_cat:  '%s'\n", dst);
 
         char dst2[32];
-        str_copy((char*)dst2, "foo", (unsigned long)32);
-        str_ncat((char*)dst2, "barbaz", (unsigned long)3);
+        str_copy(dst2[..], "foo");
+        str_ncat(dst2[..], "barbaz", (unsigned long)3);
         printf("str_ncat: '%s'\n", dst2);
 
         // Reverse character search
@@ -210,7 +210,7 @@ int main() {
         // Tokenisation (reentrant)
         ?&char saveptr = null;
         char sentence[64];
-        str_copy(&sentence[0], "one two three", (unsigned long)64);
+        str_copy(sentence[..], "one two three");
         ?&char t1 = str_tok(&sentence[0], " ", &saveptr);
         ?&char t2 = str_tok(null, " ", &saveptr);
         ?&char t3 = str_tok(null, " ", &saveptr);
@@ -218,7 +218,7 @@ int main() {
 
         // mem_chr
         const char* needle = "find the X here";
-        const ?&unsigned char found = mem_chr((const unsigned char*)needle, (int)'X', (unsigned long)15);
+        const ?&unsigned char found = mem_chr(str_bytes(needle), (int)'X');
         printf("mem_chr 'X': '%s'\n", (const char*)found);
 
         // str_ndup
