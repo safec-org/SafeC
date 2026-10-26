@@ -1,0 +1,6 @@
+build/
+deps/
+client/build/
+client/deps/
+theme/doc.wasm
+theme/safec_dom.js

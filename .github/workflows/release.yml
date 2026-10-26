@@ -69,7 +69,8 @@ jobs:
         # what the smoke test and the std prebuilt compile safec's IR with.
         # Its libraries are built for the runner's macOS, so safec links
         # the ones build-llvm.sh builds for 11.0 instead (next steps).
-        run: brew install llvm ninja
+        # lld: wasm-ld, for safec-doc's wasm32 search client (package.sh).
+        run: brew install llvm lld ninja
 
       - name: Cache LLVM libraries (macOS 11.0)
         uses: actions/cache@v4
@@ -137,6 +138,7 @@ jobs:
         # prebuilt for this platform, one archive per section, by the
         # packaged safec (see package.sh), which a native build links
         # instead of compiling std. The std objects must run on 11.0 too.
+        # Also bin/safec-doc and share/safec/doctool ('safeguard doc').
         run: |
           set -euo pipefail
           OUT="safec-macos-arm64"
@@ -200,7 +202,7 @@ jobs:
           wget https://apt.llvm.org/llvm.sh
           chmod +x llvm.sh
           sudo ./llvm.sh ${{ env.LLVM_VERSION }}
-          sudo apt-get install -y "clang-${{ env.LLVM_VERSION }}" "llvm-${{ env.LLVM_VERSION }}"
+          sudo apt-get install -y "clang-${{ env.LLVM_VERSION }}" "llvm-${{ env.LLVM_VERSION }}" "lld-${{ env.LLVM_VERSION }}"
 
       - name: Smoke test before packaging
         run: bash SafeC/.github/scripts/smoke-test.sh

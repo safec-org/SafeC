@@ -8,6 +8,7 @@
 #include "safec/Sema.h"
 #include "safec/ConstEval.h"
 #include "safec/CodeGen.h"
+#include "safec/DocJson.h"
 #include <cstdint>
 
 #include "llvm/IR/LLVMContext.h"
@@ -80,6 +81,26 @@ static llvm::cl::opt<bool>
 
 static llvm::cl::opt<bool>
     DumpPP("dump-pp", llvm::cl::desc("Dump preprocessed source and exit"));
+
+// --emit-doc-json: parse every input (no Sema/codegen) and write their
+// declarations, doc comments, signatures and locations as one JSON
+// document to -o (see DocJson.h) -- what 'safeguard doc' feeds its doc
+// generator. Inputs that fail to parse are reported and skipped.
+static llvm::cl::opt<bool>
+    EmitDocJson("emit-doc-json",
+        llvm::cl::desc("Write the inputs' declarations and doc comments as JSON (parse only)"));
+static llvm::cl::list<std::string>
+    DocRoots("doc-root", llvm::cl::desc("With --emit-doc-json: document only files under <dir> "
+                                        "(repeatable); paths in the output are relative to it"),
+             llvm::cl::value_desc("dir"));
+static llvm::cl::list<std::string>
+    DocExterns("doc-extern", llvm::cl::desc("With --emit-doc-json: list declarations under <dir> as "
+                                            "items of the external crate <name> (for links)"),
+               llvm::cl::value_desc("name=dir"));
+static llvm::cl::opt<bool>
+    DocPrivate("doc-private", llvm::cl::desc("With --emit-doc-json: include 'static' functions and globals"));
+// The collector --emit-doc-json fills (one input at a time, never in parallel).
+static safec::DocCollector *gDocCollector = nullptr;
 
 static llvm::cl::opt<bool>
     NoSema("no-sema", llvm::cl::desc("Skip semantic analysis (parse only)"));
@@ -800,7 +821,7 @@ static int compileOneFile(const std::string &inputPath, const std::string &outpu
     // to replay a cached module as IR text or bitcode, not run it through
     // the link driver, so honoring a hit here would silently skip linking
     // and leave outputPath as raw bitcode instead of a real binary/library.
-    if (!NoIncremental && !DumpAST && !EmitBin) {
+    if (!NoIncremental && !DumpAST && !EmitBin && !EmitDocJson) {
         uint64_t hash = fnv1a64(ppSrc + "|" + compilerIdentity(argv0) + "|" + cacheKeyFlags());
         char hexBuf[17];
         snprintf(hexBuf, sizeof(hexBuf), "%016llx", (unsigned long long)hash);
@@ -863,6 +884,12 @@ static int compileOneFile(const std::string &inputPath, const std::string &outpu
     }
     if (Verbose) fprintf(stderr, "[safec] Parsed %zu top-level declarations\n",
                          tu->decls.size());
+
+    // ── 5a. Doc JSON: declarations only ───────────────────────────────────────
+    if (EmitDocJson) {
+        gDocCollector->add(*tu, preproc.macros(), inputPath);
+        return 0;
+    }
 
     // ── 5. AST dump ───────────────────────────────────────────────────────────
     if (DumpAST) {
@@ -1127,6 +1154,51 @@ int main(int argc, char **argv) {
                 llvm::sys::fs::remove(p);
         }
         if (Verbose) fprintf(stderr, "[safec] Cache cleared: %s\n", CacheDir.c_str());
+        return 0;
+    }
+
+    // ── --emit-doc-json: every input in turn, one JSON document ──────────────
+    if (EmitDocJson) {
+        safec::DocOptions dopts;
+        for (auto &r : DocRoots) dopts.roots.push_back(r);
+        for (auto &e : DocExterns) {
+            auto eq = e.find('=');
+            if (eq == std::string::npos || eq == 0) {
+                fprintf(stderr, "error: --doc-extern expects <name>=<dir>, got '%s'\n", e.c_str());
+                return 1;
+            }
+            dopts.externs.push_back({e.substr(0, eq), e.substr(eq + 1)});
+        }
+        dopts.includePrivate = DocPrivate;
+        safec::DocCollector collector(dopts);
+        gDocCollector = &collector;
+        int failed = 0;
+        for (auto &in : InputFiles) {
+            std::string unused;
+            if (compileOneFile(in, "-", argv[0], unused) != 0) {
+                fprintf(stderr, "warning: %s: not documented (it does not parse)\n", in.c_str());
+                ++failed;
+            }
+        }
+        gDocCollector = nullptr;
+        if (failed == (int)InputFiles.size()) {
+            fprintf(stderr, "error: no input parsed\n");
+            return 1;
+        }
+        std::string json = collector.json();
+        if (OutputFile == "-") {
+            llvm::outs() << json;
+        } else {
+            std::error_code EC;
+            llvm::raw_fd_ostream out(OutputFile.getValue(), EC, llvm::sys::fs::OF_Text);
+            if (EC) {
+                fprintf(stderr, "error: cannot open output file '%s': %s\n",
+                        OutputFile.c_str(), EC.message().c_str());
+                return 1;
+            }
+            out << json;
+        }
+        if (failed) fprintf(stderr, "warning: %d of %zu input(s) did not parse\n", failed, InputFiles.size());
         return 0;
     }
 

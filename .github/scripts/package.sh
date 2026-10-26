@@ -9,6 +9,11 @@
 #                                                  (compiler, target) and its units'
 #                                                  input hashes and symbols
 #   <out>/README.md
+#   <out>/bin/safec-doc                            the API reference generator
+#   <out>/share/safec/doctool/                     ('safeguard doc'): its SafeC
+#                                                  sources, and theme/ its assets
+#                                                  (style.css, doc.js, doc.wasm,
+#                                                  safec_dom.js)
 #
 # A section is a top-level directory of std/ (collections, gui, ml, ...),
 # 'core' the files directly in std/. Each archive holds the section's
@@ -38,3 +43,29 @@ cp "$ROOT/README.md" "$OUT/"
 SAFEC="$OUT/bin/$(basename "$SAFEC_IN")" SAFEC_HOME="$OUT" SAFEC_STD_ARCHIVE="" \
     "$OUT/bin/$(basename "$SAFEGUARD_IN")" std-prebuilt "$OUT"
 ls -l "$OUT"/lib/*/
+
+# The API reference generator 'safeguard doc' runs (safeguard/doctool, a
+# SafeC program), built by the packaged safeguard against the packaged std:
+# bin/safec-doc, its assets in share/safec/doctool/theme, and its sources
+# beside them, so a safeguard whose prebuilt one can't run rebuilds it.
+# The search client is wasm32 (needs clang's wasm-ld); without it the
+# reference works, only search is missing.
+EXE=""; [[ "$SAFEGUARD_IN" == *.exe ]] && EXE=".exe"
+SG="$OUT/bin/$(basename "$SAFEGUARD_IN")"
+DOCSRC="$OUT/share/safec/doctool"
+DOCW="$(mktemp -d)"
+mkdir -p "$DOCSRC"
+(cd "$ROOT/safeguard/doctool" && tar cf - --exclude=build --exclude=deps --exclude=doc.wasm --exclude=safec_dom.js \
+    --exclude=Package.lock --exclude=.safec_cache .) | (cd "$DOCSRC" && tar xf -)
+cp -R "$DOCSRC/." "$DOCW/"
+sg_doc() { (cd "$1" && shift && SAFEC="$OUT/bin/$(basename "$SAFEC_IN")" SAFEC_HOME="$OUT" SAFEC_STD_ARCHIVE="" "$SG" "$@"); }
+sg_doc "$DOCW" build --release
+cp "$DOCW/build/safec-doc$EXE" "$OUT/bin/"
+if sg_doc "$DOCW/client" build --release --target wasm32 && [[ -f "$DOCW/client/build/safec-doc-client" ]]; then
+    cp "$DOCW/client/build/safec-doc-client" "$DOCSRC/theme/doc.wasm"
+else
+    echo "package.sh: warning: the safec-doc search client (wasm32) did not build; no doc.wasm" >&2
+fi
+cp "$ROOT/std/wasm/safec_dom.js" "$DOCSRC/theme/"
+rm -rf "$DOCW"
+ls -l "$OUT/bin/" "$DOCSRC/theme/"

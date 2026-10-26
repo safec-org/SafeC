@@ -37,6 +37,22 @@ struct PackageInfo {
     std::string author;
     std::string description;
     std::string license;
+    // Where the package lives and is documented (used by 'safeguard doc' for
+    // source links and by 'safeguard publish' for the generated CI).
+    std::string repository;        // e.g. "https://github.com/user/geo"
+    std::string homepage;
+    std::string documentation;     // the published API reference URL
+    std::string readme;            // default README.md (shown on the doc index)
+    std::vector<std::string> keywords;
+};
+
+// [publish]: how 'safeguard publish' prepares the repository.
+struct PublishConfig {
+    std::string ci;                // "github" (default), "gitlab", "gitea", "forgejo"
+    std::string branch;            // the default branch CI builds (default "main")
+    std::string tagPrefix = "v";   // release tags: "v1.2.3"
+    bool pages   = true;           // deploy 'safeguard doc' output to Pages on a tag
+    bool release = true;           // build prebuilt libraries on a tag and attach them
 };
 
 // [build.macos] / [build.linux] / [build.windows]: settings that apply only
@@ -105,6 +121,7 @@ struct Manifest {
     PackageInfo  package;
     BuildConfig  build;
     BundleConfig bundle;
+    PublishConfig publish;
     std::vector<Dependency> dependencies;
 
     // [features] table, Cargo-style: name -> list of other feature names it
