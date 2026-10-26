@@ -248,9 +248,9 @@ void t_tcp_stream() {
         if (fd < 0) return;
         struct TcpStream s = TcpStream::from_fd(fd);
         const &char req = "POST /echo HTTP/1.1\r\nHost: x\r\nContent-Length: 5\r\nConnection: close\r\n\r\nhello";
-        ASSERT_EQ(write_all(&s, (const &unsigned char)req, str_len(req)), 1);
+        ASSERT_EQ(write_all(&s, str_bytes(req)), 1);
         unsigned char status[12];
-        ASSERT_EQ(read_exact(&s, &status[0], 12UL), 1);
+        ASSERT_EQ(read_exact(&s, status[0..12UL]), 1);
         ASSERT_EQ(status[9], '2');
         ASSERT_EQ(status[11], '0');
         struct Pipe p;
@@ -260,7 +260,7 @@ void t_tcp_stream() {
         ASSERT_EQ(s.close(), 0);
         p.close_write();
         unsigned char tail[4096];
-        long long n = p.read(&tail[0], 4096UL);
+        long long n = p.read(tail[0..4096UL]);
         ASSERT_EQ(n, rest);
         if (n >= 5LL) { ASSERT_EQ(tail[n - 1LL], 'o'); }   // body "hello" last
         p.close_read();
@@ -283,8 +283,8 @@ int buffered_exchange(&S s, const &char path, const &char payload, &String body)
     hdr.push("\r\n\r\n");
     int ok = 1;
     unsafe {
-        ok = write_all(&out, (const &unsigned char)hdr.as_ptr(), hdr.length())
-          && write_all(&out, (const &unsigned char)payload, str_len(payload))
+        ok = write_all(&out, hdr.as_bytes())
+          && write_all(&out, str_bytes(payload))
           && out.flush() == 0;
     }
     hdr.free();
@@ -302,7 +302,7 @@ int buffered_exchange(&S s, const &char path, const &char payload, &String body)
         unsigned long n = (unsigned long)cl.parse_int(&pok);
         cl.free();
         unsigned char buf[256];
-        if (n > 256UL || !read_exact(&in, &buf[0], n)) {
+        if (n > 256UL || !read_exact(&in, buf[0..n])) {
             status = 0;
         } else {
             unsafe { body.push_n((const &char)(const char*)&buf[0], n); }
@@ -471,7 +471,7 @@ void t_ws_frame_with_handshake() {
         frame[2] = (unsigned char)0; frame[3] = (unsigned char)0; frame[4] = (unsigned char)0; frame[5] = (unsigned char)0;
         frame[6] = (unsigned char)'h'; frame[7] = (unsigned char)'i';
         out.push_n((const char*)&frame[0], 8UL);
-        ASSERT_TRUE(write_all(&s, (const &unsigned char)out.as_ptr(), out.length()));
+        ASSERT_TRUE(write_all(&s, out.as_bytes()));
         out.free();
 
         struct BufReader<TcpStream> in = BufReader::over(&s);
@@ -480,7 +480,7 @@ void t_ws_frame_with_handshake() {
         ASSERT_TRUE(head.index_of("101") >= 0L);
         head.free();
         unsigned char reply[9];   // unmasked text frame "echo:hi"
-        ASSERT_TRUE(read_exact(&in, &reply[0], 9UL));
+        ASSERT_TRUE(read_exact(&in, reply[0..9UL]));
         ASSERT_EQ(reply[0], (unsigned char)0x81);
         ASSERT_EQ(reply[1], (unsigned char)7);
         ASSERT_EQ(reply[2], (unsigned char)'e');

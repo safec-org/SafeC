@@ -240,7 +240,7 @@ static void t_fixed_net() {
             (unsigned short)1234, (unsigned short)5678, (unsigned short)0);
         CHECK(off == 42UL);
         CHECK(pkt.data[14 + 12] == 10);
-        CHECK(std::ip_checksum((const unsigned char*)&pkt.data[14], 20UL) == (unsigned short)0);
+        CHECK(std::ip_checksum(pkt.data[14..34]) == (unsigned short)0);
     }
 }
 

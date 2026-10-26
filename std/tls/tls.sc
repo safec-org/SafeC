@@ -593,7 +593,10 @@ int TlsStream::handshake() {
     return r;
 }
 
-long long TlsStream::read(&unsigned char buf, unsigned long n) {
+long long TlsStream::read([]unsigned char buf_s) {
+    unsigned long n = buf_s.len;
+    &unsigned char buf;
+    unsafe { buf = (&unsigned char)buf_s.ptr; }
     if (self.state == 0) {
         int h = self.handshake();
         if (h != 0) { return (long long)h; }
@@ -614,7 +617,10 @@ long long TlsStream::read(&unsigned char buf, unsigned long n) {
     return r;
 }
 
-long long TlsStream::write(const &unsigned char buf, unsigned long n) {
+long long TlsStream::write([]const unsigned char buf_s) {
+    unsigned long n = buf_s.len;
+    const &unsigned char buf;
+    unsafe { buf = (const &unsigned char)buf_s.ptr; }
     if (self.state == 0) {
         int h = self.handshake();
         if (h != 0) { return (long long)h; }

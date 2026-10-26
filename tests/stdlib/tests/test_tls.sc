@@ -375,13 +375,13 @@ static ?&void run_tls_server(?&void arg) {
             }
             struct TlsStream t = r.value;
             unsigned char buf[2048];
-            long long k = t.read(&buf[0], 2000UL);
+            long long k = t.read(buf[0..2000UL]);
             char out[600];
             struct X509Cert pc;
             int hasPeer = t.peer_certificate(&pc);
             sprintf(out, "HTTP/1.0 200 OK\r\n\r\nhello via %s %s alpn=%s peer=%s req=%lld\n", t.backend_name(), t.cipher(),
                     t.alpn(), hasPeer ? (const char*)&pc.subject.cn[0] : (const char*)"-", k);
-            t.write((const &unsigned char)(const unsigned char*)&out[0], str_len((const char*)&out[0]));
+            t.write(out[0..str_len((const char*)&out[0])]);
             t.close();
         }
         close(lfd);
@@ -461,11 +461,11 @@ static int client_req(int port, int backend, const &char host, const &char root,
     }
     unsafe {
         const &char req = "GET / HTTP/1.0\r\n\r\n";
-        t.write((const &unsigned char)req, str_len(req));
+        t.write(str_bytes(req));
         unsigned char buf[16384];
         long long total = 0LL;
         while (total < 16000LL) {
-            long long n = t.read(&buf[total], 16000UL - (unsigned long)total);
+            long long n = t.read(buf[(unsigned long)total..16000UL]);
             if (n <= 0LL) { if (n < 0LL && total == 0LL) { code = t.last_error().code; if (code == 0) code = TLS_ERR_IO; } break; }
             total = total + n;
         }
@@ -535,13 +535,13 @@ void t_nonblocking() {
         ASSERT_EQ(t.version(), TLS_VERSION_1_3);
         const &char req = "GET / HTTP/1.0\r\n\r\n";
         long long w = TLS_WANT_WRITE;
-        while (w == (long long)TLS_WANT_WRITE || w == (long long)TLS_WANT_READ) { w = t.write((const &unsigned char)req, str_len(req)); }
+        while (w == (long long)TLS_WANT_WRITE || w == (long long)TLS_WANT_READ) { w = t.write(str_bytes(req)); }
         ASSERT_EQ(w, (long long)str_len(req));
         unsigned char buf[2048];
         long long n = TLS_WANT_READ;
         spins = 0;
         while ((n == (long long)TLS_WANT_READ || n == (long long)TLS_WANT_WRITE) && spins < 5000) {
-            n = t.read(&buf[0], 2000UL);
+            n = t.read(buf[0..2000UL]);
             thread_sleep_ms(1UL);
             spins = spins + 1;
         }

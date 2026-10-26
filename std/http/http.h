@@ -134,9 +134,9 @@ struct TcpStream {
     int is_tls() const;
 
     // At most n bytes; the count read, 0 once the peer closed, -1 on error.
-    long long read(&unsigned char buf, unsigned long n);
+    long long read([]unsigned char buf);
     // At most n bytes; the count written, -1 on error.
-    long long write(const &unsigned char buf, unsigned long n);
+    long long write([]const unsigned char buf);
     // Closes the socket. 0 on success.
     int close();
 };
@@ -433,7 +433,7 @@ struct HttpChunkedWriter {
     int              ok;      // 0 once any write failed
 
     static struct HttpChunkedWriter begin(&HttpConn conn, int status, const ?&char headers);
-    int write(const &unsigned char data, unsigned long len);
+    int write([]const unsigned char data);
     int write_str(const &char text);
     int finish();
 };

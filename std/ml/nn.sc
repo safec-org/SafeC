@@ -1152,11 +1152,11 @@ void Optimizer::free() {
 // ══ Saving and loading tensors ═══════════════════════════════════════════════
 
 static int nn_write_(&File f, const void* p, unsigned long bytes) {
-    unsafe { return file_write(f, (const &unsigned char)(const unsigned char*)p, bytes) == bytes; }
+    unsafe { return file_write(f, ((const unsigned char*)p)[0..bytes]) == bytes; }
 }
 
 static int nn_read_(&File f, void* p, unsigned long bytes) {
-    unsafe { return file_read(f, (&unsigned char)(unsigned char*)p, bytes) == bytes; }
+    unsafe { return file_read(f, ((unsigned char*)p)[0..bytes]) == bytes; }
 }
 
 int tensors_save(const &Vec<&FloatTensor> ts, const &char path) {

@@ -347,7 +347,7 @@ int GuiTypeface::load_file_index(const &char path, int index) {
             unsigned char* buf;
             unsafe { buf = (unsigned char*)alloc_raw_((unsigned long)n); }
             int ok;
-            unsafe { ok = read_exact(f, (&unsigned char)buf, (unsigned long)n); }
+            unsafe { ok = read_exact(f, ((unsigned char*)buf)[0..(unsigned long)n]); }
             f.close();
             if (!ok) { unsafe { dealloc_raw_((void*)buf); } return 0; }
             int r;

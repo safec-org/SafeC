@@ -75,7 +75,9 @@ static struct MemDisk memdisk_load(const &char path) {
     ?&heap unsigned char buf = alloc((unsigned long)sz);
     match (buf) {
         case some(b): {
-            if (f.read(b, (unsigned long)sz) == (unsigned long)sz) {
+            long long got;
+            unsafe { got = f.read(((unsigned char*)b)[0..(unsigned long)sz]); }
+            if (got == sz) {
                 d.data = buf;
                 d.size = (unsigned long)sz;
             }

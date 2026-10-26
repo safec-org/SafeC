@@ -629,12 +629,12 @@ void t_file() {
         if (wq.is_null()) return;
         &File w = std::expect_ref(wq, "write handle");
         w.puts("line1\n");
-        w.write((const &unsigned char)"abc", 3UL);
+        w.write(str_bytes("abc"));
         w.close();
         &File f = std::expect_ref(File::open(path, "rb"), "read handle");
         ASSERT_EQ(f.size(), 9);
         char buf[32];
-        f.gets(buf, 32);
+        f.gets(buf[0..32]);
         ASSERT_STR_EQ(buf, "line1\n");
         ASSERT_EQ(f.getc(), 'a');
         f.seek(0LL, 0);
@@ -655,14 +655,14 @@ void t_io_traits() {
         while (i < 10000UL) { data[i] = (unsigned char)(i * 7UL + 3UL); i = i + 1UL; }
 
         &File w = std::expect_ref(File::open(path, "wb"), "write handle");
-        ASSERT_EQ(write_all(w, &data[0], 10000UL), 1);
+        ASSERT_EQ(write_all(w, data[0..10000UL]), 1);
         w.close();
 
         &File r = std::expect_ref(File::open(path, "rb"), "read handle");
         unsigned char back[10000];
-        ASSERT_EQ(read_exact(r, &back[0], 6000UL), 1);
+        ASSERT_EQ(read_exact(r, back[0..6000UL]), 1);
         ASSERT_EQ(back[5999], data[5999]);
-        ASSERT_EQ(read_exact(r, &back[6000], 5000UL), 0);    // only 4000 left
+        ASSERT_EQ(read_exact(r, back[6000..11000UL]), 0);    // only 4000 left
         ASSERT_EQ(back[9999], data[9999]);
         r.close();
 
@@ -683,22 +683,22 @@ void t_io_traits() {
         &File chk = std::expect_ref(File::open(path2, "rb"), "check");
         ASSERT_EQ(chk.size(), 10000);
         unsigned char again[10000];
-        ASSERT_EQ(read_exact(chk, &again[0], 10000UL), 1);
+        ASSERT_EQ(read_exact(chk, again[0..10000UL]), 1);
         ASSERT_EQ(again[0], data[0]);
         ASSERT_EQ(again[4321], data[4321]);
         ASSERT_EQ(again[9999], data[9999]);
-        ASSERT_EQ(chk.read(&again[0], 16UL), 0);              // EOF
+        ASSERT_EQ(chk.read(again[0..16UL]), 0);              // EOF
         chk.close();
 
         // Pipe read_exact / write_all directly.
         struct Pipe q;
         ASSERT_EQ(q.init(), 0);
-        ASSERT_EQ(write_all(&q, (const &unsigned char)"hello", 5UL), 1);
+        ASSERT_EQ(write_all(&q, str_bytes("hello")), 1);
         ASSERT_EQ(q.close_write(), 0);
         unsigned char hb[8];
-        ASSERT_EQ(read_exact(&q, &hb[0], 3UL), 1);
+        ASSERT_EQ(read_exact(&q, hb[0..3UL]), 1);
         ASSERT_EQ(hb[2], 'l');
-        ASSERT_EQ(read_exact(&q, &hb[0], 3UL), 0);            // 2 left, then EOF
+        ASSERT_EQ(read_exact(&q, hb[0..3UL]), 0);            // 2 left, then EOF
         ASSERT_EQ(q.close_read(), 0);
 
         ASSERT_EQ(io_remove(path), 0);
@@ -716,13 +716,16 @@ struct MemStream {
     unsigned long len;
     unsigned long rd;
     unsigned long step;
-    long long read(&unsigned char buf, unsigned long n);
-    long long write(const &unsigned char buf, unsigned long n);
+    long long read([]unsigned char buf);
+    long long write([]const unsigned char buf);
     int seek(long long offset, int whence);
     long long tell();
 };
 
-long long MemStream::read(&unsigned char buf, unsigned long n) {
+long long MemStream::read([]unsigned char buf_s) {
+    unsigned long n = buf_s.len;
+    &unsigned char buf;
+    unsafe { buf = (&unsigned char)buf_s.ptr; }
     unsigned long k = self.len - self.rd;
     if (k > n) k = n;
     if (k > self.step) k = self.step;
@@ -731,7 +734,10 @@ long long MemStream::read(&unsigned char buf, unsigned long n) {
     return (long long)k;
 }
 
-long long MemStream::write(const &unsigned char buf, unsigned long n) {
+long long MemStream::write([]const unsigned char buf_s) {
+    unsigned long n = buf_s.len;
+    const &unsigned char buf;
+    unsafe { buf = (const &unsigned char)buf_s.ptr; }
     unsigned long k = 20000UL - self.len;
     if (k > n) k = n;
     if (k == 0UL && n > 0UL) return -1LL;
@@ -760,8 +766,8 @@ static void mem_init(&MemStream m, unsigned long step) {
 generic<S: Stream>
 int stream_echo(&S s, const &unsigned char src, unsigned long n) {
     unsigned char back[3000];
-    if (!write_all(s, src, n)) return 0;
-    if (!read_exact(s, &back[0], n)) return 0;
+    if (!write_all(s, ((const unsigned char*)src)[0..n])) return 0;
+    if (!read_exact(s, back[0..n])) return 0;
     int same;
     unsafe { same = safe_memcmp_raw_((const void*)&back[0], (const void*)src, n) == 0; }
     return same;
@@ -770,11 +776,11 @@ int stream_echo(&S s, const &unsigned char src, unsigned long n) {
 // Any SeekableStream: write, seek back, size, read back from the middle.
 generic<S: SeekableStream>
 int seek_roundtrip(&S s, const &unsigned char src, unsigned long n) {
-    if (!write_all(s, src, n)) return 0;
+    if (!write_all(s, ((const unsigned char*)src)[0..n])) return 0;
     if (stream_size(s) != (long long)n) return 0;
     if (s.seek(100LL, 0) != 0 || s.tell() != 100LL) return 0;
     unsigned char back[3000];
-    if (!read_exact(s, &back[0], n - 100UL)) return 0;
+    if (!read_exact(s, back[0..n - 100UL])) return 0;
     if (s.tell() != (long long)n) return 0;
     int same;
     unsafe { same = safe_memcmp_raw_((const void*)&back[0], (const void*)((const unsigned char*)src + 100), n - 100UL) == 0; }
@@ -784,7 +790,7 @@ int seek_roundtrip(&S s, const &unsigned char src, unsigned long n) {
 // Any Writer + Flusher: all of it written, then flushed.
 generic<W: Writer + Flusher>
 int write_flushed(&W w, const &unsigned char src, unsigned long n) {
-    return write_all(w, src, n) && w.flush() == 0;
+    return write_all(w, ((const unsigned char*)src)[0..n]) && w.flush() == 0;
 }
 
 // Lines through BufReader<R>::read_until over any Reader: "line <i>\n" for
@@ -840,12 +846,12 @@ void t_io_roles() {
         // BufWriter<W> is a Writer + Flusher like File: nothing reaches the
         // pipe until flush (or a full buffer).
         struct BufWriter<Pipe> bw = BufWriter::over(&p);
-        ASSERT_EQ(write_all(&bw, src, 100UL), 1);
+        ASSERT_EQ(write_all(&bw, ((const unsigned char*)src)[0..100UL]), 1);
         ASSERT_EQ(bw.len, 100UL);
         ASSERT_EQ(write_flushed(&bw, (const &unsigned char)&data[100], 2900UL), 1);
         ASSERT_EQ(bw.len, 0UL);
         unsigned char back[3000];
-        ASSERT_EQ(read_exact(&p, &back[0], 3000UL), 1);
+        ASSERT_EQ(read_exact(&p, back[0..3000UL]), 1);
         ASSERT_EQ(safe_memcmp_raw_((const void*)&back[0], (const void*)&data[0], 3000UL), 0);
         &File g = std::expect_ref(File::open(path, "wb"), "wb handle");
         ASSERT_EQ(write_flushed(g, src, 3000UL), 1);
@@ -855,11 +861,11 @@ void t_io_roles() {
         // buffered (small reads) and straight through (one large read).
         &File h = std::expect_ref(File::open(path, "rb"), "rb handle");
         struct BufReader<File> br = BufReader::over(h);
-        ASSERT_EQ(read_exact(&br, &back[0], 10UL), 1);
+        ASSERT_EQ(read_exact(&br, back[0..10UL]), 1);
         ASSERT_EQ(br.buffered(), 2990UL);               // the rest came with the first read
-        ASSERT_EQ(read_exact(&br, &back[10], 2990UL), 1);
+        ASSERT_EQ(read_exact(&br, back[10..3000UL]), 1);
         ASSERT_EQ(safe_memcmp_raw_((const void*)&back[0], (const void*)&data[0], 3000UL), 0);
-        ASSERT_EQ(br.read(&back[0], 16UL), 0);           // EOF
+        ASSERT_EQ(br.read(back[0..16UL]), 0);           // EOF
         h.close();
         h = std::expect_ref(File::open(path, "rb"), "rb handle");
         struct BufReader<File> br2 = BufReader::over(h);
@@ -867,7 +873,7 @@ void t_io_roles() {
         ASSERT_EQ(copy_stream(&br2, &bw2), 3000);        // BufReader -> BufWriter
         ASSERT_EQ(bw2.flush(), 0);
         h.close();
-        ASSERT_EQ(read_exact(&p, &back[0], 3000UL), 1);
+        ASSERT_EQ(read_exact(&p, back[0..3000UL]), 1);
         ASSERT_EQ(back[2999], data[2999]);
 
         // read_until over Pipe, MemStream with 1-byte and 3-byte reads, and
@@ -879,13 +885,13 @@ void t_io_roles() {
             l.push("line ");
             l.push_int((long long)li);
             l.push("\n");
-            ASSERT_EQ(write_all(&m, (const &unsigned char)l.as_ptr(), l.length()), 1);
-            ASSERT_EQ(write_all(&p, (const &unsigned char)l.as_ptr(), l.length()), 1);
+            ASSERT_EQ(write_all(&m, l.as_bytes()), 1);
+            ASSERT_EQ(write_all(&p, l.as_bytes()), 1);
             l.free();
             li = li + 1;
         }
-        ASSERT_EQ(write_all(&m, (const &unsigned char)"tail", 4UL), 1);
-        ASSERT_EQ(write_all(&p, (const &unsigned char)"tail", 4UL), 1);
+        ASSERT_EQ(write_all(&m, str_bytes("tail")), 1);
+        ASSERT_EQ(write_all(&p, str_bytes("tail")), 1);
         ASSERT_EQ(p.close_write(), 0);
         ASSERT_EQ(read_lines(&p, 300), 1);
         ASSERT_EQ(read_lines(&m, 300), 1);
@@ -900,7 +906,7 @@ void t_io_roles() {
         unsigned long st = 1UL;
         while (st <= 4UL) {
             mem_init(&m, st);
-            ASSERT_EQ(write_all(&m, (const &unsigned char)"xaaaaaabaab", 11UL), 1);
+            ASSERT_EQ(write_all(&m, str_bytes("xaaaaaabaab")), 1);
             struct BufReader<MemStream> ar = BufReader::over(&m);
             struct String got = String::new();
             ASSERT_EQ(ar.read_until(&got, "aab"), 1);
@@ -1092,14 +1098,14 @@ void t_ipc() {
         ASSERT_EQ(p.set_read_nonblocking(), 0);
         unsigned char buf[16];
         // Empty non-blocking pipe: returns at once instead of blocking.
-        ASSERT_EQ(p.read(&buf[0], 16UL), -1);
+        ASSERT_EQ(p.read(buf[0..16UL]), -1);
         ASSERT_TRUE(sock_would_block());
         ASSERT_EQ(p.set_write_nonblocking(), 0);
-        ASSERT_EQ(p.write((const unsigned char*)"ping", 4UL), 4);
-        ASSERT_EQ(p.read(&buf[0], 16UL), 4);
+        ASSERT_EQ(p.write(str_bytes("ping")), 4);
+        ASSERT_EQ(p.read(buf[0..16UL]), 4);
         ASSERT_EQ(buf[3], 'g');
         ASSERT_EQ(p.close_write(), 0);
-        ASSERT_EQ(p.read(&buf[0], 16UL), 0);          // EOF
+        ASSERT_EQ(p.read(buf[0..16UL]), 0);          // EOF
         ASSERT_EQ(p.close_read(), 0);
 
         const &char path = "/tmp/safec_std_test_uds.sock";

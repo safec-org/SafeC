@@ -632,7 +632,7 @@ static struct HttpResponse a_ws(&HttpRequest req, &HttpCtx ctx) {
                                      (unsigned char)0x89, (unsigned char)0,
                                      (unsigned char)0x80, (unsigned char)2, (unsigned char)'l', (unsigned char)'o',
                                      (unsigned char)0, (unsigned char)0 };
-        write_all(&s, &frames[0], 11UL);
+        write_all(&s, frames[0..11UL]);
     }
     struct WsMessage m;
     while (c.recv_message(&m, 1048576UL)) {
@@ -654,7 +654,7 @@ static struct HttpResponse a_close(&HttpRequest req, &HttpCtx ctx) {
 static void write_file(const &char path, const &char text) {
     ?&File f = File::open(path, "wb");
     match (f) {
-        case some(file): { unsafe { file.write((const &unsigned char)text, str_len(text)); } file.close(); }
+        case some(file): { unsafe { file.write(str_bytes(text)); } file.close(); }
         case null: { ASSERT_TRUE(0); }
     }
 }
@@ -709,7 +709,7 @@ static int raw_connect() {
 
 static int raw_send(int fd, const &char text) {
     struct TcpStream s = TcpStream::from_fd(fd);
-    unsafe { return write_all(&s, (const &unsigned char)text, str_len(text)); }
+    unsafe { return write_all(&s, str_bytes(text)); }
 }
 
 // Reads one response (head + Content-Length body) from 'in'.
@@ -723,7 +723,7 @@ static int raw_response(&BufReader<TcpStream> in, &String head, &String body) {
     cl.free();
     if (!ok) return 1;
     unsigned char buf[8192];
-    if (n > 8192LL || !read_exact(in, &buf[0], (unsigned long)n)) return 0;
+    if (n > 8192LL || !read_exact(in, buf[0..(unsigned long)n])) return 0;
     unsafe { body.push_n((const char*)&buf[0], (unsigned long)n); }
     return 1;
 }
@@ -770,7 +770,7 @@ void t_server_keep_alive() {
     ASSERT_TRUE(raw_response(&in, &head, &body));
     ASSERT_TRUE(head.contains("Connection: close"));
     unsigned char one[1];
-    ASSERT_EQ(in.read(&one[0], 1UL), 0);
+    ASSERT_EQ(in.read(one[0..1UL]), 0);
     s.close();
 
     // HTTP/1.0 without keep-alive closes after one response.
@@ -1104,7 +1104,7 @@ void t_server_stop() {
     struct TcpStream is = TcpStream::from_fd(idle);
     raw_send(idle, "GET / HTTP/1.1\r\nHost: t\r\n\r\n");
     unsigned char buf[512];
-    ASSERT_TRUE(is.read(&buf[0], 512UL) > 0LL);   // served; now idle on keep-alive
+    ASSERT_TRUE(is.read(buf[0..512UL]) > 0LL);   // served; now idle on keep-alive
     long long t0 = time_mono_ns();
     srv.stop();
     ASSERT_TRUE((time_mono_ns() - t0) / 1000000LL < 1500LL);

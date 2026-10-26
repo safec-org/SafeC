@@ -428,7 +428,7 @@ struct HttpResponse http_serve_file(const &HttpRequest req, const &char file_pat
             unsigned long left = want;
             while (left > 0UL) {
                 unsigned long ask = left < 16384UL ? left : 16384UL;
-                long long got = file.read(&buf[0], ask);
+                long long got = file.read(buf[0..ask]);
                 if (got <= 0LL) { break; }
                 unsafe { r.body.push_n((const char*)&buf[0], (unsigned long)got); }
                 left = left - (unsigned long)got;

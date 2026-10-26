@@ -669,10 +669,13 @@ struct TcpStream TcpStream::over_tls(&heap TlsStream t) {
 
 int TcpStream::is_tls() const { return !self.tls.is_null(); }
 
-long long TcpStream::read(&unsigned char buf, unsigned long n) {
+long long TcpStream::read([]unsigned char buf_s) {
+    unsigned long n = buf_s.len;
+    &unsigned char buf;
+    unsafe { buf = (&unsigned char)buf_s.ptr; }
     match (self.tls) {
         case some(t): {
-            long long r = t.read(buf, n);
+            long long r = t.read(buf_s);
             return r < 0LL ? -1LL : r;
         }
         case null: { }
@@ -680,10 +683,13 @@ long long TcpStream::read(&unsigned char buf, unsigned long n) {
     unsafe { return (long long)sock_read_(self.fd, (void*)buf, n); }
 }
 
-long long TcpStream::write(const &unsigned char buf, unsigned long n) {
+long long TcpStream::write([]const unsigned char buf_s) {
+    unsigned long n = buf_s.len;
+    const &unsigned char buf;
+    unsafe { buf = (const &unsigned char)buf_s.ptr; }
     match (self.tls) {
         case some(t): {
-            long long r = t.write(buf, n);
+            long long r = t.write(buf_s);
             return r < 0LL ? -1LL : r;
         }
         case null: { }
@@ -707,11 +713,11 @@ int TcpStream::close() {
 
 // The whole of 'text' to the stream; 1 on success.
 static int write_text_(&TcpStream s, const &String text) {
-    unsafe { return write_all(s, (const &unsigned char)text.as_ptr(), text.length()); }
+    unsafe { return write_all(s, text.as_bytes()); }
 }
 
 static int write_cstr_(&TcpStream s, const &char text) {
-    unsafe { return write_all(s, (const &unsigned char)text, str_len(text)); }
+    unsafe { return write_all(s, str_bytes(text)); }
 }
 
 struct TcpStream http_open_stream(const &char host, unsigned short port, int tls,
@@ -1046,7 +1052,7 @@ static int http_read_head_(&BufReader<TcpStream> in, &String out, unsigned long 
     *any = 0;
     while (1) {
         if (in.pos == in.len) {
-            long long k = in.inner.read(&in.buf[0], (unsigned long)IO_BUF_SIZE);
+            long long k = in.inner.read(in.buf[0..(unsigned long)IO_BUF_SIZE]);
             if (k <= 0LL) { return 0; }
             in.pos = 0UL;
             in.len = (unsigned long)k;
@@ -1086,7 +1092,7 @@ static int http_read_head_(&BufReader<TcpStream> in, &String out, unsigned long 
 static int http_read_line_(&BufReader<TcpStream> in, &String out, unsigned long max) {
     while (1) {
         if (in.pos == in.len) {
-            long long k = in.inner.read(&in.buf[0], (unsigned long)IO_BUF_SIZE);
+            long long k = in.inner.read(in.buf[0..(unsigned long)IO_BUF_SIZE]);
             if (k <= 0LL) { return 0; }
             in.pos = 0UL;
             in.len = (unsigned long)k;
@@ -1117,7 +1123,7 @@ static int http_read_n_(&BufReader<TcpStream> in, &String out, unsigned long wan
     if (!out.reserve(want)) { return 0; }
     while (remaining > 0UL) {
         unsigned long ask = (remaining < 4096UL) ? remaining : 4096UL;
-        long long n = in.read(&chunk[0], ask);
+        long long n = in.read(chunk[0..ask]);
         if (n <= 0LL) { return 0; }
         unsafe { out.push_n((const char*)&chunk[0], (unsigned long)n); }
         remaining = remaining - (unsigned long)n;
@@ -1129,7 +1135,7 @@ static int http_read_n_(&BufReader<TcpStream> in, &String out, unsigned long wan
 static int http_read_to_eof_(&BufReader<TcpStream> in, &String out, unsigned long max) {
     unsigned char chunk[4096];
     while (1) {
-        long long n = in.read(&chunk[0], 4096UL);
+        long long n = in.read(chunk[0..4096UL]);
         if (n < 0LL) { return 0; }
         if (n == 0LL) { return 1; }
         if (max != 0UL && out.length() + (unsigned long)n > max) { return 0; }
@@ -2141,29 +2147,33 @@ struct HttpChunkedWriter HttpChunkedWriter::begin(&HttpConn conn, int status, co
         text.push("\r\n");
     }
     text.push("Transfer-Encoding: chunked\r\nConnection: close\r\n\r\n");
-    unsafe { w.ok = write_all(&w.s, (const &unsigned char)text.as_ptr(), text.length()); }
+    unsafe { w.ok = write_all(&w.s, text.as_bytes()); }
     text.free();
     r.free();
     return w;
 }
 
-int HttpChunkedWriter::write(const &unsigned char data, unsigned long len) {
+int HttpChunkedWriter::write([]const unsigned char data_s) {
+    unsigned long len = data_s.len;
+    if (len == 0UL) { return 1; }
+    const &unsigned char data;
+    unsafe { data = (const &unsigned char)data_s.ptr; }
     if (!self.ok) { return 0; }
     if (len == 0UL) { return 1; }
     struct String t = String::new();
     http_chunked_encode(&t, data, len);
-    unsafe { self.ok = write_all(&self.s, (const &unsigned char)t.as_ptr(), t.length()); }
+    unsafe { self.ok = write_all(&self.s, t.as_bytes()); }
     t.free();
     return self.ok;
 }
 
 int HttpChunkedWriter::write_str(const &char text) {
-    unsafe { return self.write((const &unsigned char)text, str_len(text)); }
+    unsafe { return self.write(str_bytes(text)); }
 }
 
 int HttpChunkedWriter::finish() {
     if (self.ok) {
-        unsafe { self.ok = write_all(&self.s, (const &unsigned char)"0\r\n\r\n", 5UL); }
+        unsafe { self.ok = write_all(&self.s, str_bytes("0\r\n\r\n")); }
     }
     self.s.close();
     return self.ok;

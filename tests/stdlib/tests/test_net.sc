@@ -85,7 +85,7 @@ void t_ipv4_udp() {
         ASSERT_EQ(pkt.data[ETH_HDR_LEN + 15], 10);
         ASSERT_EQ(pkt.data[ETH_HDR_LEN + 16], 10);
         // A correct IPv4 header checksums to zero.
-        ASSERT_EQ(ip_checksum((const unsigned char*)&pkt.data[ETH_HDR_LEN], (unsigned long)IPV4_HDR_LEN), 0);
+        ASSERT_EQ(ip_checksum(pkt.data[(unsigned long)ETH_HDR_LEN..(unsigned long)(ETH_HDR_LEN + IPV4_HDR_LEN)]), 0);
         struct Ipv4Hdr ih;
         ASSERT_EQ(ipv4_parse(&pkt, (unsigned long)ETH_HDR_LEN, &ih), 0);
         ASSERT_EQ(ih.src, src);
@@ -261,7 +261,7 @@ static int hop(&TcpConn from, &TcpConn to, const unsigned char fromMac[6], const
     ipv4_parse(&pkt, (unsigned long)ETH_HDR_LEN, &ih);
     unsigned long segLen = (unsigned long)ih.total_len - (unsigned long)IPV4_HDR_LEN;
     unsafe {
-        if (tcp_checksum(ih.src, ih.dst, (const unsigned char*)&pkt.data[tcpOff], segLen) != (unsigned short)0) return -1;
+        if (tcp_checksum(ih.src, ih.dst, pkt.data[tcpOff..tcpOff + segLen]) != (unsigned short)0) return -1;
     }
     to.recv(&pkt, tcpOff);
     return 1;
@@ -290,12 +290,12 @@ void t_tcp() {
         ASSERT_EQ(hop(a, b, MAC_A, MAC_B), 1);    // ACK
         ASSERT_EQ(b.state, TCP_ESTABLISHED);
         ASSERT_EQ(a.rcv_nxt, 9001);              // our ISN 9000 + SYN
-        ASSERT_EQ(a.send((const unsigned char*)"hello tcp", 9UL), 9);
+        ASSERT_EQ(a.send(str_bytes("hello tcp")), 9);
         ASSERT_EQ(hop(a, b, MAC_A, MAC_B), 1);    // data
         ASSERT_TRUE(b.rx_ready());
         unsigned char got[16];
         safe_memset((&unsigned char)got, 0, 16UL);
-        ASSERT_EQ(b.read(got, 16UL), 9);
+        ASSERT_EQ(b.read(got[0..16]), 9);
         ASSERT_STR_EQ((const char*)got, "hello tcp");
         a.close();
         ASSERT_EQ(hop(a, b, MAC_A, MAC_B), 1);    // FIN

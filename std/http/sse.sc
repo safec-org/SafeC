@@ -14,7 +14,7 @@ namespace std {
 
 static int sse_write_(&SseStream st, const &String text) {
     if (!st.ok) { return 0; }
-    unsafe { st.ok = write_all(&st.s, (const &unsigned char)text.as_ptr(), text.length()); }
+    unsafe { st.ok = write_all(&st.s, text.as_bytes()); }
     return st.ok;
 }
 
@@ -231,7 +231,7 @@ struct SseClient SseClient::connect_tls(const &char url, const ?&char last_event
         req.push("\r\n");
         target.free();
         hp.free();
-        unsafe { if (!write_all(&s, (const &unsigned char)req.as_ptr(), req.length())) { good = 0; } }
+        unsafe { if (!write_all(&s, req.as_bytes())) { good = 0; } }
         req.free();
     }
     if (good) {
@@ -240,7 +240,7 @@ struct SseClient SseClient::connect_tls(const &char url, const ?&char last_event
         long long end = -1LL;
         unsigned char buf[4096];
         while (end < 0LL && head.length() < 65536UL) {
-            long long n = s.read(&buf[0], 4096UL);
+            long long n = s.read(buf[0..4096UL]);
             if (n <= 0LL) { break; }
             unsafe { head.push_n((const char*)&buf[0], (unsigned long)n); }
             end = head.index_of("\r\n\r\n");
@@ -324,7 +324,7 @@ int SseClient::next(&SseEvent out) {
         unsigned char buf[4096];
         struct TcpStream s = TcpStream::from_fd(self.fd);
         s.tls = self.tls;
-        long long n = s.read(&buf[0], 4096UL);
+        long long n = s.read(buf[0..4096UL]);
         if (n <= 0LL) {
             self.eof = 1;
             // A final event without its blank line is dropped, as

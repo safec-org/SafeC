@@ -113,7 +113,7 @@ struct WsConn WsConn::connect_tls(const &char host, unsigned short port, const &
             req.push("\r\nSec-WebSocket-Version: 13\r\n\r\n");
         }
         int sent;
-        unsafe { sent = write_all(&s, (const &unsigned char)req.as_ptr(), req.length()); }
+        unsafe { sent = write_all(&s, req.as_bytes()); }
         if (!sent) { good = 0; }
         req.free();
     }
@@ -166,7 +166,8 @@ static int ws_keep_early_(&WsConn c, &BufReader<TcpStream> in) {
     match (buf) {
         case null: { return 0; }
         case some(b): {
-            long long got = in.read(b, n);
+            long long got;
+            unsafe { got = in.read(((unsigned char*)b)[0..n]); }
             if (got != (long long)n) { unsafe { dealloc_raw_((void*)b); } return 0; }
             c.early = b;
             c.earlyLen = n;
@@ -178,10 +179,14 @@ static int ws_keep_early_(&WsConn c, &BufReader<TcpStream> in) {
 // A Reader over a connection: the early bytes first, then the socket.
 struct WsSource_ {
     &WsConn conn;
-    long long read(&unsigned char out, unsigned long n);
+    long long read([]unsigned char out);
 };
 
-long long WsSource_::read(&unsigned char out, unsigned long n) {
+long long WsSource_::read([]unsigned char out_s) {
+    unsigned long n = out_s.len;
+    if (n == 0UL) { return 0LL; }
+    &unsigned char out;
+    unsafe { out = (&unsigned char)out_s.ptr; }
     &WsConn c = self.conn;
     if (c.earlyPos < c.earlyLen) {
         unsigned long left = c.earlyLen - c.earlyPos;
@@ -200,7 +205,7 @@ long long WsSource_::read(&unsigned char out, unsigned long n) {
         return (long long)k;
     }
     struct TcpStream s = ws_stream_(c);
-    return s.read(out, n);
+    return s.read(out_s);
 }
 
 // ── Server handshake ───────────────────────────────────────────────────────
@@ -248,7 +253,7 @@ int WsConn::accept(int listenFd) {
             resp.push("\r\n\r\n");
         }
         int sent;
-        unsafe { sent = write_all(&s, (const &unsigned char)resp.as_ptr(), resp.length()); }
+        unsafe { sent = write_all(&s, resp.as_bytes()); }
         if (!sent) { good = 0; }
         resp.free();
         accept.free();
@@ -306,7 +311,7 @@ static int ws_write_frame_(struct WsConn* conn, int opcode,
     // Header, mask key and a small payload leave in one write; a large
     // payload streams through without a copy of the whole of it.
     struct BufWriter<TcpStream> out = BufWriter::over(&s);
-    if (!write_all(&out, &head[0], headLen)) { return 0; }
+    if (!write_all(&out, head[0..headLen])) { return 0; }
 
     if (mustMask) {
         unsigned char maskKey[4];
@@ -315,7 +320,7 @@ static int ws_write_frame_(struct WsConn* conn, int opcode,
         unsafe { rngOk = rng.init(); }
         if (!rngOk) { return 0; }
         unsafe { rng.fill(&maskKey[0], 4UL); }
-        if (!write_all(&out, &maskKey[0], 4UL)) { return 0; }
+        if (!write_all(&out, maskKey[0..4UL])) { return 0; }
 
         // Masked a chunk at a time (a multiple of 4, so the key lines up).
         unsigned char chunk[WS_MASK_CHUNK_];
@@ -330,12 +335,12 @@ static int ws_write_frame_(struct WsConn* conn, int opcode,
                     k = k + 1UL;
                 }
             }
-            if (!write_all(&out, &chunk[0], n)) { return 0; }
+            if (!write_all(&out, chunk[0..n])) { return 0; }
             i = i + n;
         }
     } else if (len > 0UL) {
         int ok;
-        unsafe { ok = write_all(&out, (const &unsigned char)data, len); }
+        unsafe { ok = write_all(&out, ((const unsigned char*)data)[0..len]); }
         if (!ok) { return 0; }
     }
     return out.flush() == 0;
@@ -369,7 +374,7 @@ static int ws_recv_frame_(&WsConn conn, &WsMessage out, &int finOut) {
     s.conn = conn;
 
     unsigned char head[2];
-    if (!read_exact(&s, &head[0], 2UL)) { return 0; }
+    if (!read_exact(&s, head[0..2UL])) { return 0; }
     int opcode;
     int maskBit;
     unsigned long len7;
@@ -383,11 +388,11 @@ static int ws_recv_frame_(&WsConn conn, &WsMessage out, &int finOut) {
     unsigned long payloadLen = len7;
     if (len7 == 126UL) {
         unsigned char ext[2];
-        if (!read_exact(&s, &ext[0], 2UL)) { return 0; }
+        if (!read_exact(&s, ext[0..2UL])) { return 0; }
         unsafe { payloadLen = ((unsigned long)ext[0] << 8) | (unsigned long)ext[1]; }
     } else if (len7 == 127UL) {
         unsigned char ext[8];
-        if (!read_exact(&s, &ext[0], 8UL)) { return 0; }
+        if (!read_exact(&s, ext[0..8UL])) { return 0; }
         unsigned long v = 0UL;
         int i = 0;
         while (i < 8) {
@@ -401,7 +406,7 @@ static int ws_recv_frame_(&WsConn conn, &WsMessage out, &int finOut) {
 
     unsigned char maskKey[4];
     if (maskBit != 0) {
-        if (!read_exact(&s, &maskKey[0], 4UL)) { return 0; }
+        if (!read_exact(&s, maskKey[0..4UL])) { return 0; }
     }
 
     unsigned char* payload = (unsigned char*)0;
@@ -409,7 +414,7 @@ static int ws_recv_frame_(&WsConn conn, &WsMessage out, &int finOut) {
         unsafe { payload = (unsigned char*)alloc_raw_(payloadLen); }
         if (payload == (unsigned char*)0) { return 0; }
         int got;
-        unsafe { got = read_exact(&s, (&unsigned char)payload, payloadLen); }
+        unsafe { got = read_exact(&s, ((unsigned char*)payload)[0..payloadLen]); }
         if (!got) {
             unsafe { dealloc_raw_((void*)payload); }
             return 0;
@@ -522,7 +527,7 @@ struct WsConn WsConn::accept_upgrade(const &HttpRequest req, &HttpConn conn, ?&i
     resp.push("\r\n\r\n");
     accept.free();
     int sent;
-    unsafe { sent = write_all(&s, (const &unsigned char)resp.as_ptr(), resp.length()); }
+    unsafe { sent = write_all(&s, resp.as_bytes()); }
     resp.free();
     // The server's I/O timeout must not cut an idle WebSocket off.
     sock_set_io_timeout(s.fd, 0);

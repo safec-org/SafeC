@@ -35,11 +35,11 @@ struct Pipe {
     // Reads up to 'count' bytes from the pipe's read end into 'buf'.
     // Returns the number of bytes read (0 means the write end was closed
     // and the pipe is drained — EOF), or -1 on error.
-    long long read(&unsigned char buf, unsigned long count);
+    long long read([]unsigned char buf);
 
     // Writes up to 'count' bytes from 'buf' to the pipe's write end.
     // Returns the number of bytes written, or -1 on error.
-    long long write(const &unsigned char buf, unsigned long count);
+    long long write([]const unsigned char buf);
 
     // Puts the read end into non-blocking mode (pairs with std::Reactor —
     // await_fd(p.read_fd, SCHED_READ) once this returns 0). Returns 0 on
