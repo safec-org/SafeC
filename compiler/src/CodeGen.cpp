@@ -3546,6 +3546,11 @@ llvm::Value *CodeGen::genCall(CallExpr &e, FnEnv &env) {
             builder_.SetInsertPoint(doneBB);
             return ok;
         }
+        // forget(x): no code; x's side effects (a call) still happen.
+        if (ident.name == "forget" && e.args.size() == 1 && !e.callee->type) {
+            genExpr(*e.args[0], env);
+            return llvm::ConstantInt::get(llvm::Type::getInt32Ty(ctx_), 0);
+        }
         if (ident.name == "chan_close" && e.args.size() == 1) {
             auto *PtrTy  = llvm::PointerType::get(ctx_, 0);
             auto *VoidTy = llvm::Type::getVoidTy(ctx_);

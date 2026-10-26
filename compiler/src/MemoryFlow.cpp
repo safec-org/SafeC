@@ -80,6 +80,16 @@ constexpr uint8_t kReset = 2;   // an arena reset/destroy/free_to may have inval
 constexpr int kMaxDerefs = 3;   // deeper entry paths share one collapsed object
 constexpr int kMaxIters  = 200;
 
+// Ownership of must-drop values (see the ownership section below): the
+// state of each owned slot (a local's leaf value, keyed by object + cell
+// path).
+constexpr uint8_t kOLive   = 1;   // holds a value that must still be dropped
+constexpr uint8_t kODrop   = 2;   // dropped (drop() or a 'consume' method)
+constexpr uint8_t kOMove   = 4;   // moved out (returned, passed by value, stored elsewhere, sent)
+constexpr uint8_t kOUninit = 8;   // declared without an initializer
+constexpr uint8_t kOGone   = kODrop | kOMove;
+using OwnKey = std::pair<int, std::string>;
+
 // ── Values ─────────────────────────────────────────────────────────────────────
 struct VEnt { int obj; uint8_t bits; };
 inline bool operator==(const VEnt &a, const VEnt &b) { return a.obj == b.obj && a.bits == b.bits; }
@@ -232,7 +242,7 @@ std::string fieldSel(const TypePtr &baseTy, const std::string &field) {
 }
 
 // ── Objects ────────────────────────────────────────────────────────────────────
-enum class OK : uint8_t { Local, Global, Ext, Alloc, Mark, Temp, Ret, View, Trusted };
+enum class OK : uint8_t { Local, Global, Ext, Alloc, Mark, Temp, Ret, View, Trusted, Token };
 
 struct ObjInfo {
     OK          kind = OK::Local;
@@ -311,11 +321,14 @@ struct State {
     std::map<std::string, Deep> deep;                    // entry-path prefixes freed/written as a whole
     std::map<int, std::vector<int>> after;               // arena allocation -> marks taken before it
     std::map<std::string, std::vector<int>> marks;       // region -> marks taken so far
+    std::map<OwnKey, uint8_t> own;                       // owned slot -> kO* bits
+    std::map<int, std::vector<OwnKey>> tok;              // borrow token -> the owned slots it borrows
+    std::map<int, std::vector<int>> lent;                // object lent to a scoped thread -> handle tokens
     bool operator==(const State &o) const {
         if (live != o.live) return false;
         if (!live) return true;
         return mem == o.mem && invalid == o.invalid && extReset == o.extReset && deep == o.deep &&
-               after == o.after && marks == o.marks;
+               after == o.after && marks == o.marks && own == o.own && tok == o.tok && lent == o.lent;
     }
     bool operator!=(const State &o) const { return !(*this == o); }
 };
@@ -328,7 +341,11 @@ struct EV {
     bool agg = false;
 };
 
-struct Diag { SourceLocation loc; std::string msg; };
+struct Diag {
+    SourceLocation loc;
+    std::string msg;
+    std::vector<std::pair<SourceLocation, std::string>> notes;
+};
 
 class FlowDriver;
 
@@ -348,11 +365,12 @@ private:
     std::unordered_map<const VarDecl *, int> paramIdx_;
     State cur_, exit_;
     int quiet_ = 0, unsafe_ = 0;
-    struct Target { std::string label; bool isSwitch; State brk, cont; };
+    struct Target { std::string label; bool isSwitch; State brk, cont; size_t depth = 0; };
     std::vector<Target> targets_;
     std::map<std::string, State> labels_;
     std::vector<std::pair<int, const DeferStmt *>> defers_;   // (preorder index, stmt)
     std::unordered_map<const Stmt *, int> order_;
+    std::unordered_map<const Stmt *, int> blockEnd_;   // a block's last preorder index
     int curPos_ = 0;
     int inDefer_ = 0;
     std::vector<std::pair<std::string, int>> binds_;
@@ -404,7 +422,7 @@ private:
     void loopOnce(Expr *cond, Stmt *body, Expr *incr, bool doWhile, const std::string &label,
                   bool alwaysTrue, State &back, State &exitS);
     void doReturn(bool isError);
-    void jumpTo(bool isBreak, const std::string &label);
+    void jumpTo(bool isBreak, const std::string &label, SourceLocation loc);
     void bindPattern(const MatchPattern &pat, const EV &subject, const TypePtr &subjTy);
 
     // expressions
@@ -414,6 +432,8 @@ private:
     VSet load(const std::vector<CellRef> &cells, const TypePtr &ty, const Expr *site = nullptr);
     void checkLoad(const Expr &e, const VSet &v, int form, const std::string &name);
     EV evalCall(CallExpr &e);
+    EV evalCallInner(CallExpr &e);
+    std::vector<OwnKey> callOwners_;
     EV opaqueResult(const Expr &site, const TypePtr &ty);
     void writeInit(const std::vector<CellRef> &dst, Expr &init, const TypePtr &ty);
     EV applySummary(const Expr &e, FunctionDecl *callee, const Summary &s, std::vector<EV> &args);
@@ -429,12 +449,64 @@ private:
     }
     void buildSummary();
     Term termOf(const VEnt &e) const;
+    void reportN(SourceLocation loc, std::string msg, std::vector<std::pair<SourceLocation, std::string>> notes) {
+        if (!quiet_ && !unsafe_) diags.push_back({loc, std::move(msg), std::move(notes)});
+    }
+
+    // ── ownership of must-drop values ──────────────────────────────────────
+    struct OwnVar {
+        TypePtr ty;
+        std::string name;
+        SourceLocation decl;
+        const VarDecl *vd = nullptr;
+        bool pseudo = false;   // *self of a destructor ('consume' method)
+    };
+    std::unordered_map<int, OwnVar> ownVars_;
+    struct Frame { const Stmt *s; std::vector<int> objs; };
+    std::vector<Frame> frames_;
+    std::vector<const Expr *> pending_;                 // must-drop temporaries not yet consumed
+    std::map<OwnKey, SourceLocation> goneAt_;           // where a slot was last dropped/moved
+    std::vector<std::set<const VarDecl *>> deferVars_;  // parallel to defers_: variables each defer names
+    std::unordered_map<std::string, std::set<const Stmt *>> labelScopes_; // label -> enclosing blocks
+    bool isDtor_ = false;          // fn_ is drop() or a 'consume' method
+    int selfObj_ = -1;             // the object *self is, in a destructor
+    std::set<std::string> dtorFields_;   // fields of *self a destructor drops or moves
+    SourceLocation endLoc_;
+    bool mustDrop(const TypePtr &t) const;
+    bool tracked(int obj) const { return ownVars_.count(obj) != 0; }
+    void ownLeaves(const TypePtr &t, const std::string &path, std::vector<std::string> &out, int depth = 0);
+    void ownDeclare(int obj, const TypePtr &ty, bool init, SourceLocation loc, const std::string &name,
+                    const VarDecl *vd);
+    std::vector<std::map<OwnKey, uint8_t>::iterator> ownOverlap(int obj, const std::string &path);
+    void ownUse(const std::vector<CellRef> &cells, SourceLocation loc, bool write);
+    void ownMove(Expr &e, const EV &v, uint8_t kind);
+    void ownConsumeCells(const std::vector<CellRef> &cells, uint8_t kind, SourceLocation loc, const Expr *what);
+    void ownConsumeKey(int obj, const std::string &path, uint8_t kind, SourceLocation loc);
+    void ownAssign(const std::vector<CellRef> &cells, SourceLocation loc);
+    void ownTemp(const Expr &e) { if (cur_.live && mustDrop(e.type)) pending_.push_back(&e); }
+    void ownTakeTemp(const Expr *e);
+    void ownFlush();
+    void ownExitFrame(const Frame &f, SourceLocation loc, const char *how);
+    void ownExitAbove(size_t depth, SourceLocation loc, const char *how);
+    void ownExitForGoto(const std::string &label, SourceLocation loc);
+    bool keptByDefer(int obj) const;
+    std::string ownDesc(int obj, const std::string &path) const;
+    std::string danglingIn(const VSet &v) const;
+    void ownCheckVal(const Expr &e, const VSet &v);
+    void ownCheckObjTokens(int obj, SourceLocation loc);
+    int ownToken(const Expr &site, const std::vector<OwnKey> &owners);
+    void ownEndFunction();
+    bool ownMatchSubject(Expr *subject, const EV &subj, const std::vector<const std::vector<MatchPattern> *> &arms);
+    void ownBind(const MatchPattern &p, SourceLocation loc);
+    std::string typeName(const TypePtr &t) const { return t ? t->str() : "?"; }
 };
 
 // ── Driver ─────────────────────────────────────────────────────────────────────
 class FlowDriver {
 public:
-    FlowDriver(DiagEngine &diag, const std::vector<FunctionDecl *> &fns) : diag_(diag), fns_(fns) {}
+    FlowDriver(DiagEngine &diag, const std::vector<FunctionDecl *> &fns, const Sema &sema)
+        : diag_(diag), fns_(fns), sema(sema) {}
+    const Sema &sema;
     void run();
     FunctionDecl *bodyOf(FunctionDecl *fd) const {
         if (!fd) return nullptr;
@@ -459,6 +531,8 @@ private:
     std::unordered_map<FunctionDecl *, Summary> sums_;
     std::unordered_map<FunctionDecl *, int> scc_;
 };
+
+bool Walker::mustDrop(const TypePtr &t) const { return drv_.sema.isMustDrop(t); }
 
 // ── Generic AST traversal (call graph, labels, statement order) ───────────────
 template <class FS, class FE>
@@ -967,7 +1041,7 @@ void Walker::freeObjs(const VSet &v) {
         int b = canonBase(e.obj);
         const ObjInfo &oi = objs_[b];
         if (oi.kind == OK::Local || oi.kind == OK::Global || oi.kind == OK::Mark ||
-            oi.kind == OK::Temp || oi.kind == OK::Ret || oi.kind == OK::Trusted)
+            oi.kind == OK::Temp || oi.kind == OK::Ret || oi.kind == OK::Trusted || oi.kind == OK::Token)
             continue;
         bases.insert(b);
         if (oi.kind == OK::Ext && epRooted(oi.ep)) summary.frees.insert(oi.ep);
@@ -1070,6 +1144,12 @@ State Walker::join(const State &a, const State &b) {
     for (auto &kv : b.after) sortedUnion(r.after[kv.first], kv.second);
     r.marks = a.marks;
     for (auto &kv : b.marks) sortedUnion(r.marks[kv.first], kv.second);
+    r.own = a.own;
+    for (auto &kv : b.own) r.own[kv.first] |= kv.second;
+    r.tok = a.tok;
+    for (auto &kv : b.tok) sortedUnion(r.tok[kv.first], kv.second);
+    r.lent = a.lent;
+    for (auto &kv : b.lent) sortedUnion(r.lent[kv.first], kv.second);
     return r;
 }
 
@@ -1277,6 +1357,7 @@ void Walker::writeInit(const std::vector<CellRef> &dst, Expr &init, const TypePt
         return;
     }
     EV v = rval(init);
+    if (mustDrop(init.type)) ownMove(init, v, kOMove);
     if (isAgg(ty) || v.agg) { if (v.agg) copyAgg(dst, v.cells); return; }
     if (isTracked(ty) || !v.v.empty()) write(dst, v.v);
 }
@@ -1290,9 +1371,11 @@ EV Walker::rval(Expr &e) {
         if (!id.resolved && id.resolvedFn) return r;
         auto cells = lval(e);
         if (cells.empty()) return r;
+        ownUse(cells, e.loc, false);
         if (isAgg(e.type)) { r.agg = true; r.cells = cells; return r; }
         r.v = load(cells, e.type);
         checkLoad(e, r.v, 0, id.name);
+        ownCheckVal(e, r.v);
         return r;
     }
     case ExprKind::Member: case ExprKind::Arrow: case ExprKind::Subscript: case ExprKind::Deref: {
@@ -1306,13 +1389,16 @@ EV Walker::rval(Expr &e) {
             }
         }
         auto cells = lval(e);
+        ownUse(cells, e.loc, false);
         if (isAgg(e.type)) { r.agg = true; r.cells = cells; return r; }
         r.v = load(cells, e.type, &e);
         checkLoad(e, r.v, e.kind == ExprKind::Deref ? 2 : 1, "");
+        ownCheckVal(e, r.v);
         return r;
     }
     case ExprKind::AddrOf: {
         auto cells = lval(*static_cast<UnaryExpr &>(e).operand);
+        ownUse(cells, e.loc, false);
         if (!cells.empty() &&
             std::all_of(cells.begin(), cells.end(), [&](const CellRef &c) { return isTrusted(c.obj); }))
             return opaqueResult(e, e.type);
@@ -1371,10 +1457,13 @@ EV Walker::rval(Expr &e) {
         cond(te.cond.get(), ts, fs);
         cur_ = std::move(ts);
         EV a = rval(*te.then);
+        if (mustDrop(e.type)) ownMove(*te.then, a, kOMove);
         State sa = cur_;
         cur_ = std::move(fs);
         EV b = rval(*te.else_);
+        if (mustDrop(e.type)) ownMove(*te.else_, b, kOMove);
         cur_ = join(sa, cur_);
+        ownTemp(e);
         r.v = a.v;
         vsUnion(r.v, b.v);
         if (a.agg || b.agg) {
@@ -1391,13 +1480,17 @@ EV Walker::rval(Expr &e) {
         auto &ae = static_cast<AssignExpr &>(e);
         TypePtr lt = ae.lhs->type;
         if (ae.op == AssignOp::Assign) {
+            bool owned = mustDrop(lt);
             if (ae.rhs->kind == ExprKind::Compound) {
                 auto dst = lval(*ae.lhs);
                 writeInit(dst, *ae.rhs, lt);
+                if (owned) ownAssign(dst, e.loc); else ownUse(dst, e.loc, true);
                 return r;
             }
             EV v = rval(*ae.rhs);
+            if (owned) ownMove(*ae.rhs, v, kOMove);
             auto dst = lval(*ae.lhs);
+            if (owned) ownAssign(dst, e.loc); else ownUse(dst, e.loc, true);
             if (v.agg) { copyAgg(dst, v.cells); return v; }
             if (isTracked(lt) || !v.v.empty()) write(dst, v.v);
             return v;
@@ -1420,6 +1513,7 @@ EV Walker::rval(Expr &e) {
         writeInit({{t, ""}}, e, e.type);
         r.agg = true;
         r.cells.push_back({t, ""});
+        ownTemp(e);
         return r;
     }
     case ExprKind::TupleLit: {
@@ -1432,6 +1526,7 @@ EV Walker::rval(Expr &e) {
         }
         r.agg = true;
         r.cells.push_back({t, ""});
+        ownTemp(e);
         return r;
     }
     case ExprKind::TaggedUnionInit: {
@@ -1441,6 +1536,7 @@ EV Walker::rval(Expr &e) {
         if (tu.payload) writeInit({{t, ".|"}}, *tu.payload, tu.payload->type);
         r.agg = true;
         r.cells.push_back({t, ""});
+        ownTemp(e);
         return r;
     }
     case ExprKind::New: {
@@ -1463,10 +1559,16 @@ EV Walker::rval(Expr &e) {
     case ExprKind::Try: {
         auto &te = static_cast<TryExpr &>(e);
         EV v = rval(*te.inner);
+        if (mustDrop(te.inner->type)) ownMove(*te.inner, v, kOMove);
+        ownFlush();
         State ok = cur_;
         clearSubtree(retObj_, "");
+        SourceLocation savedEnd = endLoc_;
+        endLoc_ = e.loc;
         doReturn(true);
+        endLoc_ = savedEnd;
         cur_ = std::move(ok);
+        ownTemp(e);
         return v;
     }
     case ExprKind::Slice: {
@@ -1491,25 +1593,36 @@ EV Walker::rval(Expr &e) {
     case ExprKind::Match: {
         auto &me = static_cast<MatchExpr &>(e);
         EV subj = rval(*me.subject);
+        std::vector<const std::vector<MatchPattern> *> armPats;
+        for (auto &arm : me.arms) armPats.push_back(&arm.patterns);
+        bool moving = ownMatchSubject(me.subject.get(), subj, armPats);
         State base = cur_;
         State acc;
         for (auto &arm : me.arms) {
             cur_ = base;
             size_t nb = binds_.size();
-            for (auto &p : arm.patterns) bindPattern(p, subj, me.subject->type);
+            frames_.push_back({nullptr, {}});
+            for (auto &p : arm.patterns) {
+                bindPattern(p, subj, me.subject->type);
+                if (moving) ownBind(p, me.subject->loc);
+            }
             if (arm.value) {
                 EV v = rval(*arm.value);
+                if (mustDrop(e.type)) ownMove(*arm.value, v, kOMove);
                 vsUnion(r.v, v.v);
                 if (v.agg) {
                     r.agg = true;
                     for (auto &c : v.cells) r.cells.push_back(c);
                 }
             }
+            ownExitFrame(frames_.back(), arm.value ? arm.value->loc : e.loc, "at the end of its match arm");
+            frames_.pop_back();
             binds_.resize(nb);
             acc = join(acc, cur_);
         }
         cur_ = me.arms.empty() ? base : acc;
         if (r.cells.size() > 1) for (auto &c : r.cells) c.weak = true;
+        ownTemp(e);
         return r;
     }
     default:
@@ -1579,8 +1692,69 @@ void Walker::bindPattern(const MatchPattern &pat, const EV &subject, const TypeP
     binds_.push_back({pat.bindName, b});
 }
 
+static bool isPlaceExpr(const Expr *e) {
+    while (e && e->kind == ExprKind::Cast) e = static_cast<const CastExpr *>(e)->operand.get();
+    if (!e) return false;
+    switch (e->kind) {
+    case ExprKind::Ident: case ExprKind::Member: case ExprKind::Arrow: case ExprKind::Subscript:
+    case ExprKind::Deref:
+        return true;
+    case ExprKind::Unary: return static_cast<const UnaryExpr *>(e)->op == UnaryOp::ForceUnwrap;
+    default: return false;
+    }
+}
+
 // ── Calls ──────────────────────────────────────────────────────────────────────
+// Does a value of this type hold a reference (so it can borrow)?
+static bool holdsRefs(const TypePtr &t0, int depth = 0) {
+    TypePtr t = stripNewtype(t0);
+    if (!t || depth > 4) return false;
+    switch (t->kind) {
+    case TypeKind::Reference: {
+        auto &rt = static_cast<ReferenceType &>(*t);
+        return !(rt.base && rt.base->kind == TypeKind::Function) && rt.region != Region::Static;
+    }
+    case TypeKind::Slice: return true;
+    case TypeKind::Optional: return holdsRefs(static_cast<OptionalType &>(*t).inner, depth + 1);
+    case TypeKind::Struct:
+        for (auto &f : static_cast<StructType &>(*t).fields) if (holdsRefs(f.type, depth + 1)) return true;
+        return false;
+    default: return false;
+    }
+}
+
+static bool isNoReturnCallee(const FunctionDecl *fd) {
+    if (!fd) return false;
+    if (fd->isNoReturn) return true;
+    static const char *names[] = {"std_panic_at", "panic_at", "abort", "exit", "_exit", "_Exit",
+                                  "__builtin_trap", "__builtin_unreachable", "std_panic", "quick_exit", nullptr};
+    for (const char **n = names; *n; ++n) if (fd->name == *n) return true;
+    return false;
+}
+
 EV Walker::evalCall(CallExpr &e) {
+    callOwners_.clear();
+    EV r = evalCallInner(e);
+    if (!cur_.live) return r;
+    FunctionDecl *fd = nullptr;
+    if (e.callee && e.callee->kind == ExprKind::Ident) fd = static_cast<IdentExpr &>(*e.callee).resolvedFn;
+    // A method on an owned receiver returning a reference borrows from it.
+    if (!callOwners_.empty() && holdsRefs(e.type)) {
+        int t = ownToken(e, callOwners_);
+        if (r.agg) {
+            for (auto &c : r.cells)
+                if (objs_[c.obj].kind == OK::Temp) vsAdd(cur_.mem[c.obj].any, t, 0);
+        } else {
+            vsAdd(r.v, t, 0);
+        }
+    }
+    callOwners_.clear();
+    ownTemp(e);
+    if (isNoReturnCallee(fd)) cur_.live = false;   // panic/abort paths owe nothing
+    return r;
+}
+
+EV Walker::evalCallInner(CallExpr &e) {
     EV r;
     if (e.taggedUnionTag >= 0) {
         int t = tempObj(&e, 1);
@@ -1598,6 +1772,13 @@ EV Walker::evalCall(CallExpr &e) {
         EV b = e.nullOpBase ? rval(*e.nullOpBase) : EV{};
         if (e.nullOp == CallExpr::NullOp::Default) {
             EV a = e.args.empty() || !e.args[0] ? EV{} : rval(*e.args[0]);
+            if (e.nullOpBase && mustDrop(e.nullOpBase->type)) {
+                reportN(e.loc, "'.default()' on a value of Drop type leaks whichever of the two values it "
+                               "doesn't return; use 'match' and drop the other one",
+                        {});
+                ownMove(*e.nullOpBase, b, kOMove);
+                if (!e.args.empty() && e.args[0]) ownMove(*e.args[0], a, kOMove);
+            }
             r.v = b.v;
             vsUnion(r.v, a.v);
             if (b.agg || a.agg) {
@@ -1626,14 +1807,35 @@ EV Walker::evalCall(CallExpr &e) {
             rval(*e.methodBase);
         } else if (bt && (bt->kind == TypeKind::Reference || bt->kind == TypeKind::Pointer)) {
             args.push_back(rval(*e.methodBase));
+            std::vector<CellRef> pointees;
+            for (auto &x : args.back().v) pointees.push_back(cellOf(x, ""));
+            if (pointees.size() > 1) for (auto &c : pointees) c.weak = true;
+            if (drv_.sema.isConsumeMethod(fd)) ownConsumeCells(pointees, kODrop, e.loc, nullptr);
+            else ownUse(pointees, e.loc, false);
         } else {
             EV self;
-            for (auto &c : lval(*e.methodBase)) vsAdd(self.v, viewObj(c.obj, c.path), 0);
+            auto cells = lval(*e.methodBase);
+            for (auto &c : cells) vsAdd(self.v, viewObj(c.obj, c.path), 0);
             args.push_back(self);
+            if (drv_.sema.isConsumeMethod(fd)) {
+                EV bv;
+                bv.agg = true;
+                bv.cells = cells;
+                if (mustDrop(e.methodBase->type)) ownMove(*e.methodBase, bv, kODrop);
+                else ownConsumeCells(cells, kODrop, e.loc, nullptr);
+            } else {
+                ownUse(cells, e.loc, false);
+                if (isPlaceExpr(e.methodBase.get()) && cells.size() == 1 && tracked(cells[0].obj))
+                    for (auto it : ownOverlap(cells[0].obj, cells[0].path)) callOwners_.push_back(it->first);
+            }
         }
     }
     size_t firstArg = args.size();
-    for (auto &a : e.args) args.push_back(a ? rval(*a) : EV{});
+    for (auto &a : e.args) {
+        args.push_back(a ? rval(*a) : EV{});
+        // A value of Drop type passed by value moves into the callee.
+        if (a && mustDrop(a->type)) ownMove(*a, args.back(), kOMove);
+    }
     if (!cur_.live) return r;
 
     switch (e.memOp) {
@@ -1961,11 +2163,444 @@ EV Walker::applySummary(const Expr &e, FunctionDecl *callee, const Summary &s, s
     return r;
 }
 
+// ── Ownership of must-drop values ─────────────────────────────────────────────
+// A value whose type implements Drop (has 'void drop()'), or an aggregate
+// holding one by value, must be dropped or moved exactly once on every path
+// before its variable goes out of scope. The checker rides on the walk
+// above: each owned *slot* (a local's must-drop leaf: the variable itself
+// when its type has drop(), else each must-drop field/element/tuple member,
+// recursively) has kO* bits in State::own, joined like everything else, so
+// loops reach a fixpoint and break/continue/goto/return/try carry it to
+// their targets. A slot is consumed by drop() or a 'consume' method on it,
+// by being moved (returned, passed by value, assigned or stored somewhere,
+// sent to another thread), or by forget(); a slot still Live when its scope
+// ends (block end, break/continue/goto out of the block, return — after the
+// defers ran) is a leak. Using a consumed slot, consuming it again, and
+// overwriting a Live one are errors too. Must-drop temporaries (call
+// results, literals) must be consumed by the full expression that makes
+// them. Values reached through references, pointers and containers are
+// borrowed: they can be dropped in place (a container's or a state
+// machine's own business, decided at run time) but not moved out of.
+//
+// Methods returning references (or structs holding them) borrow from an
+// owned receiver: the result carries a borrow token, and using it after the
+// receiver was dropped or moved is an error ('&int p = v.at(0); v.drop();
+// *p').
+
+void Walker::ownLeaves(const TypePtr &t0, const std::string &path, std::vector<std::string> &out, int depth) {
+    TypePtr t = stripNewtype(t0);
+    if (!t || depth > 16 || !mustDrop(t)) return;
+    switch (t->kind) {
+    case TypeKind::Struct: {
+        auto &st = static_cast<const StructType &>(*t);
+        if (drv_.sema.hasDropMethod(st) || st.isTaggedUnion || st.fields.empty()) { out.push_back(path); return; }
+        for (auto &f : st.fields) {
+            if (!mustDrop(f.type)) continue;
+            if (f.isAnonymous) { out.push_back(path); return; }   // keep anonymous members whole
+            ownLeaves(f.type, normPath(path + "." + f.name), out, depth + 1);
+        }
+        return;
+    }
+    case TypeKind::Array: {
+        auto &at = static_cast<const ArrayType &>(*t);
+        if (at.size > 0 && at.size <= 16 && path.find('[') == std::string::npos) {
+            for (int64_t k = 0; k < at.size; ++k)
+                ownLeaves(at.element, path + "[" + std::to_string(k) + "]", out, depth + 1);
+            return;
+        }
+        out.push_back(path);
+        return;
+    }
+    case TypeKind::Tuple: {
+        auto &tt = static_cast<const TupleType &>(*t);
+        for (size_t i = 0; i < tt.elementTypes.size(); ++i)
+            ownLeaves(tt.elementTypes[i], path + "." + std::to_string(i), out, depth + 1);
+        return;
+    }
+    default: out.push_back(path); return;
+    }
+}
+
+std::string Walker::ownDesc(int obj, const std::string &path) const {
+    auto it = ownVars_.find(obj);
+    std::string n = it != ownVars_.end() ? it->second.name : "value";
+    std::string p;
+    for (size_t i = 0; i < path.size(); ++i) {
+        if (path[i] == '|') continue;
+        p += path[i];
+    }
+    return n + p;
+}
+
+void Walker::ownDeclare(int obj, const TypePtr &ty, bool init, SourceLocation loc, const std::string &name,
+                        const VarDecl *vd) {
+    if (!mustDrop(ty)) return;
+    OwnVar &ov = ownVars_[obj];
+    ov.ty = ty;
+    ov.name = name;
+    ov.decl = loc;
+    ov.vd = vd;
+    std::vector<std::string> leaves;
+    ownLeaves(ty, "", leaves);
+    // Still live from an earlier iteration: its scope end kept it for a
+    // defer, which only runs when the function returns.
+    for (auto &l : leaves) {
+        auto it = cur_.own.find({obj, l});
+        if (it != cur_.own.end() && (it->second & kOLive))
+            reportN(loc, "'" + ownDesc(obj, l) + "' from the previous iteration is still live here: the "
+                         "'defer' that drops it only runs when the function returns, so every iteration "
+                         "but the last leaks it; drop it inside the loop instead",
+                    {});
+    }
+    for (auto it = cur_.own.lower_bound({obj, ""}); it != cur_.own.end() && it->first.first == obj;)
+        it = cur_.own.erase(it);
+    for (auto &l : leaves) cur_.own[{obj, l}] = init ? kOLive : kOUninit;
+    if (!frames_.empty()) {
+        auto &v = frames_.back().objs;
+        if (std::find(v.begin(), v.end(), obj) == v.end()) v.push_back(obj);
+    }
+}
+
+// The slots of 'obj' at or below 'path', or the one above it.
+std::vector<std::map<OwnKey, uint8_t>::iterator> Walker::ownOverlap(int obj, const std::string &path) {
+    std::vector<std::map<OwnKey, uint8_t>::iterator> out;
+    for (auto it = cur_.own.lower_bound({obj, ""}); it != cur_.own.end() && it->first.first == obj; ++it) {
+        const std::string &k = it->first.second;
+        std::string ks = starAll(k), ps = starAll(path);
+        if (underPrefix(k, path) || underPrefix(path, k) || underPrefix(ks, ps) || underPrefix(ps, ks))
+            out.push_back(it);
+    }
+    return out;
+}
+
+static const char *goneWord(uint8_t b) {
+    if ((b & kODrop) && (b & kOMove)) return "dropped or moved";
+    return (b & kODrop) ? "dropped" : "moved";
+}
+
+void Walker::ownUse(const std::vector<CellRef> &cells, SourceLocation loc, bool write) {
+    if (!cur_.live) return;
+    for (auto &c : cells) {
+        if (!tracked(c.obj)) continue;
+        ownCheckObjTokens(c.obj, loc);
+        for (auto it : ownOverlap(c.obj, c.path)) {
+            uint8_t b = it->second;
+            if (b & kOGone) {
+                std::vector<std::pair<SourceLocation, std::string>> notes;
+                auto g = goneAt_.find(it->first);
+                if (g != goneAt_.end()) notes.push_back({g->second, std::string("'") + ownDesc(it->first.first, it->first.second) + "' was " + goneWord(b) + " here"});
+                reportN(loc, std::string(write ? "assignment to part of '" : "use of '") + ownDesc(c.obj, c.path) +
+                                 "' after '" + ownDesc(it->first.first, it->first.second) + "' " +
+                                 ((b & kOLive) ? "may have been " : "was ") + goneWord(b) +
+                                 (write ? " (assign the whole value to make it live again)" : ""),
+                        notes);
+            } else if (b & kOUninit) {
+                // Initialized in place: field by field, or through a
+                // reference ('init(&x)', 'x.reset()').
+                it->second = kOLive;
+            }
+        }
+    }
+}
+
+void Walker::ownConsumeKey(int obj, const std::string &path, uint8_t kind, SourceLocation loc) {
+    auto ov = ownVars_.find(obj);
+    for (auto it : ownOverlap(obj, path)) {
+        const std::string &k = it->first.second;
+        if (k != path && underPrefix(path, k)) {
+            // 'x.f' moved/dropped where 'x' itself implements Drop.
+            reportN(loc, "cannot " + std::string(kind == kODrop ? "drop '" : "move '") + ownDesc(obj, path) +
+                             "' out of '" + ownDesc(obj, k) + "': '" +
+                             typeName(ov != ownVars_.end() ? ov->second.ty : nullptr) +
+                             "' implements Drop, so it must be dropped as a whole (borrow the field with '&', or "
+                             "take it out with std::replace)",
+                    {});
+            continue;
+        }
+        uint8_t b = it->second;
+        if (b & kOGone) {
+            std::vector<std::pair<SourceLocation, std::string>> notes;
+            auto g = goneAt_.find(it->first);
+            if (g != goneAt_.end()) notes.push_back({g->second, "'" + ownDesc(obj, k) + "' was " + goneWord(b) + " here"});
+            std::string what = (kind == kODrop && (b & kODrop) && !(b & kOMove)) ? "double drop: '" + ownDesc(obj, k) + "' "
+                               : "use of '" + ownDesc(obj, k) + "' after it ";
+            reportN(loc, what + ((b & kOLive) ? "may have been " : "was ") + goneWord(b) +
+                             (kind == kODrop && (b & kODrop) && !(b & kOMove) ? " already" : ""),
+                    notes);
+        }
+        it->second = kind;
+        goneAt_[it->first] = loc;
+    }
+    if (isDtor_ && obj == selfObj_) {
+        if (path.empty()) dtorFields_.insert("");
+        else {
+            size_t e = path.find_first_of(".[", 1);
+            dtorFields_.insert(path.substr(1, e == std::string::npos ? std::string::npos : e - 1));
+        }
+    }
+}
+
+// Consume what 'cells' name (kind kODrop or kOMove). 'what' is the
+// expression being moved, for messages; null for a drop through a call.
+void Walker::ownConsumeCells(const std::vector<CellRef> &cells, uint8_t kind, SourceLocation loc, const Expr *what) {
+    if (!cur_.live || cells.empty()) return;
+    bool anyTracked = false;
+    for (auto &c : cells) anyTracked = anyTracked || tracked(c.obj);
+    if (anyTracked) {
+        if (cells.size() == 1 && !cells[0].weak) {
+            ownConsumeKey(cells[0].obj, cells[0].path, kind, loc);
+            return;
+        }
+        reportN(loc, "can't tell which value of Drop type this " + std::string(kind == kODrop ? "drops" : "moves") +
+                         " (it may be one of several variables); pick it with if/else",
+                {});
+        return;
+    }
+    for (auto &c : cells) {
+        const ObjInfo &oi = objs_[c.obj];
+        if (oi.kind == OK::Temp) continue;   // part of a temporary: the temporary itself is checked
+        // A destructor takes its fields apart.
+        if (isDtor_ && oi.kind == OK::Ext && oi.ep == "p0" && !c.path.empty()) {
+            size_t e = c.path.find_first_of(".[", 1);
+            dtorFields_.insert(c.path.substr(1, e == std::string::npos ? std::string::npos : e - 1));
+            continue;
+        }
+        bool wholeParam = oi.kind == OK::Ext && c.path.empty() && oi.ep.size() > 1 && oi.ep[0] == 'p' &&
+                          oi.ep.find_first_not_of("0123456789", 1) == std::string::npos;
+        if (kind == kODrop) {
+            if (wholeParam)
+                reportN(loc, "cannot drop a value this function only borrows (it is behind a reference "
+                             "parameter); take the parameter by value, or declare the method 'consume'",
+                        {});
+            continue;   // dropping in place through a reference: the owner's business
+        }
+        std::string desc = what && what->type ? typeName(what->type) : "?";
+        reportN(loc, "cannot move a value of Drop type '" + desc + "' out of memory this function doesn't own "
+                     "(it is reached through a reference, a pointer, a global or a container); borrow it with "
+                     "'&', or take it out with std::replace()",
+                {});
+        return;
+    }
+}
+
+void Walker::ownTakeTemp(const Expr *e) {
+    if (!e) return;
+    while (e->kind == ExprKind::Cast) e = static_cast<const CastExpr *>(e)->operand.get();
+    auto it = std::find(pending_.begin(), pending_.end(), e);
+    if (it != pending_.end()) pending_.erase(it);
+    if (e->kind == ExprKind::Ternary) {
+        auto *t = static_cast<const TernaryExpr *>(e);
+        ownTakeTemp(t->then.get());
+        ownTakeTemp(t->else_.get());
+    }
+}
+
+// 'e' (already evaluated to 'v') is moved (kOMove) or dropped (kODrop).
+void Walker::ownMove(Expr &e, const EV &v, uint8_t kind) {
+    if (!cur_.live || !mustDrop(e.type)) return;
+    if (isPlaceExpr(&e)) {
+        // A subscript with a run-time index on an owned array.
+        for (auto &c : v.cells)
+            if (tracked(c.obj) && hasStar(c.path)) {
+                reportN(e.loc, "ownership of an array element selected at run time can't be tracked; use "
+                               "constant indices, or a Vec, for values of Drop type",
+                        {});
+                return;
+            }
+        ownConsumeCells(v.cells, kind, e.loc, &e);
+        return;
+    }
+    ownTakeTemp(&e);
+}
+
+void Walker::ownAssign(const std::vector<CellRef> &cells, SourceLocation loc) {
+    if (!cur_.live) return;
+    for (auto &c : cells) {
+        if (!tracked(c.obj)) continue;
+        for (auto it : ownOverlap(c.obj, c.path)) {
+            const std::string &k = it->first.second;
+            uint8_t b = it->second;
+            if (k != c.path && underPrefix(c.path, k)) {
+                // A field of a Drop value: the value owns the old contents.
+                if (b & kOLive)
+                    reportN(loc, "assigning to '" + ownDesc(c.obj, c.path) + "' overwrites part of '" +
+                                     ownDesc(c.obj, k) + "', which owns it: drop it first, or swap it out with "
+                                     "std::replace()",
+                            {});
+                it->second = kOLive;
+                continue;
+            }
+            if (b & kOLive) {
+                std::vector<std::pair<SourceLocation, std::string>> notes;
+                auto ov = ownVars_.find(c.obj);
+                if (ov != ownVars_.end()) notes.push_back({ov->second.decl, "'" + ov->second.name + "' declared here"});
+                reportN(loc, std::string("assigning to '") + ownDesc(c.obj, k) + "' overwrites a" +
+                                 ((b & kOGone) ? " possibly" : "") + " live value of Drop type, which would leak; "
+                                 "drop it first (or std::replace() it)",
+                        notes);
+            }
+            it->second = kOLive;
+        }
+    }
+}
+
+void Walker::ownFlush() {
+    for (auto *e : pending_)
+        reportN(e->loc, "this temporary of Drop type '" + typeName(e->type) + "' is never dropped (it leaks): "
+                        "bind it to a variable and drop it, or pass it on",
+                {});
+    pending_.clear();
+}
+
+bool Walker::keptByDefer(int obj) const {
+    auto ov = ownVars_.find(obj);
+    if (ov == ownVars_.end() || !ov->second.vd) return false;
+    for (size_t i = 0; i < defers_.size(); ++i)
+        if (defers_[i].first < curPos_ && deferVars_[i].count(ov->second.vd)) return true;
+    return false;
+}
+
+void Walker::ownExitFrame(const Frame &f, SourceLocation loc, const char *how) {
+    for (int obj : f.objs) {
+        bool keep = keptByDefer(obj);
+        bool haveLive = false, haveMixed = false;
+        std::string live, mixed;
+        for (auto it = cur_.own.lower_bound({obj, ""}); it != cur_.own.end() && it->first.first == obj; ++it) {
+            if (!(it->second & kOLive)) continue;
+            if (it->second & kOGone) { if (!haveMixed) { haveMixed = true; mixed = it->first.second; } }
+            else if (!haveLive) { haveLive = true; live = it->first.second; }
+        }
+        if (!keep && cur_.live && (haveLive || haveMixed)) {
+            auto &ov = ownVars_[obj];
+            bool isMixed = !haveLive;
+            std::string path = isMixed ? mixed : live;
+            std::string name = ownDesc(obj, path);
+            std::string msg = isMixed
+                ? "'" + name + "' is dropped or moved on some paths but not on others: it leaks " + how +
+                      " on the paths where it is still live"
+                : "value of Drop type '" + typeName(ov.ty) + "' leaks " + how + ": '" + name +
+                      "' is never dropped; call " + name + ".drop() or add 'defer " + name + ".drop()'";
+            if (!isMixed && !path.empty())
+                msg = "'" + name + "' (a field of Drop type in '" + ov.name + "') leaks " + how +
+                      ": drop it, or move it somewhere that owns it";
+            reportN(loc, msg, {{ov.decl, "'" + ov.name + "' declared here"}});
+        }
+        if (!keep)
+            for (auto it = cur_.own.lower_bound({obj, ""}); it != cur_.own.end() && it->first.first == obj;)
+                it = cur_.own.erase(it);
+    }
+}
+
+void Walker::ownExitAbove(size_t depth, SourceLocation loc, const char *how) {
+    for (size_t i = frames_.size(); i-- > depth;) ownExitFrame(frames_[i], loc, how);
+}
+
+void Walker::ownExitForGoto(const std::string &label, SourceLocation loc) {
+    auto it = labelScopes_.find(label);
+    if (it == labelScopes_.end()) return;
+    for (size_t i = frames_.size(); i-- > 0;) {
+        if (frames_[i].s && it->second.count(frames_[i].s)) break;
+        ownExitFrame(frames_[i], loc, "when 'goto' leaves its scope");
+    }
+}
+
+std::string Walker::danglingIn(const VSet &v) const {
+    for (auto &e : v) {
+        if (objs_[e.obj].kind != OK::Token) continue;
+        auto t = cur_.tok.find(e.obj);
+        if (t == cur_.tok.end()) continue;
+        for (auto &k : t->second) {
+            auto o = cur_.own.find(k);
+            if (o == cur_.own.end() || (o->second & kOGone)) {
+                uint8_t b = o == cur_.own.end() ? kOGone : o->second;
+                return "'" + ownDesc(k.first, k.second) + "' " +
+                       (o == cur_.own.end() ? std::string("went out of scope") : std::string((b & kOLive) ? "may have been " : "was ") + goneWord(b));
+            }
+        }
+    }
+    return "";
+}
+
+void Walker::ownCheckVal(const Expr &e, const VSet &v) {
+    if (quiet_ || unsafe_ || !cur_.live || cur_.tok.empty()) return;
+    std::string why = danglingIn(v);
+    if (!why.empty())
+        reportN(e.loc, "use of a reference borrowed from " + why.substr(0, why.find('\'', 1) + 1) + " after " +
+                           why + " (it points into that value)",
+                {});
+}
+
+void Walker::ownCheckObjTokens(int obj, SourceLocation loc) {
+    if (quiet_ || unsafe_ || cur_.tok.empty()) return;
+    auto it = cur_.mem.find(obj);
+    if (it == cur_.mem.end()) return;
+    std::string why = danglingIn(it->second.any);
+    for (auto &kv : it->second.vals) if (why.empty()) why = danglingIn(kv.second);
+    if (!why.empty())
+        reportN(loc, "use of '" + ownDesc(obj, "") + "', which borrows from " + why.substr(0, why.find('\'', 1) + 1) +
+                         ", after " + why,
+                {});
+}
+
+int Walker::ownToken(const Expr &site, const std::vector<OwnKey> &owners) {
+    int t = intern("K" + ptrKey(&site), objInfo(OK::Token));
+    cur_.tok[t] = owners;
+    return t;
+}
+
+// At each return (after the defers ran): every owned slot still in scope
+// must be gone.
+void Walker::ownEndFunction() {
+    // Every owned slot left, including ones a 'defer' was expected to drop.
+    Frame all{nullptr, {}};
+    for (auto &kv : cur_.own) {
+        auto ov = ownVars_.find(kv.first.first);
+        if (ov == ownVars_.end() || ov->second.pseudo) continue;
+        if (all.objs.empty() || all.objs.back() != kv.first.first) all.objs.push_back(kv.first.first);
+    }
+    int saved = curPos_;
+    curPos_ = -1;   // no defer is pending any more
+    ownExitFrame(all, endLoc_, "when the function returns");
+    curPos_ = saved;
+}
+
+
+// A match on a value of Drop type that binds a Drop payload moves the
+// subject into the binding (in every arm: an arm without a payload has
+// nothing left to drop). An arm that matches a Drop payload without
+// binding it would leak it.
+bool Walker::ownMatchSubject(Expr *subject, const EV &subj, const std::vector<const std::vector<MatchPattern> *> &arms) {
+    if (!subject || !cur_.live || !mustDrop(subject->type)) return false;
+    bool binds = false;
+    for (auto *pats : arms)
+        for (auto &p : *pats) if (!p.bindName.empty() && p.payloadType && mustDrop(p.payloadType)) binds = true;
+    if (!binds) return false;
+    ownMove(*subject, subj, kOMove);
+    for (auto *pats : arms)
+        for (auto &p : *pats) {
+            if (!p.bindName.empty()) continue;
+            if ((p.payloadType && mustDrop(p.payloadType)) || p.kind == PatternKind::Wildcard)
+                reportN(subject->loc, std::string("this match moves its value of Drop type '") + typeName(subject->type) +
+                                          "', but the arm '" + (p.kind == PatternKind::Wildcard ? std::string("default") : "case " + p.ident) +
+                                          "' doesn't bind what it matches, which leaks it; bind it ('case " +
+                                          (p.ident.empty() ? std::string("some") : p.ident) + "(v)') and drop it",
+                        {});
+        }
+    return true;
+}
+
+void Walker::ownBind(const MatchPattern &p, SourceLocation loc) {
+    if (p.bindName.empty() || !p.payloadType || !mustDrop(p.payloadType) || binds_.empty()) return;
+    ownDeclare(binds_.back().second, p.payloadType, true, loc, p.bindName, nullptr);
+}
+
 // ── Statements ─────────────────────────────────────────────────────────────────
-void Walker::jumpTo(bool isBreak, const std::string &label) {
+void Walker::jumpTo(bool isBreak, const std::string &label, SourceLocation loc) {
     for (auto it = targets_.rbegin(); it != targets_.rend(); ++it) {
         if (!label.empty() ? it->label == label : (isBreak || !it->isSwitch)) {
             if (!isBreak && it->isSwitch) continue;
+            ownFlush();
+            ownExitAbove(it->depth, loc, isBreak ? "when 'break' leaves its scope" : "when 'continue' leaves its scope");
             State &t = isBreak ? it->brk : it->cont;
             t = join(t, cur_);
             cur_.live = false;
@@ -1976,6 +2611,7 @@ void Walker::jumpTo(bool isBreak, const std::string &label) {
 
 void Walker::doReturn(bool isError) {
     if (inDefer_) { cur_.live = false; return; }
+    ownFlush();
     State saved = cur_;
     ++inDefer_;
     for (size_t i = defers_.size(); i-- > 0;) {
@@ -1987,6 +2623,7 @@ void Walker::doReturn(bool isError) {
         curPos_ = savedPos;
     }
     --inDefer_;
+    if (cur_.live) { ownFlush(); ownEndFunction(); }
     exit_ = join(exit_, cur_);
     cur_ = std::move(saved);
     cur_.live = false;
@@ -1994,9 +2631,10 @@ void Walker::doReturn(bool isError) {
 
 void Walker::loopOnce(Expr *cond, Stmt *body, Expr *incr, bool doWhile, const std::string &label,
                       bool alwaysTrue, State &back, State &exitS) {
-    targets_.push_back({label, false, State{}, State{}});
+    targets_.push_back({label, false, State{}, State{}, frames_.size()});
     // The condition and increment are full expressions of their own.
     if (!doWhile) {
+        ownFlush();
         dropTemps(cur_);
         State t, f;
         this->cond(cond, t, f);
@@ -2006,11 +2644,12 @@ void Walker::loopOnce(Expr *cond, Stmt *body, Expr *incr, bool doWhile, const st
         cur_ = std::move(t);
         if (body) stmt(*body);
         cur_ = join(cur_, targets_.back().cont);
-        if (incr) { dropTemps(cur_); rval(*incr); dropTemps(cur_); }
+        if (incr) { ownFlush(); dropTemps(cur_); rval(*incr); ownFlush(); dropTemps(cur_); }
         back = cur_;
     } else {
         if (body) stmt(*body);
         cur_ = join(cur_, targets_.back().cont);
+        ownFlush();
         dropTemps(cur_);
         State t, f;
         this->cond(cond, t, f);
@@ -2019,6 +2658,7 @@ void Walker::loopOnce(Expr *cond, Stmt *body, Expr *incr, bool doWhile, const st
         exitS = alwaysTrue ? State{} : std::move(f);
         back = std::move(t);
     }
+    ownFlush();
     exitS = join(exitS, targets_.back().brk);
     targets_.pop_back();
 }
@@ -2045,14 +2685,26 @@ void Walker::loop(const Stmt &s, Expr *cond, Stmt *body, Expr *incr, bool doWhil
 }
 
 void Walker::stmt(Stmt &s) {
-    if (s.kind != StmtKind::Compound) dropTemps(cur_);
+    if (s.kind != StmtKind::Compound) { ownFlush(); dropTemps(cur_); }
     int savedPos = curPos_;
     auto po = order_.find(&s);
     if (po != order_.end()) curPos_ = po->second;
     switch (s.kind) {
-    case StmtKind::Compound:
-        for (auto &c : static_cast<CompoundStmt &>(s).body) if (c) stmt(*c);
+    case StmtKind::Compound: {
+        auto &cs = static_cast<CompoundStmt &>(s);
+        frames_.push_back({&s, {}});
+        for (auto &c : cs.body) if (c) stmt(*c);
+        if (cur_.live) {
+            ownFlush();
+            int saved = curPos_;
+            auto be = blockEnd_.find(&s);
+            if (be != blockEnd_.end()) curPos_ = be->second + 1;
+            ownExitFrame(frames_.back(), cs.endLoc, "at the end of its scope");
+            curPos_ = saved;
+        }
+        frames_.pop_back();
         break;
+    }
     case StmtKind::Expr: {
         auto &es = static_cast<ExprStmt &>(s);
         if (es.expr && cur_.live) rval(*es.expr);
@@ -2092,8 +2744,11 @@ void Walker::stmt(Stmt &s) {
     }
     case StmtKind::For: {
         auto &fs = static_cast<ForStmt &>(s);
+        frames_.push_back({&s, {}});
         if (fs.init) stmt(*fs.init);
         loop(s, fs.cond.get(), fs.body.get(), fs.incr.get(), false, fs.label);
+        if (cur_.live) ownExitFrame(frames_.back(), fs.body ? fs.body->loc : s.loc, "after its loop");
+        frames_.pop_back();
         break;
     }
     case StmtKind::Return: {
@@ -2105,23 +2760,26 @@ void Walker::stmt(Stmt &s) {
                 writeInit({{retObj_, ""}}, *rs.value, fn_.returnType);
             } else {
                 EV v = rval(*rs.value);
+                ownMove(*rs.value, v, kOMove);
                 clearSubtree(retObj_, "");
                 if (v.agg) copyAgg({{retObj_, ""}}, v.cells);
                 else if (!v.v.empty()) cur_.mem[retObj_].vals[""] = v.v;
             }
         }
-        if (cur_.live) doReturn(false);
+        if (cur_.live) { endLoc_ = s.loc; doReturn(false); }
         break;
     }
     case StmtKind::Break:
-        if (cur_.live) jumpTo(true, static_cast<BreakStmt &>(s).label);
+        if (cur_.live) jumpTo(true, static_cast<BreakStmt &>(s).label, s.loc);
         break;
     case StmtKind::Continue:
-        if (cur_.live) jumpTo(false, static_cast<ContinueStmt &>(s).label);
+        if (cur_.live) jumpTo(false, static_cast<ContinueStmt &>(s).label, s.loc);
         break;
     case StmtKind::Goto: {
         auto &gs = static_cast<GotoStmt &>(s);
         if (cur_.live) {
+            ownFlush();
+            ownExitForGoto(gs.label, gs.loc);
             labels_[gs.label] = join(labels_[gs.label], cur_);
             cur_.live = false;
         }
@@ -2141,6 +2799,7 @@ void Walker::stmt(Stmt &s) {
         if (objs_[o].kind == OK::Global) break;   // a static local's initializer is a constant
         clearSubtree(o, "");
         if (vs.init) writeInit({{o, ""}}, *vs.init, vs.resolvedType);
+        if (cur_.live) ownDeclare(o, vs.resolvedType, vs.init != nullptr, vs.loc, vs.name, vs.decl);
         break;
     }
     case StmtKind::MultiVarDecl:
@@ -2156,19 +2815,27 @@ void Walker::stmt(Stmt &s) {
     case StmtKind::Match: {
         auto &ms = static_cast<MatchStmt &>(s);
         EV subj = cur_.live && ms.subject ? rval(*ms.subject) : EV{};
+        std::vector<const std::vector<MatchPattern> *> armPats;
+        for (auto &arm : ms.arms) armPats.push_back(&arm.patterns);
+        bool moving = ownMatchSubject(ms.subject.get(), subj, armPats);
+        ownFlush();
         State base = cur_;
         State acc;
         bool exhaustive = false, sawNone = false, sawSome = false;
         for (auto &arm : ms.arms) {
             cur_ = base;
             size_t nb = binds_.size();
+            frames_.push_back({nullptr, {}});
             for (auto &p : arm.patterns) {
                 if (p.kind == PatternKind::Wildcard && p.ident.empty()) exhaustive = true;
                 if (p.resolvedTag == 0) sawNone = true;
                 if (p.resolvedTag == 1) sawSome = true;
                 bindPattern(p, subj, ms.subject ? ms.subject->type : nullptr);
+                if (moving) ownBind(p, ms.subject->loc);
             }
             if (arm.body) stmt(*arm.body);
+            if (cur_.live) ownExitFrame(frames_.back(), arm.body ? arm.body->loc : s.loc, "at the end of its match arm");
+            frames_.pop_back();
             binds_.resize(nb);
             acc = join(acc, cur_);
         }
@@ -2184,7 +2851,8 @@ void Walker::stmt(Stmt &s) {
         if (cur_.live && sw.controlling) rval(*sw.controlling);
         State dispatch = cur_;
         bool hasDefault = false;
-        targets_.push_back({"", true, State{}, State{}});
+        targets_.push_back({"", true, State{}, State{}, frames_.size()});
+        frames_.push_back({&s, {}});
         State fall;
         for (auto &c : sw.cases) {
             if (c.isDefault) hasDefault = true;
@@ -2192,6 +2860,10 @@ void Walker::stmt(Stmt &s) {
             for (auto &b : c.body) if (b) stmt(*b);
             fall = cur_;
         }
+        cur_ = fall;
+        if (cur_.live) ownExitFrame(frames_.back(), s.loc, "at the end of the switch");
+        fall = cur_;
+        frames_.pop_back();
         State out = join(fall, targets_.back().brk);
         targets_.pop_back();
         cur_ = hasDefault ? out : join(out, dispatch);
@@ -2219,12 +2891,25 @@ void Walker::walkBody() {
     exit_ = State{};
     targets_.clear();
     binds_.clear();
+    frames_.clear();
+    pending_.clear();
     curPos_ = 0;
+    // The function's own frame: by-value parameters of Drop type are owned
+    // here; a destructor's *self is tracked for use after it was dropped.
+    frames_.push_back({fn_.body.get(), {}});
+    for (size_t i = 0; i < fn_.paramVars.size() && i < fn_.params.size(); ++i) {
+        const VarDecl *pv = fn_.paramVars[i];
+        if (pv && mustDrop(fn_.params[i].type))
+            ownDeclare(varObj(pv), fn_.params[i].type, true, fn_.params[i].loc, fn_.params[i].name, pv);
+    }
+    if (isDtor_ && selfObj_ >= 0) cur_.own[{selfObj_, ""}] = kOLive;
     stmt(*fn_.body);
     if (cur_.live) {
         curPos_ = 1 << 30;
+        endLoc_ = fn_.body->endLoc;
         doReturn(false);
     }
+    frames_.clear();
 }
 
 void Walker::run() {
@@ -2240,6 +2925,12 @@ void Walker::run() {
         if (s.kind == StmtKind::Defer) defers_.push_back({n, static_cast<DeferStmt *>(&s)});
         if (s.kind == StmtKind::Label) hasLabels = true;
     }, [](Expr &) {});
+    for (auto &kv : order_) {
+        if (kv.first->kind != StmtKind::Compound) continue;
+        int mx = kv.second;
+        visitStmt(const_cast<Stmt *>(kv.first), [&](Stmt &x) { auto o = order_.find(&x); if (o != order_.end()) mx = std::max(mx, o->second); }, [](Expr &) {});
+        blockEnd_[kv.first] = mx;
+    }
 
     // Each allocation site's outermost enclosing loop (see foldIteration).
     std::function<void(Stmt *, const Stmt *)> mapLoops = [&](Stmt *st, const Stmt *outer) {
@@ -2264,6 +2955,51 @@ void Walker::run() {
     };
     mapLoops(fn_.body.get(), nullptr);
 
+    // Ownership: what each defer names, each label's enclosing blocks, and
+    // whether this is a destructor (drop() or a 'consume' method).
+    for (auto &d : defers_) {
+        std::set<const VarDecl *> vars;
+        visitStmt(d.second->body.get(), [](Stmt &) {}, [&](Expr &e) {
+            if (e.kind == ExprKind::Ident && static_cast<IdentExpr &>(e).resolved)
+                vars.insert(static_cast<IdentExpr &>(e).resolved);
+        });
+        deferVars_.push_back(std::move(vars));
+    }
+    {
+        std::vector<const Stmt *> stack;
+        std::function<void(Stmt *)> scan = [&](Stmt *st) {
+            if (!st) return;
+            bool block = st->kind == StmtKind::Compound || st->kind == StmtKind::For || st->kind == StmtKind::Switch;
+            if (block) stack.push_back(st);
+            if (st->kind == StmtKind::Label)
+                labelScopes_[static_cast<LabelStmt *>(st)->label] = std::set<const Stmt *>(stack.begin(), stack.end());
+            switch (st->kind) {
+            case StmtKind::Compound: for (auto &c : static_cast<CompoundStmt *>(st)->body) scan(c.get()); break;
+            case StmtKind::If: scan(static_cast<IfStmt *>(st)->then.get()); scan(static_cast<IfStmt *>(st)->else_.get()); break;
+            case StmtKind::IfConst: scan(static_cast<IfConstStmt *>(st)->then.get()); scan(static_cast<IfConstStmt *>(st)->else_.get()); break;
+            case StmtKind::While: case StmtKind::DoWhile: scan(static_cast<WhileStmt *>(st)->body.get()); break;
+            case StmtKind::For: scan(static_cast<ForStmt *>(st)->init.get()); scan(static_cast<ForStmt *>(st)->body.get()); break;
+            case StmtKind::Label: scan(static_cast<LabelStmt *>(st)->body.get()); break;
+            case StmtKind::Unsafe: scan(static_cast<UnsafeStmt *>(st)->body.get()); break;
+            case StmtKind::Match: for (auto &a : static_cast<MatchStmt *>(st)->arms) scan(a.body.get()); break;
+            case StmtKind::Switch: for (auto &c : static_cast<SwitchStmt *>(st)->cases) for (auto &b : c.body) scan(b.get()); break;
+            default: break;
+            }
+            if (block) stack.pop_back();
+        };
+        scan(fn_.body.get());
+    }
+    isDtor_ = drv_.sema.isConsumeMethod(&fn_) && !fn_.params.empty();
+    if (isDtor_) {
+        selfObj_ = extObj("p0");
+        OwnVar &ov = ownVars_[selfObj_];
+        const ReferenceType *rt = refOf(fn_.params[0].type);
+        ov.ty = rt ? rt->base : nullptr;
+        ov.name = "self";
+        ov.decl = fn_.loc;
+        ov.pseudo = true;
+    }
+
     if (hasLabels) {
         ++quiet_;
         for (int i = 0; i < kMaxIters; ++i) {
@@ -2274,6 +3010,21 @@ void Walker::run() {
         --quiet_;
     }
     walkBody();
+    // A destructor must take apart every field of Drop type it owns (on
+    // some path: which fields still hold a value can depend on run-time
+    // state, like a coroutine's resume point).
+    if (isDtor_ && !dtorFields_.count("")) {
+        const StructType *st = structOf(fn_.params[0].type);
+        if (st)
+            for (auto &f : st->fields)
+                if (mustDrop(f.type) && !dtorFields_.count(f.name)) {
+                    std::string owner = st->name, m = fn_.name.size() > owner.size() + 1 ? fn_.name.substr(owner.size() + 1) : fn_.name;
+                    reportN(fn_.loc, "'" + owner + "::" + m + "()' never drops field '" + f.name + "' (of Drop type '" +
+                                         typeName(f.type) + "'): a destructor must drop or move every field it owns "
+                                         "(self." + f.name + ".drop())",
+                            {});
+                }
+    }
     buildSummary();
 }
 
@@ -2473,13 +3224,16 @@ void FlowDriver::run() {
     }
     std::set<std::tuple<const char *, unsigned, unsigned, std::string>> seen;
     for (auto &d : all)
-        if (seen.insert({d.loc.file, d.loc.line, d.loc.col, d.msg}).second) diag_.error(d.loc, d.msg);
+        if (seen.insert({d.loc.file, d.loc.line, d.loc.col, d.msg}).second) {
+            diag_.error(d.loc, d.msg);
+            for (auto &n : d.notes) diag_.note(n.first, n.second);
+        }
 }
 
 } // namespace
 
 void Sema::checkMemoryFlow() {
-    FlowDriver(diag_, checkedFns_).run();
+    FlowDriver(diag_, checkedFns_, *this).run();
 }
 
 } // namespace safec

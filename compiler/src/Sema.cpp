@@ -3772,6 +3772,20 @@ TypePtr Sema::checkCall(CallExpr &e) {
             return e.type;
         }
         // ── Channel built-ins ───────────────────────────────────────────────
+        // ── forget(x): give up a value of Drop type without dropping it ──────
+        // The ownership checker treats it as a move into nowhere; it
+        // compiles to nothing. Leaking can break what a value's drop()
+        // guarantees (a lock released, a scoped thread joined), so it is an
+        // explicit, auditable 'unsafe' operation.
+        if (ident.name == "forget" && !lookup("forget")) {
+            if (e.args.size() != 1)
+                diag_.error(e.loc, "forget expects 1 argument (the value to leak)");
+            for (auto &a : e.args) checkExpr(*a);
+            if (!inUnsafeScope())
+                diag_.error(e.loc, "forget() leaks its argument without dropping it: write it inside 'unsafe { }'");
+            e.type = makeVoid();
+            return e.type;
+        }
         if (ident.name == "chan_create") {
             // chan_create(capacity) → void* (opaque channel handle)
             if (e.args.size() != 1)
