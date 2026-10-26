@@ -1,0 +1,9 @@
+[package]
+name        = "safec-doc-client"
+version     = "0.1.0"
+author      = "SafeC Contributors"
+description = "In-browser search and theme switching for safec-doc output (wasm32; build with: safeguard build --release --target wasm32)"
+license     = "MIT"
+
+[build]
+edition = "2026"

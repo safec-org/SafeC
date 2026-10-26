@@ -678,6 +678,10 @@ struct Decl {
     DeclKind       kind;
     SourceLocation loc;
     std::string    name;
+    // Enclosing 'namespace X { ... }' of any declaration kind ("a::b" when
+    // nested), for tooling (--emit-doc-json); empty = none. Functions and
+    // globals also carry it as their own 'namespaceName', which Sema uses.
+    std::string    docNamespace;
     explicit Decl(DeclKind k, std::string n, SourceLocation l)
         : kind(k), loc(l), name(std::move(n)) {}
     virtual ~Decl() = default;
@@ -787,6 +791,7 @@ struct MethodDecl {
     std::shared_ptr<Expr>    dropCond;
     std::vector<GenericParam> genericParams;    // 'generic<T> void m(...);': the method's own
     SourceLocation           loc;
+    SourceLocation           startLoc;  // the declaration's first token (tooling)
 };
 
 // ── Struct declaration ────────────────────────────────────────────────────────
@@ -809,6 +814,7 @@ struct StructDecl : Decl {
 // ── Enum declaration ──────────────────────────────────────────────────────────
 struct EnumDecl : Decl {
     std::vector<std::pair<std::string, std::optional<int64_t>>> enumerators;
+    std::vector<SourceLocation> enumeratorLocs;   // parallel to 'enumerators' (tooling)
     std::shared_ptr<EnumType> type;   // filled by sema
     TypePtr underlyingType;            // e.g. uint8, int16; nullptr = default (i32)
 

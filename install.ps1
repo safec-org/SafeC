@@ -251,6 +251,7 @@ Write-Host "  SAFEC_HOME  $Prefix"
 Write-Host "  safec       $binDir\safec.exe"
 Write-Host "  safeguard   $binDir\safeguard.exe"
 Write-Host "  sc-lsp      $binDir\sc-lsp.exe"
+if (Test-Path (Join-Path $binDir "safec-doc.exe")) { Write-Host "  safec-doc   $binDir\safec-doc.exe (run by 'safeguard doc')" }
 Write-Host ""
 Write-Host "Open a new terminal, then try:"
 Write-Host "  safeguard new hello; cd hello; safeguard run"
