@@ -154,6 +154,10 @@ where noted.
   targets are `fn void([]const unsigned char)`.
 - Compiler: casting a slice to a pointer (`(T*)s`) is now an error (it used
   to reach LLVM and fail verification); use `s.ptr`.
+- scc (`selfhost/`) follows: it compiles the slice forms above (`[]T`
+  returns and fields, `[]const T`, `?[]T`, `?fn`, byte-slice conversions,
+  the slice-to-pointer cast error), and its bundled std (`src/vfs.sc`) is
+  regenerated from the slice-based headers.
 
 ### Added — self-hosted compiler (selfhost/)
 
