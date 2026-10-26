@@ -488,4 +488,5 @@ void sema_program() {
         i = i + 1;
     }
     drain_queue();
+    memflow_program();
 }

@@ -572,6 +572,21 @@ int check_call(int e) {
         }
         int bi = builtin_id(sid);
         if (bi != 0 && lookup_local(sid) < 0 && g_gkind[sid] == 0) { return check_builtin(e, bi); }
+        if (lookup_local(sid) < 0 && g_gkind[sid] == 0 && g_nsfb_kind[sid] == 0) {
+            if (str_eq_lit(sid, "join") == 1) {
+                int i = 0;
+                while (i < g_node[e].nlist) { check_expr(g_list[g_node[e].list + i]); i = i + 1; }
+                g_node[e].c = CK_BUILTIN;
+                g_node[e].op = BI_JOIN;
+                return TY_VOID;
+            }
+            if (str_eq_lit(sid, "spawn_scoped") == 1) {
+                if (g_node[e].nlist != 2) { err_at(e, "spawn_scoped expects 2 arguments (function, arg)"); return TY_ERROR; }
+                g_node[e].c = CK_BUILTIN;
+                g_node[e].op = BI_SPAWN;
+                return check_spawn(e, g_list[g_node[e].list], g_list[g_node[e].list + 1]);
+            }
+        }
     }
     if (ck == E_MEMBER && (g_node[callee].flags & NF_ARROW) == 0) {
         int fsid = g_node[callee].sid;

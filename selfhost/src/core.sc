@@ -16,8 +16,11 @@ void scc_init() {
 }
 
 // preprocess the runtime prelude, then the main file
+int g_rt_file = -1;
+
 void scc_preprocess(int main_file) {
     int rt = vfs_load(S_runtime);
+    g_rt_file = rt;
     if (rt != 0) { pp_run(rt); }
     pp_run(main_file);
     pp_finish();

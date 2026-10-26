@@ -174,6 +174,7 @@
 #define K_SPAWN    167
 #define K_ATTRIBUTE 168
 #define K_FIELDCOUNT 169
+#define K_FN_EVAL  171
 #define K_LAST     170
 
 // token flags
@@ -229,6 +230,8 @@ struct Tok {
 #define E_FORCE     31   // a!  (force unwrap)
 #define E_COMMA     32   // a, b
 #define E_TYPEARG   33   // placeholder
+#define E_SPAWN     34   // spawn(a, b): a = function, b = argument
+#define E_FNEVAL    35   // fn_eval(a, b): a = object, b = function name; sema: d = method
 // statements
 #define S_BLOCK     40   // list
 #define S_EXPR      41   // a
@@ -550,6 +553,8 @@ extern int S_FILE;
 extern int S_LINE;
 extern int S_runtime;
 extern int S_wild;
+
+extern int g_rt_file;
 
 // ── util.sc ──────────────────────────────────────────────────────────────────
 void util_init();

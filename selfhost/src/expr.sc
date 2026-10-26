@@ -1156,6 +1156,79 @@ int check_try(int e) {
     return g_ty[t].base;
 }
 
+// ── spawn / fn_eval ──────────────────────────────────────────────────────────
+int check_spawn(int e, int fnx, int arg) {
+    int ft = check_expr(fnx);
+    if (is_err(ft) == 0) {
+        int valid = 0;
+        if (g_ty[ft].kind == TY_REF && g_ty[ft].n == R_STATIC && g_ty[g_ty[ft].base].kind == TY_FN) { valid = 1; }
+        if (valid == 0) {
+            msg_reset();
+            msg_lit("spawn requires &static function reference, got '");
+            msg_type(ft);
+            msg_lit("'");
+            error_node(fnx);
+        }
+    }
+    int at = check_expr(arg);
+    if (g_ty[at].kind == TY_REF && (g_ty[at].flags & TYF_CONST) == 0 && g_ty[at].n != R_STATIC) {
+        err_at(arg, "spawn argument must not pass mutable non-static reference (region isolation violation)");
+    }
+    return TY_I64;
+}
+
+int check_fn_eval(int e) {
+    int ot = check_expr(g_node[e].a);
+    int fx = g_node[e].b;
+    if (g_node[fx].kind != E_IDENT) { err_at(e, "fn_eval: second argument must directly name a declared function"); return TY_ERROR; }
+    check_expr(fx);
+    if (g_node[fx].c != SYM_FUNC) {
+        msg_reset(); msg_lit("fn_eval: '"); msg_str(g_node[fx].sid); msg_lit("' does not name a function"); error_node(e);
+        return TY_ERROR;
+    }
+    int shape = g_node[fx].d;
+    if (g_func[shape].owner != 0) {
+        msg_reset(); msg_lit("fn_eval: '"); msg_str(g_node[fx].sid);
+        msg_lit("' must be a plain function, not a method — it's used only as a name+signature key, never called");
+        error_node(e);
+        return TY_ERROR;
+    }
+    int st = ot;
+    if (g_ty[st].kind == TY_PTR || g_ty[st].kind == TY_REF) { st = g_ty[st].base; }
+    int sd = struct_of(st);
+    if (sd == 0) {
+        msg_reset(); msg_lit("fn_eval: first argument must be a struct (or a pointer/reference to one), got '");
+        msg_type(ot); msg_lit("'"); error_node(e);
+        return TY_ERROR;
+    }
+    int name = g_func[shape].origsid;
+    int m = instance_method(sd, name);
+    if (m == 0) {
+        msg_reset(); msg_lit("fn_eval: type '"); msg_str(g_sdef[sd].sid); msg_lit("' has no method named '");
+        msg_str(name); msg_lit("'"); error_node(e);
+        return TY_ERROR;
+    }
+    int mt = g_func[m].ty;
+    int sht = g_func[shape].ty;
+    int ma = g_ty[mt].nlist - 1;
+    if (ma != g_ty[sht].nlist) {
+        msg_reset(); msg_lit("fn_eval: '"); msg_str(g_sdef[sd].sid); msg_lit("::"); msg_str(name);
+        msg_lit("' takes "); msg_int((long)ma); msg_lit(" parameter(s), but '"); msg_str(g_node[fx].sid);
+        msg_lit("' declares "); msg_int((long)g_ty[sht].nlist); error_node(e);
+        return TY_ERROR;
+    }
+    if (ty_equal(g_ty[mt].base, g_ty[sht].base) == 0) {
+        msg_reset(); msg_lit("fn_eval: '"); msg_str(g_sdef[sd].sid); msg_lit("::"); msg_str(name);
+        msg_lit("' returns '"); msg_type(g_ty[mt].base); msg_lit("', but '"); msg_str(g_node[fx].sid);
+        msg_lit("' declares '"); msg_type(g_ty[sht].base); msg_lit("'"); error_node(e);
+        return TY_ERROR;
+    }
+    g_node[e].d = m;
+    g_func[m].used = 1;
+    queue_func(m);
+    return func_value_type(m);
+}
+
 // ── dispatch ─────────────────────────────────────────────────────────────────
 int check_expr(int e) {
     if (e == 0) { return TY_ERROR; }
@@ -1205,13 +1278,16 @@ int check_expr(int e) {
     else if (k == E_MEMBER) { t = check_member(e); }
     else if (k == E_CAST) { t = check_cast(e); }
     else if (k == E_SIZEOF_T || k == E_ALIGNOF) {
-        int st = resolve_type(g_node[e].c);
+        int raw = g_node[e].c;
+        int st = 0;
         // 'sizeof(x)' where x names a variable parses as a type
-        if (k == E_SIZEOF_T && g_ty[st].kind == TY_NAMED && g_ty[st].nlist == 0 && g_tyreg[g_ty[st].sid] == 0) {
+        if (k == E_SIZEOF_T && g_ty[raw].kind == TY_NAMED && g_ty[raw].nlist == 0 && g_tyreg[g_ty[raw].sid] == 0 &&
+            env_lookup(g_ty[raw].sid) == 0 && (lookup_local(g_ty[raw].sid) >= 0 || g_gkind[g_ty[raw].sid] == SYM_GLOBAL)) {
             int id = new_node(E_IDENT, g_node[e].tok);
-            g_node[id].sid = g_ty[st].sid;
-            int it = check_expr(id);
-            if (is_err(it) == 0) { st = it; }
+            g_node[id].sid = g_ty[raw].sid;
+            st = check_expr(id);
+        } else {
+            st = resolve_type(raw);
         }
         g_node[e].c = st;
         t = TY_U64;
@@ -1228,5 +1304,7 @@ int check_expr(int e) {
         t = check_expr(g_node[e].b);
     }
     else if (k == E_DESIG) { t = check_expr(g_node[e].a); }
+    else if (k == E_SPAWN) { t = check_spawn(e, g_node[e].a, g_node[e].b); }
+    else if (k == E_FNEVAL) { t = check_fn_eval(e); }
     return set_ty(e, t);
 }

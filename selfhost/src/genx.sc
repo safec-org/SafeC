@@ -728,6 +728,13 @@ void gen_builtin(int e) {
     if (bi == BI_MEMGROW) { gen_value_as(a0, TY_I32); emit(OP_MEMORY_GROW); emit(0); g_pw = 32; return; }
     if (bi == BI_HEAPBASE) { emit(OP_GLOBAL_GET); emitu(2L); emit(OP_I64_EXTEND_I32_U); g_pw = 64; return; }
     if (bi == BI_TRAP || bi == BI_UNREACH) { emit(OP_UNREACHABLE); g_pw = 0; return; }
+    if (bi == BI_JOIN) {
+        int i = 0;
+        while (i < g_node[e].nlist) { gen_expr_discard(g_list[g_node[e].list + i]); i = i + 1; }
+        g_pw = 0;
+        return;
+    }
+    if (bi == BI_SPAWN) { gen_spawn(g_list[g_node[e].list], g_list[g_node[e].list + 1]); return; }
     if (bi == BI_F64BITS) { gen_value_as(a0, TY_F64); emit(OP_I64_REINTERPRET_F64); g_pw = 64; return; }
     if (bi == BI_F64FROM) { gen_value_as(a0, TY_I64); emit(OP_F64_REINTERPRET_I64); g_pw = 0; return; }
     if (bi == BI_CLZ || bi == BI_CTZ || bi == BI_POPCNT) {
@@ -759,6 +766,8 @@ void gen_builtin(int e) {
     else if (bi == BI_SQRT) { emit(base + 6); }
     g_pw = 0;
 }
+
+void gen_spawn(int fnx, int arg);
 
 void gen_call(int e) {
     int ck = g_node[e].c;
@@ -860,6 +869,27 @@ void gen_call(int e) {
     }
     if (is_agg(ret) == 1) { emit_frame_addr(sret_off); }
     g_pw = pw_of(ret);
+}
+
+// spawn(fn, arg): the playground has no threads — run fn(arg) to completion
+// now; the handle is a counter and join() is a no-op
+int g_spawn_count = 0;
+
+void gen_spawn(int fnx, int arg) {
+    int ft = fn_type_of(g_node[fnx].ty);
+    int ret = g_ty[ft].base;
+    int sret_off = 0;
+    if (is_agg(ret) == 1) { sret_off = alloc_tmp(ret); emit_frame_addr(sret_off); }
+    if (g_ty[ft].nlist > 0) { gen_arg(arg, g_tyl[g_ty[ft].list]); }
+    else { gen_expr_discard(arg); }
+    gen_expr(fnx);
+    emit(OP_CALL_INDIRECT);
+    emitu((long)sig_of_fn_type(ft));
+    emit(0);
+    if (vt_of(ret) != 0 && is_agg(ret) == 0) { emit(OP_DROP); }
+    g_spawn_count = g_spawn_count + 1;
+    emit_i64((long)g_spawn_count);
+    g_pw = 64;
 }
 
 // ── match ────────────────────────────────────────────────────────────────────
@@ -1357,6 +1387,8 @@ void gen_expr(int e) {
         gen_expr(g_node[e].b);
         return;
     }
+    if (k == E_SPAWN) { gen_spawn(g_node[e].a, g_node[e].b); return; }
+    if (k == E_FNEVAL) { emit_i32(table_index(g_node[e].d)); g_pw = 32; return; }
     emit_zero(t);
 }
 
@@ -1375,7 +1407,7 @@ void gen_expr_discard(int e) {
         int ck = g_node[e].c;
         int ret = t;
         if (ck == CK_FUNC || ck == CK_METHOD) { ret = g_ty[g_func[g_node[e].d].ty].base; }
-        if (ck == CK_BUILTIN && (g_node[e].op == BI_TRAP || g_node[e].op == BI_UNREACH)) { return; }
+        if (ck == CK_BUILTIN && (g_node[e].op == BI_TRAP || g_node[e].op == BI_UNREACH || g_node[e].op == BI_JOIN)) { return; }
         if (vt_of(ret) != 0 || is_agg(ret) == 1) { emit(OP_DROP); }
         return;
     }

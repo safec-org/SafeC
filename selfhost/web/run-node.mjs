@@ -31,7 +31,23 @@ try {
   const { instance } = await WebAssembly.instantiate(bytes, imports);
   memory = instance.exports.memory;
   const main = instance.exports.main;
-  code = main.length >= 2 ? main(0, 0) : main();
+  if (main.length >= 2) {
+    // argv: pointer table followed by the strings, in the runtime's buffer
+    const args = [process.env.SCC_ARGV0 || './prog', ...process.argv.slice(3)];
+    const base = instance.exports.__rt_argv ? instance.exports.__rt_argv() : 0;
+    const view = new DataView(memory.buffer);
+    let at = base + 4 * (args.length + 1);
+    args.forEach((a, i) => {
+      const b = new TextEncoder().encode(a + '\0');
+      new Uint8Array(memory.buffer, at, b.length).set(b);
+      view.setInt32(base + 4 * i, at, true);
+      at += b.length;
+    });
+    view.setInt32(base + 4 * args.length, 0, true);
+    code = main(args.length, base);
+  } else {
+    code = main();
+  }
 } catch (e) {
   if (e instanceof Exit) code = e.code;
   else if (e instanceof WebAssembly.RuntimeError) {

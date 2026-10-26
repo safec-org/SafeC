@@ -35,6 +35,8 @@
 #define BI_F64FROM  14   // __builtin_f64_from_bits(long) → double
 #define BI_NEAREST  15
 #define BI_UNREACH  16
+#define BI_JOIN     17
+#define BI_SPAWN    18
 
 // E_MEMBER kinds (node.d)
 #define MK_FIELD   1   // c = field index

@@ -355,7 +355,12 @@ int resolve_type(int t) {
             if (e != 0) { return e; }
             int r = g_tyreg[sid];
             if (r != 0) { return r; }
-            return t;   // unknown: stays a named type (the C++ compiler reports these at use)
+            if (g_gtmpl[sid] != 0) { return t; }
+            // an undeclared name is an (empty) struct, as in the C++ compiler:
+            // errors surface where its fields are used
+            int sd = new_sdef(SD_STRUCT, sid, 0);
+            g_tyreg[sid] = g_sdef[sd].ty;
+            return g_sdef[sd].ty;
         }
         // instantiation of a generic struct
         int args[16];

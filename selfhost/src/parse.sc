@@ -219,7 +219,7 @@ void kw_init() {
     kw("typeof", K_TYPEOF); kw("noreturn", K_NORETURN); kw("_Noreturn", K_NORETURN);
     kw("pure", K_PURE); kw("newtype", K_NEWTYPE); kw("trait", K_TRAIT);
     kw("namespace", K_NAMESPACE); kw("constinit", K_CONSTINIT); kw("asm", K_ASM);
-    kw("spawn", K_SPAWN); kw("fieldcount", K_FIELDCOUNT);
+    kw("spawn", K_SPAWN); kw("fieldcount", K_FIELDCOUNT); kw("fn_eval", K_FN_EVAL);
 }
 
 // ── attributes ───────────────────────────────────────────────────────────────
@@ -777,10 +777,18 @@ int parse_primary() {
         expect_msg(T_RPAREN, "expected ')' for arena operation");
         return n;
     }
-    if (k == K_SPAWN) {
-        perr("'spawn' is not supported by scc (no threads in the playground)");
+    if (k == K_SPAWN || k == K_FN_EVAL) {
         advance();
-        return new_node(E_INT, t);
+        int n = new_node(E_SPAWN, t);
+        if (k == K_FN_EVAL) { g_node[n].kind = E_FNEVAL; expect_msg(T_LPAREN, "expected '(' after 'fn_eval'"); }
+        else { expect_msg(T_LPAREN, "expected '(' after 'spawn'"); }
+        g_node[n].a = parse_assign();
+        if (k == K_FN_EVAL) { expect_msg(T_COMMA, "expected ',' after fn_eval's object argument"); }
+        else { expect_msg(T_COMMA, "expected ',' separating spawn arguments"); }
+        g_node[n].b = parse_assign();
+        if (k == K_FN_EVAL) { expect_msg(T_RPAREN, "expected ')' closing 'fn_eval'"); }
+        else { expect_msg(T_RPAREN, "expected ')' closing spawn"); }
+        return n;
     }
     if (g_silent > 0) { g_nerrors = g_nerrors + 1; }
     else {
