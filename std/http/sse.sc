@@ -196,8 +196,14 @@ void SseParser::drop() {
 // ── Client ────────────────────────────────────────────────────────────────
 
 struct SseClient SseClient::connect(const &char url, const ?&char last_event_id, int timeout_ms, ?&int ok) {
+    return SseClient::connect_tls(url, last_event_id, null, timeout_ms, ok);
+}
+
+struct SseClient SseClient::connect_tls(const &char url, const ?&char last_event_id, const ?&TlsConfig cfg,
+                                        int timeout_ms, ?&int ok) {
     struct SseClient c;
     c.fd = -1;
+    c.tls = null;
     c.chunked = 0;
     c.chunk_left = 0UL;
     c.eof = 0;
@@ -206,15 +212,16 @@ struct SseClient SseClient::connect(const &char url, const ?&char last_event_id,
     int good = 1;
     int pok = 0;
     struct Url u = Url::parse(url, &pok);
-    if (!pok || !u.scheme.eq_cstr("http") || u.host.is_empty()) { good = 0; }
-    unsigned int addr = 0U;
-    if (good && !http_resolve_host(u.host.as_ptr(), &addr)) { good = 0; }
+    int tls = pok && u.scheme.eq_cstr("https");
+    if (!pok || (!tls && !u.scheme.eq_cstr("http")) || u.host.is_empty()) { good = 0; }
     int fd = -1;
+    struct TcpStream s = TcpStream::from_fd(-1);
     if (good) {
-        unsafe { fd = tcp_connect_timeout(addr, (unsigned short)u.port_or_default(), timeout_ms); }
+        s = http_open_stream(u.host.as_ptr(), (unsigned short)u.port_or_default(), tls, cfg,
+                             timeout_ms, timeout_ms, null);
+        fd = s.fd;
         if (fd < 0) { good = 0; }
     }
-    if (good && timeout_ms > 0) { sock_set_io_timeout(fd, timeout_ms); }
     if (good) {
         struct String req = String::from("GET ");
         struct String target = u.request_target();
@@ -230,13 +237,11 @@ struct SseClient SseClient::connect(const &char url, const ?&char last_event_id,
         req.push("\r\n");
         target.free();
         hp.free();
-        struct TcpStream s = TcpStream::from_fd(fd);
         unsafe { if (!write_all(&s, (const &unsigned char)req.as_ptr(), req.length())) { good = 0; } }
         req.free();
     }
     if (good) {
         // The response head; what follows it goes to the event decoder.
-        struct TcpStream s = TcpStream::from_fd(fd);
         struct String head = String::new();
         long long end = -1LL;
         unsigned char buf[4096];
@@ -266,8 +271,8 @@ struct SseClient SseClient::connect(const &char url, const ?&char last_event_id,
     if (good) {
         if (timeout_ms > 0) { sock_set_io_timeout(fd, 0); }
         c.fd = fd;
+        c.tls = s.tls;
     } else if (fd >= 0) {
-        struct TcpStream s = TcpStream::from_fd(fd);
         s.close();
     }
     u.free();
@@ -324,6 +329,7 @@ int SseClient::next(&SseEvent out) {
         if (self.eof) { return 0; }
         unsigned char buf[4096];
         struct TcpStream s = TcpStream::from_fd(self.fd);
+        s.tls = self.tls;
         long long n = s.read(&buf[0], 4096UL);
         if (n <= 0LL) {
             self.eof = 1;
@@ -341,8 +347,10 @@ void SseClient::close() { self.drop(); }
 void SseClient::drop() {
     if (self.fd >= 0) {
         struct TcpStream s = TcpStream::from_fd(self.fd);
+        s.tls = self.tls;
         s.close();
         self.fd = -1;
+        self.tls = null;
     }
     self.parser.free();
     self.raw.free();

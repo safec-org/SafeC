@@ -17,6 +17,7 @@
 #include <std/encoding/deflate.h>
 #include <std/http/headers.h>
 #include <std/http/date.h>
+#include <std/tls/tls.h>
 extern void* malloc(size_t size);
 extern void  free(void* ptr);
 // A backend for io_nb.h's declarations (io_nb_bsd.sc / io_nb_linux.sc /
@@ -658,30 +659,125 @@ int http_resolve_host(const &char host, &unsigned int addr_out) {
 struct TcpStream TcpStream::from_fd(int fd) {
     struct TcpStream s;
     s.fd = fd;
+    s.tls = null;
     return s;
 }
 
+struct TcpStream TcpStream::over_tls(&heap TlsStream t) {
+    struct TcpStream s;
+    s.fd = t.fd;
+    s.tls = t;
+    return s;
+}
+
+int TcpStream::is_tls() const { return !self.tls.is_null(); }
+
 long long TcpStream::read(&unsigned char buf, unsigned long n) {
+    match (self.tls) {
+        case some(t): {
+            long long r = t.read(buf, n);
+            return r < 0LL ? -1LL : r;
+        }
+        case null: { }
+    }
     unsafe { return (long long)sock_read_(self.fd, (void*)buf, n); }
 }
 
 long long TcpStream::write(const &unsigned char buf, unsigned long n) {
+    match (self.tls) {
+        case some(t): {
+            long long r = t.write(buf, n);
+            return r < 0LL ? -1LL : r;
+        }
+        case null: { }
+    }
     unsafe { return (long long)sock_write_(self.fd, (const void*)buf, n); }
 }
 
 int TcpStream::close() {
+    match (self.tls) {
+        case some(t): {
+            int r = t.close();
+            std::dealloc(t);
+            self.tls = null;
+            self.fd = -1;
+            return r;
+        }
+        case null: { }
+    }
     unsafe { return sock_close_(self.fd); }
 }
 
-// The whole of 'text' to the socket; 1 on success.
-static int write_text_(int fd, const &String text) {
-    struct TcpStream s = TcpStream::from_fd(fd);
-    unsafe { return write_all(&s, (const &unsigned char)text.as_ptr(), text.length()); }
+// The whole of 'text' to the stream; 1 on success.
+static int write_text_(&TcpStream s, const &String text) {
+    unsafe { return write_all(s, (const &unsigned char)text.as_ptr(), text.length()); }
 }
 
-static int write_cstr_(int fd, const &char text) {
-    struct TcpStream s = TcpStream::from_fd(fd);
-    unsafe { return write_all(&s, (const &unsigned char)text, str_len(text)); }
+static int write_cstr_(&TcpStream s, const &char text) {
+    unsafe { return write_all(s, (const &unsigned char)text, str_len(text)); }
+}
+
+struct TcpStream http_open_stream(const &char host, unsigned short port, int tls,
+                                  const ?&TlsConfig cfg, int connect_timeout_ms,
+                                  int io_timeout_ms, ?&TlsError err) {
+    struct TcpStream out = TcpStream::from_fd(-1);
+    struct TlsError e = TlsError::none();
+    unsigned int addr = 0U;
+    int fd = -1;
+    if (!http_resolve_host(host, &addr)) {
+        e = TlsError::make(TLS_ERR_IO, "cannot resolve the host name");
+    } else {
+        // Waits for the handshake itself rather than relying on the first
+        // blocking write to do it: Linux's write() does wait on a
+        // still-connecting socket, but BSD and Winsock fail it with
+        // ENOTCONN, and none of them bound the wait below the kernel's own
+        // SYN-retry limit (~130s on Linux).
+        unsafe { fd = tcp_connect_timeout(addr, port, connect_timeout_ms); }
+        if (fd < 0) { e = TlsError::make(TLS_ERR_IO, "TCP connect failed"); }
+    }
+    if (fd >= 0) {
+        int t = io_timeout_ms;
+        if (tls && t <= 0) { t = connect_timeout_ms; }
+        if (t > 0 && sock_set_io_timeout(fd, t) != 0) {
+            e = TlsError::make(TLS_ERR_IO, "cannot set the socket timeout");
+            unsafe { sock_close_(fd); }
+            fd = -1;
+        }
+    }
+    if (fd >= 0 && !tls) {
+        out = TcpStream::from_fd(fd);
+    } else if (fd >= 0) {
+        struct TlsConfig defaults = TlsConfig::new();
+        defaults.set_alpn("http/1.1");
+        struct Result<TlsStream, TlsError> r;
+        match (cfg) {
+            case some(c): { r = TlsStream::connect(fd, host, c); }
+            case null: { r = TlsStream::connect(fd, host, &defaults); }
+        }
+        defaults.free();
+        if (!r.ok()) {
+            e = r.error;
+            unsafe { sock_close_(fd); }
+        } else {
+            ?&heap TlsStream h = std::alloc(sizeof(struct TlsStream));
+            match (h) {
+                case some(hp): {
+                    *hp = r.value;
+                    if (io_timeout_ms <= 0) { sock_set_io_timeout(fd, 0); }
+                    out = TcpStream::over_tls(hp);
+                }
+                case null: {
+                    r.value.close();
+                    e = TlsError::make(TLS_ERR_NO_MEMORY, "out of memory");
+                }
+            }
+        }
+    }
+    match (err) {
+        case some(ep): { *ep = e; }
+        case null: { }
+    }
+    return out;
 }
 
 // ── Status codes ──────────────────────────────────────────────────────────
@@ -1126,26 +1222,14 @@ static struct HttpResponse http_exchange_(const &char host, unsigned short port,
                                           const ?&char extra_headers,
                                           const ?&unsigned char body, unsigned long body_len,
                                           int connect_timeout_ms, int io_timeout_ms,
-                                          unsigned long max_body, ?&int ok) {
+                                          unsigned long max_body, int tls, const ?&TlsConfig tlscfg,
+                                          ?&TlsError tlserr, ?&int ok) {
     struct HttpResponse resp = HttpResponse::new(0);
     int good = 1;
 
-    unsigned int addr = 0U;
-    if (!http_resolve_host(host, &addr)) { good = 0; }
-
-    int fd = -1;
-    if (good) {
-        // Waits for the handshake itself rather than relying on the first
-        // blocking write to do it: Linux's write() does wait on a
-        // still-connecting socket, but BSD and Winsock fail it with
-        // ENOTCONN, and none of them bound the wait below the kernel's own
-        // SYN-retry limit (~130s on Linux).
-        unsafe { fd = tcp_connect_timeout(addr, port, connect_timeout_ms); }
-        if (fd < 0) { good = 0; }
-    }
-    if (good && io_timeout_ms > 0) {
-        if (sock_set_io_timeout(fd, io_timeout_ms) != 0) { good = 0; }
-    }
+    struct TcpStream s = http_open_stream(host, port, tls, tlscfg, connect_timeout_ms, io_timeout_ms, tlserr);
+    int fd = s.fd;
+    if (fd < 0) { good = 0; }
 
     int isHead = 0;
     unsafe { isHead = str_eq(method, "HEAD"); }
@@ -1187,12 +1271,11 @@ static struct HttpResponse http_exchange_(const &char host, unsigned short port,
             req.push("\r\n");
             if (body_len > 0UL) { req.push_n((const char*)body, body_len); }
         }
-        if (!write_text_(fd, &req)) { good = 0; }
+        if (!write_text_(&s, &req)) { good = 0; }
         req.free();
     }
 
     if (good) {
-        struct TcpStream s = TcpStream::from_fd(fd);
         struct BufReader<TcpStream> in = BufReader::over(&s);
         // Interim 1xx responses (100 Continue, 103 Early Hints) precede
         // the real one.
@@ -1254,7 +1337,7 @@ static struct HttpResponse http_exchange_(const &char host, unsigned short port,
         }
     }
 
-    if (fd >= 0) { unsafe { sock_close_(fd); } }
+    if (fd >= 0) { s.close(); }
     if (ok != (int*)0) { unsafe { *ok = good; } }
     return resp;
 }
@@ -1280,7 +1363,7 @@ struct HttpResponse http_request_timeout(const &char host, unsigned short port,
         hostHeader.push_uint((unsigned long long)port);
     }
     struct HttpResponse r = http_exchange_(host, port, hostHeader.as_ptr(), method, path, extra_headers,
-                                           body, body_len, connect_timeout_ms, io_timeout_ms, 0UL, ok);
+                                           body, body_len, connect_timeout_ms, io_timeout_ms, 0UL, 0, null, null, ok);
     hostHeader.free();
     return r;
 }
@@ -1316,6 +1399,8 @@ struct HttpClientOptions HttpClientOptions::defaults() {
     o.io_timeout_ms = 30000;
     o.decompress = 1;
     o.max_body_bytes = 64UL * 1024UL * 1024UL;
+    o.tls = null;
+    o.tls_error = null;
     return o;
 }
 
@@ -1375,7 +1460,8 @@ struct HttpResponse http_fetch(const &char method, const &char url,
     int good = pok;
     struct HttpResponse resp = HttpResponse::new(0);
     while (good) {
-        if (!cur.scheme.eq_cstr("http") || cur.host.is_empty()) { good = 0; break; }
+        int https = cur.scheme.eq_cstr("https");
+        if ((!https && !cur.scheme.eq_cstr("http")) || cur.host.is_empty()) { good = 0; break; }
         int port = cur.port_or_default();
         if (port <= 0 || port > 65535) { good = 0; break; }
         struct String target = cur.request_target();
@@ -1399,11 +1485,13 @@ struct HttpResponse http_fetch(const &char method, const &char url,
         if (sendBody) {
             resp = http_exchange_(cur.host.as_ptr(), (unsigned short)port, hostHeader.as_ptr(),
                                   curMethod.as_ptr(), target.as_ptr(), hdrs.as_ptr(), body, body_len,
-                                  opts.connect_timeout_ms, opts.io_timeout_ms, opts.max_body_bytes, &xok);
+                                  opts.connect_timeout_ms, opts.io_timeout_ms, opts.max_body_bytes,
+                                  https, opts.tls, opts.tls_error, &xok);
         } else {
             resp = http_exchange_(cur.host.as_ptr(), (unsigned short)port, hostHeader.as_ptr(),
                                   curMethod.as_ptr(), target.as_ptr(), hdrs.as_ptr(), null, 0UL,
-                                  opts.connect_timeout_ms, opts.io_timeout_ms, opts.max_body_bytes, &xok);
+                                  opts.connect_timeout_ms, opts.io_timeout_ms, opts.max_body_bytes,
+                                  https, opts.tls, opts.tls_error, &xok);
         }
         target.free();
         hostHeader.free();
@@ -1486,7 +1574,7 @@ static void http_origin_form_(&String path) {
     u.free();
 }
 
-static int http_read_request_(&BufReader<TcpStream> in, const &HttpServerConfig cfg, int fd,
+static int http_read_request_(&BufReader<TcpStream> in, const &HttpServerConfig cfg, &TcpStream out,
                               &HttpRequest req, &HttpReqInfo_ info) {
     info.versionMinor = 1;
     info.wantsClose = 0;
@@ -1568,7 +1656,7 @@ static int http_read_request_(&BufReader<TcpStream> in, const &HttpServerConfig 
     if (cl == -2LL) { info.status = 400; return HTTP_READ_ERROR_; }
     if (!chunked && cl > 0LL && (unsigned long)cl > cfg.max_body_bytes) { info.status = 413; return HTTP_READ_ERROR_; }
     if ((chunked || cl > 0LL) && info.versionMinor == 1 && http_header_has_token(h, "Expect", "100-continue")) {
-        if (!write_cstr_(fd, "HTTP/1.1 100 Continue\r\n\r\n")) { return HTTP_READ_CLOSED_; }
+        if (!write_cstr_(out, "HTTP/1.1 100 Continue\r\n\r\n")) { return HTTP_READ_CLOSED_; }
     }
     if (chunked) {
         int r = http_read_chunked_(in, &req.body, cfg.max_body_bytes);
@@ -1596,7 +1684,9 @@ struct TcpStream HttpConn::detach(?&String early) {
         }
         case null: { }
     }
-    return TcpStream::from_fd(self.fd);
+    struct TcpStream s = TcpStream::from_fd(self.fd);
+    s.tls = self.tls;
+    return s;
 }
 
 struct String HttpConn::peer_string() const {
@@ -1624,6 +1714,7 @@ struct HttpServerConfig HttpServerConfig::defaults(unsigned short port) {
     c.max_requests_per_conn = 1000;
     c.max_header_bytes = 64UL * 1024UL;
     c.max_body_bytes = 16UL * 1024UL * 1024UL;
+    c.tls = null;
     return c;
 }
 
@@ -1639,6 +1730,8 @@ struct HttpServerShared_ {
     unsigned long long mtx;
     int* activeFds;        // per worker: the connection it is serving, or -1
     unsigned long long* tids;
+    int has_tls;           // HTTPS: every connection starts with acceptor.accept()
+    struct TlsAcceptor acceptor;
 };
 
 // Serves requests on one accepted connection until it closes, the client
@@ -1654,11 +1747,37 @@ static void http_serve_conn_(struct HttpServerShared_* sh, int fd) {
     conn.request_index = 0UL;
     conn.keep_alive = 0;
     conn.detached = 0;
+    conn.tls = null;
     sock_addr_of_(fd, 1, &conn.peer_addr, &conn.peer_port);
+    if (cfg.io_timeout_ms > 0) { sock_set_io_timeout(fd, cfg.io_timeout_ms); }
     struct TcpStream s = TcpStream::from_fd(fd);
+    int hasTls = 0;
+    unsafe { hasTls = sh->has_tls; }
+    if (hasTls) {
+        // HTTPS: the TLS handshake first (bounded by the I/O timeout).
+        if (cfg.io_timeout_ms <= 0) { sock_set_io_timeout(fd, cfg.idle_timeout_ms > 0 ? cfg.idle_timeout_ms : 30000); }
+        struct Result<TlsStream, TlsError> tr;
+        unsafe { tr = sh->acceptor.accept(fd); }
+        if (!tr.ok()) {
+            unsafe { sock_close_(fd); }
+            return;
+        }
+        ?&heap TlsStream h = std::alloc(sizeof(struct TlsStream));
+        match (h) {
+            case some(hp): {
+                *hp = tr.value;
+                s = TcpStream::over_tls(hp);
+                conn.tls = hp;
+            }
+            case null: {
+                tr.value.close();
+                return;
+            }
+        }
+        if (cfg.io_timeout_ms <= 0) { sock_set_io_timeout(fd, 0); }
+    }
     struct BufReader<TcpStream> in = BufReader::over(&s);
     unsafe { conn.reader_ = (void*)&in; }
-    if (cfg.io_timeout_ms > 0) { sock_set_io_timeout(fd, cfg.io_timeout_ms); }
     while (1) {
         if (conn.request_index > 0UL && in.buffered() == 0UL) {
             // Between requests: the idle limit applies.
@@ -1666,13 +1785,13 @@ static void http_serve_conn_(struct HttpServerShared_* sh, int fd) {
         }
         struct HttpRequest req = HttpRequest::new("", "");
         struct HttpReqInfo_ info;
-        int rc = http_read_request_(&in, &cfg, fd, &req, &info);
+        int rc = http_read_request_(&in, &cfg, &s, &req, &info);
         if (conn.request_index > 0UL) { sock_set_io_timeout(fd, cfg.io_timeout_ms); }
         if (rc == HTTP_READ_CLOSED_) { req.free(); break; }
         if (rc == HTTP_READ_ERROR_) {
             struct HttpResponse er = HttpResponse::error(info.status);
             struct String t = http_render_response_(&er, 0, 0);
-            write_text_(fd, &t);
+            write_text_(&s, &t);
             t.free();
             er.free();
             req.free();
@@ -1694,14 +1813,14 @@ static void http_serve_conn_(struct HttpServerShared_* sh, int fd) {
         keep = keep && conn.keep_alive;
         int head = req.method.eq_cstr("HEAD");
         struct String text = http_render_response_(&resp, head, keep);
-        int wrote = write_text_(fd, &text);
+        int wrote = write_text_(&s, &text);
         text.free();
         resp.free();
         req.free();
         if (!wrote || !keep) { break; }
         conn.request_index = conn.request_index + 1UL;
     }
-    unsafe { sock_close_(fd); }
+    s.close();
 }
 
 struct HttpWorkerArg_ {
@@ -1789,7 +1908,24 @@ struct HttpServer HttpServer::bind(const &HttpServerConfig cfg, ?&int ok) {
                     checked_mul_size((unsigned long)cfg.threads, sizeof(unsigned long long)));
                 int i = 0;
                 while (i < cfg.threads) { sh->activeFds[i] = -1; i = i + 1; }
+                sh->has_tls = 0;
                 srv.shared_ = (void*)sh;
+                match (cfg.tls) {
+                    case some(tc): {
+                        struct Result<TlsAcceptor, TlsError> ar = TlsAcceptor::new(tc);
+                        if (ar.ok()) {
+                            sh->acceptor = ar.value;
+                            sh->has_tls = 1;
+                        } else {
+                            good = 0;
+                            dealloc_raw_((void*)sh->activeFds);
+                            dealloc_raw_((void*)sh->tids);
+                            dealloc_raw_((void*)sh);
+                            srv.shared_ = (void*)0;
+                        }
+                    }
+                    case null: { }
+                }
             }
         }
         if (!good) { unsafe { sock_close_(fd); } }

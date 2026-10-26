@@ -21,6 +21,9 @@
 #include <std/gui/gui_png.h>
 #include <std/gui/gui_widget.h>
 #include <std/gui/gui_app.h>
+#if defined(__wasm__)
+#include <std/gui/gui_web.h>
+#endif
 #include <std/collections/string.h>
 #include <std/math.h>
 
@@ -626,6 +629,32 @@ static struct GuiImage make_photo() {
     return img;
 }
 
+// Opens both windows and builds their contents; 0 if there is no display.
+static int open_gallery(&GuiApp app, &Gallery g) {
+    g.photo = make_photo();
+    g.t = 0.0;
+    g.clicks = 0;
+
+    struct GuiWindowOptions wo = GuiWindowOptions::new("SafeC GUI gallery — widgets", 860, 620);
+    wo.minWidth = 560; wo.minHeight = 420;
+    g.widgets = app.open(&wo);
+    struct GuiWindowOptions co = GuiWindowOptions::new("SafeC GUI gallery — canvas", 470, 560);
+    co.minWidth = 300; co.minHeight = 300;
+    g.canvas = app.open(&co);
+    if (g.widgets.is_null() || g.canvas.is_null()) { return 0; }
+    &GuiWindow ww;
+    &GuiWindow cw;
+    unsafe { ww = (struct GuiWindow*)g.widgets; cw = (struct GuiWindow*)g.canvas; }
+
+    app.set_root(ww, build_widgets_window(g));
+    g.settings = make_settings_dialog(g);
+    apply_theme(g, g.dark.is_checked());
+    app.on_draw(cw, draw_canvas_window, g);
+    app.on_frame(cw, on_canvas_frame, g);
+    app.set_interval(50.0, on_tick, g);
+    return 1;
+}
+
 int main(int argc, char** argv) {
     const char* snapshot = (const char*)0;
     unsafe {
@@ -637,17 +666,7 @@ int main(int argc, char** argv) {
     struct GuiApp app = GuiApp::new();
     struct Gallery g;
     g.app = &app;
-    g.photo = make_photo();
-    g.t = 0.0;
-    g.clicks = 0;
-
-    struct GuiWindowOptions wo = GuiWindowOptions::new("SafeC GUI gallery — widgets", 860, 620);
-    wo.minWidth = 560; wo.minHeight = 420;
-    g.widgets = app.open(&wo);
-    struct GuiWindowOptions co = GuiWindowOptions::new("SafeC GUI gallery — canvas", 470, 560);
-    co.minWidth = 300; co.minHeight = 300;
-    g.canvas = app.open(&co);
-    if (g.widgets.is_null() || g.canvas.is_null()) {
+    if (!open_gallery(&app, &g)) {
         unsafe { printf("gui_gallery: no window (no display?)\n"); }
         g.photo.free();
         app.free();
@@ -656,13 +675,6 @@ int main(int argc, char** argv) {
     &GuiWindow ww;
     &GuiWindow cw;
     unsafe { ww = (struct GuiWindow*)g.widgets; cw = (struct GuiWindow*)g.canvas; }
-
-    app.set_root(ww, build_widgets_window(&g));
-    g.settings = make_settings_dialog(&g);
-    apply_theme(&g, g.dark.is_checked());
-    app.on_draw(cw, draw_canvas_window, &g);
-    app.on_frame(cw, on_canvas_frame, &g);
-    app.set_interval(50.0, on_tick, &g);
 
     if (snapshot != (const char*)0) {
         int i = 0;
@@ -698,3 +710,20 @@ int main(int argc, char** argv) {
     g.photo.free();
     return 0;
 }
+
+#if defined(__wasm__)
+// In a web page (WebAssembly): the page's std/gui/gui_web.js calls start()
+// once; the app then runs from requestAnimationFrame (see
+// examples/gui_web for a page around it).
+static struct GuiApp gWebApp;
+static struct Gallery gWebGallery;
+
+__attribute__((export_name("start")))
+int start() {
+    gWebApp = GuiApp::new();
+    gWebGallery.app = &gWebApp;
+    if (!open_gallery(&gWebApp, &gWebGallery)) { return 1; }
+    gui_web_run(&gWebApp);
+    return 0;
+}
+#endif

@@ -928,8 +928,8 @@ void t_client_fetch() {
     payload.free();
     mb.free();
 
-    // Bad URLs.
-    r = http_get_url("https://example.com/", &ok);
+    // Bad URLs (https:// is supported now: see test_tls.sc).
+    r = http_get_url("ftp://example.com/", &ok);
     ASSERT_FALSE(ok);
     r.free();
     r = http_get_url("not a url", &ok);
