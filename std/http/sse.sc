@@ -110,7 +110,7 @@ struct SseParser SseParser::new() {
 }
 
 void SseParser::feed_n_(const &unsigned char bytes, unsigned long len) {
-    unsafe { self.buf.push_n((const char*)bytes, len); }
+    unsafe { self.buf.push_n_((const char*)bytes, len); }
 }
 
 void SseParser::feed([]const unsigned char bytes_s) {
@@ -248,7 +248,7 @@ struct SseClient SseClient::connect_tls(const &char url, const ?&char last_event
         while (end < 0LL && head.length() < 65536UL) {
             long long n = s.read(buf[0..4096UL]);
             if (n <= 0LL) { break; }
-            unsafe { head.push_n((const char*)&buf[0], (unsigned long)n); }
+            unsafe { head.push_n_((const char*)&buf[0], (unsigned long)n); }
             end = head.index_of("\r\n\r\n");
         }
         if (end < 0LL || !head.starts_with("HTTP/1.") || head.length() < 12UL || head.char_at(9UL) != (int)'2') {
@@ -337,7 +337,7 @@ int SseClient::next(&SseEvent out) {
             // EventSource does.
             return 0;
         }
-        unsafe { self.raw.push_n((const char*)&buf[0], (unsigned long)n); }
+        unsafe { self.raw.push_n_((const char*)&buf[0], (unsigned long)n); }
     }
     return 0;
 }

@@ -41,7 +41,7 @@ static struct String rpc_frame_(const unsigned char* data, unsigned long len) {
         out.push_char((char)((len >> 16) & 0xFFUL));
         out.push_char((char)((len >> 8) & 0xFFUL));
         out.push_char((char)(len & 0xFFUL));
-        if (len > 0UL) { out.push_n((const char*)data, len); }
+        if (len > 0UL) { out.push_n_((const char*)data, len); }
     }
     return out;
 }

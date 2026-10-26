@@ -126,7 +126,7 @@ static int dom_str_into_(&DomStrReq_ r, &String out) {
     unsafe { n = dom_str_call_(r, &small[0], 256); }
     if (n < 0) { return 0; }
     if (n <= 256) {
-        unsafe { out.push_n((const char*)&small[0], (unsigned long)n); }
+        unsafe { out.push_n_((const char*)&small[0], (unsigned long)n); }
         return 1;
     }
     unsafe {
@@ -134,7 +134,7 @@ static int dom_str_into_(&DomStrReq_ r, &String out) {
         if (big == (char*)0) { return 1; }
         int m = dom_str_call_(r, big, n);
         if (m > n) { m = n; }
-        if (m > 0) { out.push_n((const char*)big, (unsigned long)m); }
+        if (m > 0) { out.push_n_((const char*)big, (unsigned long)m); }
         dealloc_raw_((void*)big);
     }
     return 1;

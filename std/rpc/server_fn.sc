@@ -136,7 +136,7 @@ struct Value server_fn_call(const &char host, unsigned short port, const &char n
     }
 
     struct String respText;
-    unsafe { respText = String::from_n((const char*)rr.data, rr.len); }
+    unsafe { respText = String::from_n_((const char*)rr.data, rr.len); }
     unsafe { rr.free(); }
 
     int parseOk;

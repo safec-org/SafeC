@@ -22,12 +22,12 @@ static char json_hex_digit_(int v) {
     return (char)((int)'a' + (v - 10));
 }
 
-// Appends s[run_start, i) as one push_n() call — batching runs of bytes
+// Appends s[run_start, i) as one push_n_() call — batching runs of bytes
 // that need no escaping avoids a push_char() (and reserve_() check) per
 // byte, which matters since most string content has no special chars.
 static void json_flush_run_(&String out, const char* s, unsigned long run_start, unsigned long i) {
     if (i > run_start) {
-        unsafe { out.push_n(s + run_start, i - run_start); }
+        unsafe { out.push_n_(s + run_start, i - run_start); }
     }
 }
 
@@ -264,7 +264,7 @@ static struct Value json_parse_string_raw_(&JsonCursor_ c) {
                 }
                 char enc[4];
                 int n; unsafe { n = utf8_encode(cp, (char*)enc); }
-                unsafe { out.push_n((const char*)enc, (unsigned long)n); }
+                unsafe { out.push_n_((const char*)enc, (unsigned long)n); }
             } else {
                 unsafe { c->ok = 0; }
             }
@@ -298,7 +298,7 @@ static struct Value json_parse_number_(&JsonCursor_ c) {
 
     struct String tok = String::new();
     struct String numStr;
-    unsafe { numStr = String::from_n(c->text + start, len); }
+    unsafe { numStr = String::from_n_(c->text + start, len); }
     tok.push_str(&numStr);
     numStr.free();
     int ok = 0;

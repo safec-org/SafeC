@@ -404,7 +404,7 @@ void t_slice() {
 // String methods and capacity APIs the main cases don't reach.
 void t_string_more() {
     unsafe {
-        struct String s = String::from_n("abcdefgh", 5UL);
+        struct String s = String::from_bytes(str_bytes("abcdefgh")[0..5]);
         ASSERT_STR_EQ(s.as_ptr(), "abcde");
         ASSERT_TRUE(s.reserve(100UL));
         ASSERT_TRUE(s.cap >= 106UL);

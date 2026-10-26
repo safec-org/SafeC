@@ -87,7 +87,7 @@ struct MultipartForm MultipartForm::parse(const &char content_type, const &unsig
         nextDelim.free();
         struct MultipartPart part;
         struct String rawHead = String::new();
-        unsafe { rawHead.push_n(&b[p], (unsigned long)hend - p); }
+        unsafe { rawHead.push_n_(&b[p], (unsigned long)hend - p); }
         part.headers = HttpHeaders::parse(rawHead.as_ptr());
         rawHead.free();
         const &char cd = part.headers.get_or("Content-Disposition", "");
@@ -103,7 +103,7 @@ struct MultipartForm MultipartForm::parse(const &char content_type, const &unsig
         }
         part.content_type = String::from(part.headers.get_or("Content-Type", "text/plain"));
         part.data = String::new();
-        unsafe { part.data.push_n(&b[bodyStart], bodyEnd - bodyStart); }
+        unsafe { part.data.push_n_(&b[bodyStart], bodyEnd - bodyStart); }
         f.parts.push(part);
     }
     if (!closed) { good = 0; }
@@ -218,7 +218,7 @@ void MultipartBuilder::add_file_n_(const &char name, const &char filename, const
     self.body.push("\r\nContent-Type: ");
     self.body.push(content_type);
     self.body.push("\r\n\r\n");
-    unsafe { self.body.push_n((const char*)data, len); }
+    unsafe { self.body.push_n_((const char*)data, len); }
     self.body.push("\r\n");
 }
 

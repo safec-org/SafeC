@@ -82,7 +82,7 @@ void pb_write_string_field(&String out, int field_num, const &char s) {
     unsigned long len = str_len(s);
     pb_write_tag(out, field_num, PB_WIRE_LEN);
     pb_write_varint(out, (unsigned long long)len);
-    unsafe { out.push_n(s, len); }
+    unsafe { out.push_n_(s, len); }
 }
 
 void pb_write_bytes_field(&String out, int field_num, []const unsigned char data) {

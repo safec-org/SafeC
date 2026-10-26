@@ -61,7 +61,7 @@ struct String http_header_param(const &char value, const &char name) {
                 while (s[i] != (char)0 && s[i] != ';') { i = i + 1UL; }
                 unsigned long vb = i;
                 while (vb > va && hh_is_blank_(s[vb - 1UL])) { vb = vb - 1UL; }
-                v.push_n(&s[va], vb - va);
+                v.push_n_(&s[va], vb - va);
             }
             if (same) { out.free(); return v; }
             v.free();
@@ -109,7 +109,7 @@ struct HttpHeaders HttpHeaders::parse(const &char raw) {
                 if (b > a) {
                     &HttpHeaderField last = h.fields.at(h.fields.length() - 1UL);
                     last.value.push_char(' ');
-                    last.value.push_n(&s[a], b - a);
+                    last.value.push_n_(&s[a], b - a);
                 }
             } else {
                 unsigned long colon = pos;
@@ -125,8 +125,8 @@ struct HttpHeaders HttpHeaders::parse(const &char raw) {
                     while (vb > va && hh_is_blank_(s[vb - 1UL])) { vb = vb - 1UL; }
                     if (kb > ka) {
                         struct HttpHeaderField f;
-                        f.name = String::from_n(&s[ka], kb - ka);
-                        f.value = String::from_n(&s[va], vb - va);
+                        f.name = String::from_n_(&s[ka], kb - ka);
+                        f.value = String::from_n_(&s[va], vb - va);
                         h.fields.push(f);
                     }
                 }

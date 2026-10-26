@@ -85,7 +85,7 @@ void __w_edit_insert(&Widget w, const &char s, unsigned long n, int multiline) {
             else { clean.push_char(ch); }
             i = i + 1UL;
         }
-        if (w.caret >= w.text.len) { w.text.push_n((const char*)clean.data, clean.len); }
+        if (w.caret >= w.text.len) { w.text.push_n_((const char*)clean.data, clean.len); }
         else { w.text.insert(w.caret, (const char*)clean.data); }
     }
     w.caret = w.caret + clean.len;
@@ -97,7 +97,7 @@ void __w_edit_insert(&Widget w, const &char s, unsigned long n, int multiline) {
 static void __wt_display(const &Widget w, &String out) {
     out.clear();
     if (!w.password) {
-        unsafe { out.push_n((const char*)w.text.data, w.text.len); }
+        unsafe { out.push_n_((const char*)w.text.data, w.text.len); }
         return;
     }
     unsigned long i = 0UL;

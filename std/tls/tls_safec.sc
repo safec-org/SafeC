@@ -1321,7 +1321,7 @@ static int t13_parse_ch_(&TlsStream s, &T13_ t, &T13Rd_ r, &T13Ch_ ch) {
             struct T13Rd_ host = rvec_(&list, 2);
             if (!list.bad && nt == 0U && host.n < 256UL) {
                 t.name.clear();
-                unsafe { t.name.push_n((const &char)(const char*)host.p, host.n); }
+                unsafe { t.name.push_n_((const &char)(const char*)host.p, host.n); }
             }
         }
     }

@@ -78,7 +78,7 @@ struct String path_dirname(const &char p) {
         if (!path_is_sep(c)) { break; }
         end = end - 1UL;
     }
-    unsafe { return String::from_n(p, end); }
+    unsafe { return String::from_n_(p, end); }
 }
 
 struct String path_basename(const &char p) {
@@ -87,7 +87,7 @@ struct String path_basename(const &char p) {
     char c0;
     unsafe { c0 = p[0]; }
     if (n == 1UL && path_is_sep(c0)) { return String::new(); }
-    unsafe { return String::from_n((const char*)p + start, n - start); }
+    unsafe { return String::from_n_((const char*)p + start, n - start); }
 }
 
 struct String path_ext(const &char p) {
@@ -115,7 +115,7 @@ static int path_components_(const &char p, &Vec<struct String> parts, &String pr
 #ifdef _WIN32
     unsafe {
         if (p[0] != '\0' && p[1] == ':') {
-            prefix.push_n(p, 2UL);
+            prefix.push_n_(p, 2UL);
             i = 2UL;
         }
     }
@@ -128,7 +128,7 @@ static int path_components_(const &char p, &Vec<struct String> parts, &String pr
         unsigned long s = i;
         unsafe { while (p[i] != '\0' && !path_is_sep(p[i])) { i = i + 1UL; } }
         struct String comp;
-        unsafe { comp = String::from_n((const char*)p + s, i - s); }
+        unsafe { comp = String::from_n_((const char*)p + s, i - s); }
         if (comp.eq_cstr(".")) { comp.free(); continue; }
         if (comp.eq_cstr("..")) {
             int can_pop = 0;

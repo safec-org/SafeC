@@ -29,7 +29,10 @@ struct FuzzTarget FuzzTarget::new(fn void(const &unsigned char, unsigned long) f
     return t;
 }
 
-void FuzzTarget::run(const &unsigned char corpus, unsigned long corpus_size) {
+void FuzzTarget::run([]const unsigned char corpus_s) {
+    unsigned long corpus_size = corpus_s.len;
+    const &unsigned char corpus;
+    unsafe { corpus = (const &unsigned char)corpus_s.ptr; }
     if (corpus_size == (unsigned long)0) { return; }
 
     unsigned long state = self.seed;

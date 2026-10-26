@@ -16,7 +16,7 @@ struct FuzzTarget {
 
     // Run the fuzzer: start from `corpus` and apply `iters` random mutations.
     // Crashes/panics in func are not caught; they surface as normal crashes.
-    void run(const &unsigned char corpus, unsigned long corpus_size);
+    void run([]const unsigned char corpus);
 };
 
 } // namespace std

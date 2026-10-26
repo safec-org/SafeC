@@ -136,7 +136,7 @@ static ?&int run_ws(?&int arg) {
         while (c.recv(&m) == 1) {
             if (m.opcode == WS_OPCODE_TEXT) {
                 struct String echo = String::from("echo:");
-                echo.push_n((const char*)m.data, m.len);
+                echo.push_bytes(((const char*)m.data)[0..m.len]);
                 c.send_text(echo.as_ptr());
                 echo.free();
             } else if (m.opcode == WS_OPCODE_PING) {
@@ -304,7 +304,7 @@ int buffered_exchange(&S s, const &char path, const &char payload, &String body)
         if (n > 256UL || !read_exact(&in, buf[0..n])) {
             status = 0;
         } else {
-            unsafe { body.push_n((const &char)(const char*)&buf[0], n); }
+            body.push_bytes(buf[0..n]);
         }
     }
     head.free();
@@ -471,7 +471,7 @@ void t_ws_frame_with_handshake() {
         frame[0] = (unsigned char)0x81; frame[1] = (unsigned char)0x82;
         frame[2] = (unsigned char)0; frame[3] = (unsigned char)0; frame[4] = (unsigned char)0; frame[5] = (unsigned char)0;
         frame[6] = (unsigned char)'h'; frame[7] = (unsigned char)'i';
-        out.push_n((const char*)&frame[0], 8UL);
+        out.push_bytes(frame[0..8]);
         ASSERT_TRUE(write_all(&s, out.as_bytes()));
         out.free();
 

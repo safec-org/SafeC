@@ -824,7 +824,7 @@ static void __gui_x11_serve_selection(struct X11SelectionRequestEvent* rq) {
 static int __gui_x11_clip_set(const &char utf8, unsigned long n) {
     unsafe {
         gX.clip.free();
-        gX.clip = String::from_n(utf8, n);
+        gX.clip = String::from_n_(utf8, n);
         XSetSelectionOwner(gX.display, gX.aClipboard, gX.helper, 0UL);
         gX.clipOwned = XGetSelectionOwner(gX.display, gX.aClipboard) == gX.helper ? 1 : 0;
         XFlush(gX.display);
@@ -852,7 +852,7 @@ static int __gui_x11_clip_get(&String out) {
         unsigned long owner = XGetSelectionOwner(gX.display, gX.aClipboard);
         if (owner == 0UL) { return 0; }
         if (owner == gX.helper && gX.clipOwned) {
-            out.push_n((const char*)gX.clip.data, gX.clip.len);
+            out.push_n_((const char*)gX.clip.data, gX.clip.len);
             return 1;
         }
         unsigned long target = gX.aUtf8;
@@ -893,11 +893,11 @@ static int __gui_x11_clip_get(&String out) {
                     while (i < nitems) {
                         char enc[4];
                         int k = gui_utf8_encode((unsigned int)data[i], &enc[0]);
-                        out.push_n(&enc[0], (unsigned long)k);
+                        out.push_n_(&enc[0], (unsigned long)k);
                         i = i + 1UL;
                     }
                 } else {
-                    out.push_n((const char*)data, nitems);
+                    out.push_n_((const char*)data, nitems);
                 }
             }
             XFree((void*)data);

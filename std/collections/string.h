@@ -13,7 +13,7 @@ struct String {
     static struct String new();                                  // empty
     static struct String from(const &char s);                    // copy of a C string
     static struct String from_bytes([]const char bytes);         // copy of the bytes (need not be NUL-terminated)
-    static struct String from_n(const &char s, unsigned long n); // copy of the n bytes at s (prefer from_bytes)
+    static struct String from_n_(const &char s, unsigned long n); // internal: from_bytes's (reference, length) core
     static struct String with_cap(unsigned long cap);            // empty, room for cap bytes
     static struct String repeat_str(const &char s, unsigned long n); // s repeated n times
     // parts concatenated, `sep` between each (null sep: none)
@@ -35,7 +35,7 @@ struct String {
     int            push_char(char c);
     int            push(const &char cstr);
     int            push_bytes([]const char bytes);           // append the bytes (need not be NUL-terminated)
-    int            push_n(const &char data, unsigned long n); // append the n bytes at data (prefer push_bytes)
+    int            push_n_(const &char data, unsigned long n); // internal: push_bytes's (reference, length) core
     int            push_str(&String other);
     int            push_int(long long v);
     int            push_uint(unsigned long long v);
@@ -114,6 +114,6 @@ struct String {
 // kept for std/ml until its refactor moves to the static method
 struct String string_new();
 struct String string_from(const &char s);
-struct String string_from_n(const &char s, unsigned long n);
+struct String string_from_n_(const &char s, unsigned long n);
 
 } // namespace std

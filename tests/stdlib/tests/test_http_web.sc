@@ -638,7 +638,7 @@ static struct HttpResponse a_ws(&HttpRequest req, &HttpCtx ctx) {
     while (c.recv_message(&m, 1048576UL)) {
         if (m.opcode == WS_OPCODE_CLOSE) { m.free(); break; }
         struct String echo = String::from("echo:");
-        unsafe { echo.push_n((const char*)m.data, m.len); }
+        unsafe { echo.push_bytes(((const char*)m.data)[0..m.len]); }
         c.send_text(echo.as_ptr());
         echo.free();
         m.free();
@@ -724,7 +724,7 @@ static int raw_response(&BufReader<TcpStream> in, &String head, &String body) {
     if (!ok) return 1;
     unsigned char buf[8192];
     if (n > 8192LL || !read_exact(in, buf[0..(unsigned long)n])) return 0;
-    unsafe { body.push_n((const char*)&buf[0], (unsigned long)n); }
+    body.push_bytes(buf[0..(unsigned long)n]);
     return 1;
 }
 

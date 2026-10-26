@@ -176,7 +176,7 @@ int tls_read_file_(const &char path, &String out) {
         while (1) {
             unsigned long n = fread((void*)&chunk[0], 1UL, 4096UL, f);
             if (n == 0UL) { break; }
-            out.push_n((const &char)(const char*)&chunk[0], n);
+            out.push_n_((const &char)(const char*)&chunk[0], n);
         }
         fclose(f);
     }
@@ -203,13 +203,13 @@ static int tls_pem_next_(const char* text, &unsigned long pos, &String lab, &Str
                 while (text[j] != (char)0 && text[j] != '-') { j = j + 1UL; }
                 if (!tls_starts_(text + j, "-----")) { i = i + 1UL; continue; }
                 lab.clear();
-                lab.push_n((const &char)(text + ls), j - ls);
+                lab.push_n_((const &char)(text + ls), j - ls);
                 j = j + 5UL;
                 unsigned long bs = j;
                 while (text[j] != (char)0 && !tls_starts_(text + j, "-----END")) { j = j + 1UL; }
                 if (text[j] == (char)0) { *pos = j; return 0; }
                 body.clear();
-                body.push_n((const &char)(text + bs), j - bs);
+                body.push_n_((const &char)(text + bs), j - bs);
                 // past the END line
                 while (text[j] != (char)0 && text[j] != '\n') { j = j + 1UL; }
                 *pos = j;

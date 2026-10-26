@@ -940,7 +940,7 @@ void t_bench_fuzz() {
         dealloc(bq);
         struct FuzzTarget ft = FuzzTarget::new(fuzz_fn, 50UL);
         unsigned char corpus[4] = { (unsigned char)115, (unsigned char)101, (unsigned char)101, (unsigned char)100 };   // "seed"
-        ft.run(&corpus[0], 4UL);
+        ft.run(corpus[..]);
         ASSERT_EQ(g_fuzz_calls, 51);
     }
 }

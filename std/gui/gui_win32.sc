@@ -811,7 +811,7 @@ static int __gui_win32_clip_get(&String out) {
                     if (cp != 13U) {                                   // CRLF to LF
                         char enc[4];
                         int k = gui_utf8_encode(cp, &enc[0]);
-                        out.push_n(&enc[0], (unsigned long)k);
+                        out.push_n_(&enc[0], (unsigned long)k);
                     }
                     i = i + 1UL;
                 }

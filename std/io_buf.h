@@ -124,12 +124,12 @@ int BufReader::read_until(&String out, const &char term) {
             matched = io_term_step_(t, matched, self.buf[i]);
             i = i + 1UL;
             if (matched == tl) {
-                unsafe { out.push_n((const &char)(const char*)&self.buf[self.pos], i - self.pos); }
+                unsafe { out.push_n_((const &char)(const char*)&self.buf[self.pos], i - self.pos); }
                 self.pos = i;
                 return 1;
             }
         }
-        unsafe { out.push_n((const &char)(const char*)&self.buf[self.pos], self.len - self.pos); }
+        unsafe { out.push_n_((const &char)(const char*)&self.buf[self.pos], self.len - self.pos); }
         self.pos = self.len;
     }
     return 0;

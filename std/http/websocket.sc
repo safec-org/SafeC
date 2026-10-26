@@ -478,7 +478,7 @@ int WsConn::recv_message(&WsMessage out, unsigned long max_len) {
             msgOp = f.opcode;
         }
         if (max_len != 0UL && acc.length() + f.len > max_len) { f.free(); acc.free(); return 0; }
-        if (f.len > 0UL) { unsafe { acc.push_n((const char*)f.data, f.len); } }
+        if (f.len > 0UL) { unsafe { acc.push_n_((const char*)f.data, f.len); } }
         f.free();
         if (fin) { break; }
     }

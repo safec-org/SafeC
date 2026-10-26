@@ -555,7 +555,7 @@ struct String url_remove_dot_segments(const &char path) {
         unsigned long end = 0UL;
         if (in.char_at(0UL) == (int)'/') { end = 1UL; }
         while (end < in.length() && in.char_at(end) != (int)'/') { end = end + 1UL; }
-        unsafe { out.push_n(in.as_ptr(), end); }
+        unsafe { out.push_n_(in.as_ptr(), end); }
         in.remove_range(0UL, end);
     }
     in.free();
@@ -572,7 +572,7 @@ static struct String url_merge_paths_(const &Url base, const &String refPath) {
     }
     long long last = base.path.rfind_char('/');
     if (last >= 0LL) {
-        unsafe { out.push_n(base.path.as_ptr(), (unsigned long)last + 1UL); }
+        unsafe { out.push_n_(base.path.as_ptr(), (unsigned long)last + 1UL); }
     }
     out.push_str(refPath);
     return out;

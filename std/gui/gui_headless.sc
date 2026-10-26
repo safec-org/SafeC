@@ -155,7 +155,7 @@ static long long __hl_now_ns() {
 
 static int __hl_clip_set(const &char utf8, unsigned long n) {
     if (gHeadlessClipSet) { gHeadlessClip.free(); }
-    gHeadlessClip = String::from_n(utf8, n);
+    gHeadlessClip = String::from_n_(utf8, n);
     gHeadlessClipSet = 1;
     return 1;
 }
@@ -163,7 +163,7 @@ static int __hl_clip_set(const &char utf8, unsigned long n) {
 static int __hl_clip_get(&String out) {
     out.clear();
     if (!gHeadlessClipSet) { return 0; }
-    unsafe { out.push_n((const char*)gHeadlessClip.data, gHeadlessClip.len); }
+    unsafe { out.push_n_((const char*)gHeadlessClip.data, gHeadlessClip.len); }
     return 1;
 }
 

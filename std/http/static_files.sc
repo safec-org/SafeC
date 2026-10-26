@@ -207,7 +207,7 @@ int http_safe_join(const &char root, const &char url_path, int allow_dotfiles, &
             if (len == 2UL && d[s] == '.' && d[s + 1UL] == '.') { good = 0; break; }
             if (d[s] == '.' && !allow_dotfiles) { good = 0; break; }
             if (!joined.ends_with("/")) { joined.push_char('/'); }
-            joined.push_n(&d[s], len);
+            joined.push_n_(&d[s], len);
         }
     }
     dec.free();
@@ -430,7 +430,7 @@ struct HttpResponse http_serve_file(const &HttpRequest req, const &char file_pat
                 unsigned long ask = left < 16384UL ? left : 16384UL;
                 long long got = file.read(buf[0..ask]);
                 if (got <= 0LL) { break; }
-                unsafe { r.body.push_n((const char*)&buf[0], (unsigned long)got); }
+                unsafe { r.body.push_n_((const char*)&buf[0], (unsigned long)got); }
                 left = left - (unsigned long)got;
             }
             file.close();

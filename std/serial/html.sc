@@ -9,12 +9,12 @@
 
 namespace std {
 
-// Batches runs of bytes needing no escaping into one push_n() call rather
+// Batches runs of bytes needing no escaping into one push_n_() call rather
 // than one push_char() per byte — most string content has no special
 // chars, so this is the hot path.
 static void html_flush_run_(&String out, const char* s, unsigned long run_start, unsigned long i) {
     if (i > run_start) {
-        unsafe { out.push_n(s + run_start, i - run_start); }
+        unsafe { out.push_n_(s + run_start, i - run_start); }
     }
 }
 
@@ -219,7 +219,7 @@ void html_unescape(&String out, const &char s) {
                 if (digits > 0 && v > 0U && v < 0x110000U) { cp = v; }
             } else {
                 struct String name;
-                unsafe { name = String::from_n((const char*)s + i + 1UL, j - i - 1UL); }
+                unsafe { name = String::from_n_((const char*)s + i + 1UL, j - i - 1UL); }
                 cp = html_named_entity_(&name);
                 name.free();
             }
@@ -233,7 +233,7 @@ void html_unescape(&String out, const &char s) {
 // Is the tag name s[a..b) (lowercase compare) a block-level boundary?
 static int html_is_block_tag_(const &char s, unsigned long a, unsigned long b) {
     struct String name;
-    unsafe { name = String::from_n((const char*)s + a, b - a); }
+    unsafe { name = String::from_n_((const char*)s + a, b - a); }
     struct String n = name.to_lower();
     name.free();
     int block = n.eq_cstr("p") || n.eq_cstr("br") || n.eq_cstr("div") || n.eq_cstr("li") ||
@@ -290,7 +290,7 @@ void html_strip_tags(&String out, const &char s) {
             i = s[k] == (char)0 ? k : k + 1UL;
             // <script>/<style>: drop everything up to the close tag.
             if (!closing && b - a == 6UL) {
-                struct String nm = String::from_n((const char*)s + a, 6UL);
+                struct String nm = String::from_n_((const char*)s + a, 6UL);
                 struct String lo = nm.to_lower();
                 int raw = lo.eq_cstr("script");
                 nm.free(); lo.free();
@@ -299,7 +299,7 @@ void html_strip_tags(&String out, const &char s) {
                     match (close) { case some(p): { i = (unsigned long)(p - (const char*)s); } case null: { } }
                 }
             } else if (!closing && b - a == 5UL) {
-                struct String nm = String::from_n((const char*)s + a, 5UL);
+                struct String nm = String::from_n_((const char*)s + a, 5UL);
                 struct String lo = nm.to_lower();
                 int raw = lo.eq_cstr("style");
                 nm.free(); lo.free();
@@ -372,7 +372,7 @@ static struct String html_read_name_(struct HtmlCursor_* c) {
     unsigned long end;
     unsafe { end = c->pos; }
     struct String out = String::new();
-    if (end > start) { unsafe { out.push_n(c->text + start, end - start); } }
+    if (end > start) { unsafe { out.push_n_(c->text + start, end - start); } }
     return out;
 }
 
@@ -417,7 +417,7 @@ static struct String html_decode_text_(struct HtmlCursor_* c) {
         if (ch == '&') {
             unsigned long cur;
             unsafe { cur = c->pos; }
-            if (cur > run_start) { unsafe { out.push_n(c->text + run_start, cur - run_start); } }
+            if (cur > run_start) { unsafe { out.push_n_(c->text + run_start, cur - run_start); } }
             unsafe { c->pos = c->pos + 1UL; }
             if (html_eat_literal_(c, "amp;")) { out.push_char('&'); }
             else if (html_eat_literal_(c, "lt;")) { out.push_char('<'); }
@@ -431,7 +431,7 @@ static struct String html_decode_text_(struct HtmlCursor_* c) {
     }
     unsigned long cur2;
     unsafe { cur2 = c->pos; }
-    if (cur2 > run_start) { unsafe { out.push_n(c->text + run_start, cur2 - run_start); } }
+    if (cur2 > run_start) { unsafe { out.push_n_(c->text + run_start, cur2 - run_start); } }
     return out;
 }
 

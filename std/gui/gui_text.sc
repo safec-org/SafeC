@@ -227,14 +227,14 @@ static void __tt_read_name(&GuiTypeface f) {
             }
             char enc[4];
             int nb = gui_utf8_encode(u, &enc[0]);
-            unsafe { f.family.push_n(&enc[0], (unsigned long)nb); }
+            unsafe { f.family.push_n_(&enc[0], (unsigned long)nb); }
         }
     } else {
         unsigned int k = 0U;
         while (k < bestLen) {
             char enc[4];
             int nb = gui_utf8_encode(__tt_u8(f, bestOff + (unsigned long)k), &enc[0]);
-            unsafe { f.family.push_n(&enc[0], (unsigned long)nb); }
+            unsafe { f.family.push_n_(&enc[0], (unsigned long)nb); }
             k = k + 1U;
         }
     }
