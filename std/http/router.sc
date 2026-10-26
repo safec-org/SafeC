@@ -306,6 +306,7 @@ struct HttpConn http_conn_none() {
     c.request_index = 0UL;
     c.keep_alive = 0;
     c.detached = 0;
+    c.tls = null;
     unsafe { c.reader_ = (void*)0; }
     return c;
 }
