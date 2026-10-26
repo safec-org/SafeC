@@ -78,76 +78,6 @@ static int is_header(const &String rel) { return rel.ends_with(".h"); }
 
 // ── links ────────────────────────────────────────────────────────────────────
 
-// The name -> link_urls index table: open addressing over a slot array
-// sized once up front (crate_load counts the names first), never rehashed.
-// Hand-rolled rather than a std StrMap: safec's heap-flow analysis reads a
-// StrMap insert (which may rehash, freeing its old arrays) as possibly
-// freeing the Crate's own module/item storage, and rejects every later read.
-struct LinkTable {
-    struct Vec<long long> slots;      // -1 empty, else index into keys/vals
-    struct Vec<struct String> keys;
-    struct Vec<long long> vals;
-};
-static struct LinkTable gLinks;
-
-static unsigned long link_hash(const &char key) {
-    unsigned long h = 1469598103934665603UL;
-    unsigned long i = 0UL;
-    unsafe {
-        while (key[i] != '\0') {
-            h = (h ^ (unsigned long)(unsigned char)key[i]) * 1099511628211UL;
-            i = i + 1UL;
-        }
-    }
-    return h;
-}
-
-static void links_init(unsigned long names) {
-    unsigned long cap = 1024UL;
-    while (cap < names * 2UL) { cap = cap * 2UL; }
-    gLinks.slots = Vec::with_cap(cap);
-    for (unsigned long i = 0UL; i < cap; i = i + 1UL) { gLinks.slots.push(-1LL); }
-    gLinks.keys = Vec::new();
-    gLinks.vals = Vec::new();
-}
-
-// The slot holding 'key', or the empty slot where it would go.
-static unsigned long link_slot(const &char key) {
-    unsigned long mask = gLinks.slots.len - 1UL;
-    unsigned long i = link_hash(key) & mask;
-    for (;;) {
-        long long e = *gLinks.slots.at(i);
-        if (e < 0LL || gLinks.keys.at((unsigned long)e).eq_cstr(key)) { return i; }
-        i = (i + 1UL) & mask;
-    }
-    return 0UL;
-}
-
-// Every item page's path, lowercased: an item page gets a path no other
-// page has even ignoring case (see claim_page). Same open addressing as
-// gLinks (vals unused).
-static struct LinkTable gPages;
-
-static void pages_init(unsigned long pages) {
-    unsigned long cap = 1024UL;
-    while (cap < pages * 2UL) { cap = cap * 2UL; }
-    gPages.slots = Vec::with_cap(cap);
-    for (unsigned long i = 0UL; i < cap; i = i + 1UL) { gPages.slots.push(-1LL); }
-    gPages.keys = Vec::new();
-    gPages.vals = Vec::new();
-}
-
-static unsigned long page_slot(const &char key) {
-    unsigned long mask = gPages.slots.len - 1UL;
-    unsigned long i = link_hash(key) & mask;
-    for (;;) {
-        long long e = *gPages.slots.at(i);
-        if (e < 0LL || gPages.keys.at((unsigned long)e).eq_cstr(key)) { return i; }
-        i = (i + 1UL) & mask;
-    }
-    return 0UL;
-}
-
 // Makes 'url' (an item page, ".../kind.Name.html") unique ignoring case,
 // and claims it: the first page keeps its path, a later one whose path
 // matches it but for case (macro.PRIx32 / macro.PRIX32), or exactly (one
@@ -156,19 +86,14 @@ static unsigned long page_slot(const &char key) {
 // one file, the second overwriting the first. Items are claimed in doc.json
 // order, so another crate's reference linking into this one (its items in
 // the same order) picks the same paths.
-static void claim_page(&String url) {
+static void claim_page(&Crate c, &String url) {
     struct String base = url.strip_suffix(".html");
     struct String cand = url.clone();
     long long n = 2LL;
     for (;;) {
         struct String lc = cand.to_lower();
-        unsigned long s = page_slot(lc.as_ptr());
-        if (*gPages.slots.at(s) < 0LL) {
-            // Full (more pages than counted): stop claiming rather than loop.
-            if ((gPages.keys.len + 1UL) * 10UL <= gPages.slots.len * 9UL) {
-                gPages.keys.push(lc.clone());
-                gPages.slots.set(s, (long long)gPages.keys.len - 1LL);
-            }
+        if (!c.pages.contains(lc.as_ptr())) {
+            c.pages.insert(lc.as_ptr(), 1LL);
             lc.free();
             break;
         }
@@ -186,16 +111,12 @@ static void claim_page(&String url) {
     base.free();
 }
 
+// The first link registered for a name wins.
 static void add_link(&Crate c, const &String key, const &String url) {
     if (key.len == 0UL) { return; }
-    // Full (more names than counted): drop the rest rather than loop.
-    if ((gLinks.keys.len + 1UL) * 10UL > gLinks.slots.len * 9UL) { return; }
-    unsigned long s = link_slot(key.as_ptr());
-    if (*gLinks.slots.at(s) >= 0LL) { return; }
+    if (c.links.contains(key.as_ptr())) { return; }
     c.link_urls.push(url.clone());
-    gLinks.keys.push(key.clone());
-    gLinks.vals.push((long long)c.link_urls.len - 1LL);
-    gLinks.slots.set(s, (long long)gLinks.keys.len - 1LL);
+    c.links.insert(key.as_ptr(), (long long)c.link_urls.len - 1LL);
 }
 
 static void add_link_cstr(&Crate c, const &char key, const &String url) {
@@ -205,9 +126,9 @@ static void add_link_cstr(&Crate c, const &char key, const &String url) {
 }
 
 long long crate_resolve(const &Crate c, const &char name) {
-    if (gLinks.slots.len == 0UL) { return -1LL; }
-    long long e = *gLinks.slots.at(link_slot(name));
-    return e < 0LL ? -1LL : *gLinks.vals.at((unsigned long)e);
+    ?&long long e = c.links.get(name);
+    match (e) { case some(v): { return *v; } case null: { } }
+    return -1LL;
 }
 
 // Registers 'Name', 'ns::Name' and each member 'Name::m' / 'ns::Name::m'.
@@ -382,15 +303,8 @@ int crate_load(&Crate c, const &char config_path) {
     readme.free();
     int show_private = util_vbool(&c.cfg, "private");
 
-    // Names to index: each item twice (Name, ns::Name), each member twice,
-    // each module once.
-    &Value all_items = util_vget(&doc, "items", &doc);
-    unsigned long names = 0UL;
-    for (unsigned long i = 0UL; i < all_items.array_len(); i = i + 1UL) {
-        names = names + 2UL + 2UL * util_vget(all_items.array_at(i), "members", &doc).array_len();
-    }
-    links_init(names + 4096UL);
-    pages_init(all_items.array_len() + 16UL);
+    c.links = StrMap::new();
+    c.pages = StrMap::new();
 
     struct String empty = String::new();
     ensure_module(c, &empty);
@@ -446,7 +360,7 @@ int crate_load(&Crate c, const &char config_path) {
                     url.push_str(&dir);
                     struct String page = item_page_name(it);
                     url.push_str(&page);
-                    claim_page(&url);
+                    claim_page(c, &url);
                     link_item(c, it, &url);
                     dir.free(); page.free();
                 }
@@ -476,7 +390,7 @@ int crate_load(&Crate c, const &char config_path) {
             item.url.push_str(&page);
             page.free();
             // Its own page, even beside one of the same name but for case.
-            claim_page(&item.url);
+            claim_page(c, &item.url);
             crate_name.free();
             load_members(&item, it, show_private);
             link_item(c, it, &item.url);

@@ -433,11 +433,15 @@ int check_binary(int e) {
 
 // ── assignment ───────────────────────────────────────────────────────────────
 int base_var_sym(int e) {
-    // the symbol (scope index) of the variable at the root of a '.' chain
+    // the symbol (scope index) of the variable at the root of a '.'/'->'
+    // chain ('->' is judged like '.' through a reference: by the variable
+    // holding the pointer); -2 when the root is a call ('f().p': the storage
+    // a returned reference designates outlives every scope of this function)
     int cur = e;
     while (cur != 0) {
         if (g_node[cur].kind == E_IDENT) { return lookup_local(g_node[cur].sid); }
-        if (g_node[cur].kind == E_MEMBER && (g_node[cur].flags & NF_ARROW) == 0) { cur = g_node[cur].a; continue; }
+        if (g_node[cur].kind == E_MEMBER) { cur = g_node[cur].a; continue; }
+        if (g_node[cur].kind == E_CALL && cur != e) { return -2; }
         return -1;
     }
     return -1;
@@ -485,8 +489,8 @@ int check_assign(int e) {
     if (g_ty[rt].kind == TY_REF) {
         int bs = base_var_sym(lhs);
         int r = g_ty[rt].n;
-        if (bs >= 0 && (g_sym[bs].kind == SYM_LOCAL)) {
-            int vdepth = g_local[g_sym[bs].idx].depth;
+        if (bs == -2 || (bs >= 0 && (g_sym[bs].kind == SYM_LOCAL))) {
+            int vdepth = bs == -2 ? -1 : g_local[g_sym[bs].idx].depth;
             if (r == R_STACK && vdepth < g_depth) {
                 msg_reset();
                 msg_lit("cannot assign '&stack ");

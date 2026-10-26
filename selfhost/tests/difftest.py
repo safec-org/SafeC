@@ -135,7 +135,8 @@ for f in ctest_files:
     src = open(f, encoding="utf-8").read()
     neg = "EXPECT-ERROR:" in src
     m = re.search(r"^// SAFEC-ARGS: *(.*)$", src, re.M)
-    extra = m.group(1).split() if m else []
+    # '%root' is the repository root (compiler/tests/run.sh expands it too)
+    extra = m.group(1).replace("%root", os.path.dirname(ROOT)).split() if m else []
     rc, _, n_diag = run([args.safec, f, "--emit-llvm", "-o", os.path.join(tmp, "ct.ll")] + extra)
     n_ok = rc == 0
     if args.scc_wasm:
