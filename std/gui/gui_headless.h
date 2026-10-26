@@ -31,6 +31,11 @@ namespace std {
 
 // The headless backend's table.
 &GuiBackend gui_headless_backend();
+// 1 if $SAFEC_GUI_BACKEND is "headless" (always 0 where there is no
+// environment: WebAssembly, bare metal). The platform backends'
+// gui_platform_backend() check it, so any GUI program can be run without a
+// display (CI, servers) by setting SAFEC_GUI_BACKEND=headless.
+int  gui_headless_requested();
 // Installs it (gui_set_backend). Returns 0 if a window already exists.
 int  gui_use_headless();
 

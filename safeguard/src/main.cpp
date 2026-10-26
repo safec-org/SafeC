@@ -37,7 +37,9 @@ Commands:
   run   [args..]Build and immediately run the output binary
   bundle        Build the bin target and package it per its [bundle] table:
                 build/<name>.app (macOS), build/<name>/ (Windows),
-                a .deb and build/<name>.AppDir (Linux)
+                a .deb and build/<name>.AppDir (Linux), and with
+                --target wasm32 build/<name>.web/: the module, its JS glue
+                and an index.html (no [bundle] table needed)
   clean         Remove the build/ and deps/ directories
   verify-lock   Check Package.lock against current dependency state
   lint          Run static-analysis lint passes on all source files
@@ -93,6 +95,12 @@ Dependency format in Package.toml:
   codesign_identity  = "-"             # macOS: "-" ad-hoc, identity, "none"
   depends    = ["libsqlite3-0"]        # Linux: the .deb's Depends (with
                                        # those std's modules name)
+  web_entry   = "start"                # wasm32: the export the page calls
+  web_present = "webgl"                # wasm32: "webgl" or "2d" (std/gui)
+  web_windows = "frames"               # wasm32: "canvas" (default) / "frames"
+  web_page    = "web/index.html"       # wasm32: your page instead of one made
+  web_files   = ["/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"]
+                                       # wasm32: files the module can fopen()
 
 Options (build / run / check / test):
   --release     Enable optimisations (-O2)

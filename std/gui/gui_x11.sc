@@ -23,6 +23,8 @@
 #include <std/stddef.h>
 #include <std/gui/gui.h>
 #include <std/gui/gui_backend.h>
+#include <std/gui/gui_headless.h>
+#include <std/gui/gui_wayland.h>
 #include <std/mem.h>
 #include <std/time.h>
 #include <std/collections/string.h>
@@ -1140,7 +1142,7 @@ static struct GuiNativeHandle __gui_x11_native(&GuiWindowState st) {
     return h;
 }
 
-&GuiBackend gui_platform_backend() {
+static &GuiBackend __gui_x11_backend() {
     if (!gX11BackendInit) {
         gX11Backend.name = "x11";
         gX11Backend.primaryMod = GUI_MOD_CTRL;
@@ -1165,6 +1167,47 @@ static struct GuiNativeHandle __gui_x11_native(&GuiWindowState st) {
         gX11BackendInit = 1;
     }
     return &gX11Backend;
+}
+
+static int __gui_x11_env_is(const char* v, const char* want) {
+    unsafe {
+        if (v == (const char*)0) { return 0; }
+        unsigned long i = 0UL;
+        while (want[i] != '\0' && v[i] == want[i]) { i = i + 1UL; }
+        return (want[i] == '\0' && v[i] == '\0') ? 1 : 0;
+    }
+}
+
+static ?&GuiBackend gGuiUnixChoice = null;
+
+// Linux/BSD: $SAFEC_GUI_BACKEND (x11 | wayland | headless) if set, else
+// Wayland when $WAYLAND_DISPLAY is set and libwayland-client loads and
+// connects (see gui_wayland.h), else X11. Decided once.
+&GuiBackend gui_platform_backend() {
+    match (gGuiUnixChoice) {
+        case some(b): return b;
+        case null: { }
+    }
+    &GuiBackend choice = __gui_x11_backend();
+    unsafe {
+        const char* want = getenv("SAFEC_GUI_BACKEND");
+        if (gui_headless_requested()) {
+            choice = gui_headless_backend();
+        } else if (__gui_x11_env_is(want, "x11")) {
+            // as is
+        } else if (__gui_x11_env_is(want, "wayland")) {
+            ?&GuiBackend wl = gui_wayland_backend();
+            match (wl) { case some(b): { choice = b; } case null: { } }
+        } else {
+            const char* wd = getenv("WAYLAND_DISPLAY");
+            if (wd != (const char*)0 && wd[0] != '\0' && gui_wayland_available()) {
+                ?&GuiBackend wl = gui_wayland_backend();
+                match (wl) { case some(b): { choice = b; } case null: { } }
+            }
+        }
+    }
+    gGuiUnixChoice = choice;
+    return choice;
 }
 
 } // namespace std

@@ -14,7 +14,7 @@
 // The stream blocks the worker thread that runs it; give long-lived
 // streams their own thread (or a server with enough workers).
 //
-// Client: SseClient connects to an http:// URL and yields parsed events;
+// Client: SseClient connects to an http:// or https:// URL and yields parsed events;
 // SseParser is the incremental parser underneath, usable on any byte
 // source.
 #pragma once
@@ -70,16 +70,20 @@ struct SseParser {
 
 struct SseClient {
     int              fd;
+    ?&heap TlsStream tls;       // the TLS session for https://, else null
     int              chunked;   // the response used chunked transfer coding
     unsigned long    chunk_left;
     int              eof;
     struct SseParser parser;
     struct String    raw;       // undecoded bytes when chunked
 
-    // GETs 'url' (http:// only) with Accept: text/event-stream and checks
-    // for a 200 text/event-stream response. 'last_event_id' (or null) is
-    // sent as Last-Event-ID. *ok = 0 on any failure.
+    // GETs 'url' (http:// or https://) with Accept: text/event-stream and
+    // checks for a 200 text/event-stream response. 'last_event_id' (or
+    // null) is sent as Last-Event-ID. *ok = 0 on any failure. connect_tls
+    // takes https:// settings ('cfg' null: TlsConfig::new()'s defaults).
     static struct SseClient connect(const &char url, const ?&char last_event_id, int timeout_ms, ?&int ok);
+    static struct SseClient connect_tls(const &char url, const ?&char last_event_id, const ?&TlsConfig cfg,
+                                        int timeout_ms, ?&int ok);
     // Blocks for the next event: 1 with 'out' filled, 0 once the stream
     // ended or failed.
     int  next(&SseEvent out);

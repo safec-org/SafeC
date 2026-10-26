@@ -55,7 +55,7 @@ Options:
   --version=<tag>   Release tag to install, e.g. v1.0.0-beta-4
                     (default: the newest release, including pre-releases)
   --std=<sections>  The prebuilt std sections to install, comma-separated:
-                    core (std/*.sc), collections, gui, ml, crypto, net, http,
+                    core (std/*.sc), collections, gui, ml, crypto, tls, net, http,
                     dsp, audio, fs, sync, async, alloc, simd, ... (std's top-level
                     directories), or 'all' (the default). std's sources are
                     always installed: a build that needs a section that

@@ -45,7 +45,9 @@ bool stdVariantMatches(const fs::path& src, const std::string& triple, bool bare
         linux_ = triple.find("linux") != std::string::npos;
         bsd = triple.find("bsd") != std::string::npos;
     }
-    if (endsWith("_fb")) return bareMetal;   // bare-metal framebuffer backend (see gui_fb.sc)
+    // bare-metal framebuffer backend (see gui_fb.sc); WebAssembly, which
+    // safeguard also treats as bare metal, has its own (_wasm: gui_web_wasm.sc)
+    if (endsWith("_fb")) return bareMetal && triple.rfind("wasm", 0) != 0;
     // WebAssembly host (browser/Node) backends: JS imports, see audio_webaudio_wasm.sc.
     if (endsWith("_wasm")) return triple.rfind("wasm", 0) == 0;
     if (bareMetal) {
@@ -241,10 +243,10 @@ const StdIndex& StdIndex::load(const std::string& stdDir) {
             } else if (kind == "runtime-symbol") {
                 if (f.header || args.empty()) { bad("a .sc names its symbol prefixes"); continue; }
                 f.runtimeSymbols.insert(f.runtimeSymbols.end(), args.begin(), args.end());
-            } else if (kind == "link" || kind == "deb") {
+            } else if (kind == "link" || kind == "deb" || kind == "deb-recommends") {
                 if (f.header || args.size() < 2) { bad("expects '<os> <items...>' in a .sc"); continue; }
                 LinkRule r{args[0], std::vector<std::string>(args.begin() + 1, args.end())};
-                (kind == "link" ? f.links : f.debs).push_back(r);
+                (kind == "link" ? f.links : kind == "deb" ? f.debs : f.debRecommends).push_back(r);
             } else {
                 bad("unknown directive");
             }
@@ -493,6 +495,19 @@ std::vector<std::string> StdIndex::debDepends(const std::set<std::string>& unitS
         auto it = files.find(u);
         if (it == files.end()) continue;
         for (auto& r : it->second.debs)
+            if (osMatches(r.os, p))
+                for (auto& d : r.flags)
+                    if (std::find(out.begin(), out.end(), d) == out.end()) out.push_back(d);
+    }
+    return out;
+}
+
+std::vector<std::string> StdIndex::debRecommends(const std::set<std::string>& unitSet, const StdPlatform& p) const {
+    std::vector<std::string> out;
+    for (auto& u : unitSet) {
+        auto it = files.find(u);
+        if (it == files.end()) continue;
+        for (auto& r : it->second.debRecommends)
             if (osMatches(r.os, p))
                 for (auto& d : r.flags)
                     if (std::find(out.begin(), out.end(), d) == out.end()) out.push_back(d);
