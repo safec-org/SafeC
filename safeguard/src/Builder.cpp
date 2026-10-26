@@ -2765,6 +2765,22 @@ bool Builder::test() {
     depIncludes(userIncs, depForeignIncs);
     bool depsCxx = depsNeedCxx();
 
+    // A library package (staticlib / cdylib): its tests exercise it, so
+    // build it as a static archive first and put its src/ on their include
+    // path (include/ already is).
+    std::string libArchive;
+    if (manifest_.build.crateType != "bin" && fs::exists(fs::path(root_) / "src")) {
+        BuildOptions lo = opts_;
+        lo.crateType = "staticlib";
+        Builder lib(root_, manifest_, lo);
+        if (!lib.build()) {
+            std::cerr << "safeguard: building the library for its tests failed\n";
+            return false;
+        }
+        libArchive = lib.outputPath();
+        userIncs.push_back((fs::path(root_) / "src").string());
+    }
+
     std::string safecBin = findSafec();
     fs::path buildDir = fs::path(root_) / "build" / "tests";
     fs::create_directories(buildDir);
@@ -2805,6 +2821,8 @@ bool Builder::test() {
         }
     }
     std::vector<std::string> archives;
+    // A library's tests link the library itself (built as a static archive).
+    if (!libArchive.empty()) archives.push_back(libArchive);
     for (auto& f : depLinkInputs()) archives.push_back(f);
     for (auto& a : stdLinkInputs()) archives.push_back(a);
 
