@@ -1397,6 +1397,31 @@ std::unique_ptr<StructDecl> Parser::parseStructDecl(bool isUnion, bool consumeTr
         // otherwise it's a field declaration.
         // Heuristic: after parsing type + name, check for '('
         auto savedPos = pos_;
+        // Thread-safety markers: 'unsafe impl Send + Sync;' promises the
+        // type is safe to move to / share between threads although its
+        // fields don't show it (a lock wrapping a raw handle);
+        // 'impl !Send;' / 'impl !Sync;' withdraw what the fields would
+        // give (a window that must stay on its UI thread). See
+        // Sema::threadSafety.
+        if ((cur().is(TK::KW_unsafe) && peek().isIdent("impl")) || cur().isIdent("impl")) {
+            bool isUnsafe = cur().is(TK::KW_unsafe);
+            SourceLocation mloc = cur().loc;
+            if (isUnsafe) consume();
+            consume(); // 'impl'
+            do {
+                bool neg = match(TK::Bang);
+                if (!cur().is(TK::Ident)) { diag_.error(cur().loc, "expected 'Send' or 'Sync' after 'impl'"); break; }
+                std::string t = cur().text;
+                consume();
+                if (t != "Send" && t != "Sync")
+                    diag_.error(mloc, "only the marker traits 'Send' and 'Sync' can be implemented explicitly, not '" + t + "'");
+                else if (!neg && !isUnsafe)
+                    diag_.error(mloc, "'impl " + t + "' is a promise the compiler can't check: write 'unsafe impl " + t + "'");
+                sd->threadMarkers.push_back((neg ? "!" : "") + t);
+            } while (match(TK::Plus));
+            expect(TK::Semicolon, "expected ';' after 'impl' marker");
+            continue;
+        }
         // 'generic<T> [static] R m(...);' — a method with its own type
         // parameters; 'static T make(...);' — a static method (no self)
         std::vector<GenericParam> memberGenerics;
@@ -1501,6 +1526,8 @@ std::unique_ptr<StructDecl> Parser::parseStructDecl(bool isUnion, bool consumeTr
             }
             expect(TK::RParen, "expected ')' closing method parameter list");
             if (cur().is(TK::KW_const)) { consume(); md.isConst = true; }
+            // 'consume': the method destroys *self (see MethodDecl::isConsume).
+            if (cur().isIdent("consume")) { consume(); md.isConsume = true; }
             md.isStatic = staticMember;
             md.genericParams = std::move(memberGenerics);
             if (md.isStatic && md.isConst)
@@ -1869,6 +1896,7 @@ std::unique_ptr<CompoundStmt> Parser::parseCompoundStmt() {
         // variable it refers to.
         if (pendingExtraStmt_) cs->body.push_back(std::move(pendingExtraStmt_));
     }
+    cs->endLoc = cur().loc;
     expect(TK::RBrace, "expected '}'");
     return cs;
 }

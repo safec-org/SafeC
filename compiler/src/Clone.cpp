@@ -395,6 +395,7 @@ static StmtPtr cloneStmtImpl(const Stmt *sp, const TypeSubst &subs) {
     case StmtKind::Compound: {
         auto &cs = static_cast<const CompoundStmt &>(s);
         auto res = std::make_unique<CompoundStmt>(cs.loc);
+        res->endLoc = cs.endLoc;
         for (auto &st : cs.body)
             res->body.push_back(cloneStmtImpl(st.get(), subs));
         return res;
@@ -555,6 +556,7 @@ std::unique_ptr<FunctionDecl> cloneFunctionDecl(const FunctionDecl &fn,
     clone->isMethod      = fn.isMethod;
     clone->methodOwner   = fn.methodOwner;
     clone->isStaticMethod = fn.isStaticMethod;
+    clone->isConsume     = fn.isConsume;
     clone->isConstMethod = fn.isConstMethod;
     clone->isMustUse     = fn.isMustUse;
     // Bare-metal / effect system attrs
@@ -639,12 +641,14 @@ std::unique_ptr<StructDecl> cloneStructDecl(const StructDecl &sd,
         fd.isVolatile  = f.isVolatile;
         clone->fields.push_back(std::move(fd));
     }
+    clone->threadMarkers = sd.threadMarkers;
     for (auto &md : sd.methodDecls) {
         MethodDecl cmd;
         cmd.name       = md.name;
         cmd.returnType = substituteType(md.returnType, subs);
         cmd.isConst    = md.isConst;
         cmd.isStatic   = md.isStatic;
+        cmd.isConsume  = md.isConsume;
         cmd.genericParams = md.genericParams;
         cmd.loc        = md.loc;
         for (auto &p : md.params) {

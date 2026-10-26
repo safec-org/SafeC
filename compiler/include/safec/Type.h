@@ -230,6 +230,9 @@ struct StructType : Type {
     // becomes the mangled "Box_int") whose own typeArgs is empty, same
     // as any ordinary struct. Never set on a StructDecl's own '.type'.
     std::vector<TypePtr>  typeArgs;
+    // Explicit thread-safety markers from the declaration ("Send", "Sync",
+    // "!Send", "!Sync"; see StructDecl::threadMarkers).
+    std::vector<std::string> threadMarkers;
 
     explicit StructType(std::string n, bool isUnion = false)
         : Type(TypeKind::Struct), name(std::move(n)), isUnion(isUnion) {}

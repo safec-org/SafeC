@@ -50,6 +50,10 @@ const Sema::TraitDef Sema::builtinTraits_[] = {
     { "Sub",        {"operator-"} },
     { "Mul",        {"operator*"} },
     { "Div",        {"operator/"} },
+    // A type with a destructor: 'void drop();'. Values of a Drop type (and
+    // of every aggregate holding one) must be explicitly dropped or moved
+    // on every path — see the ownership checking in MemoryFlow.cpp.
+    { "Drop",       {"drop"} },
     { "", {} }  // sentinel
 };
 
@@ -69,7 +73,8 @@ void Sema::checkTraitSupertraits() {
         auto &supers = userTraitSupers_[t];
         for (size_t i = 0; i < supers.size();) {
             const std::string &s = supers[i];
-            bool known = userTraits_.count(s) || isBuiltinTrait(s) || s == "Indexed" || s == "Pointer";
+            bool known = userTraits_.count(s) || isBuiltinTrait(s) || s == "Indexed" || s == "Pointer" ||
+                         s == "Send" || s == "Sync";
             if (!known) {
                 diag_.error(userTraitLocs_[t], "unknown supertrait '" + s + "' of trait '" + t + "'");
                 supers.erase(supers.begin() + (long)i);
@@ -120,7 +125,11 @@ std::string Sema::traitMismatch(const TypePtr &ty, const std::string &trait) con
 
     // Primitive numeric types satisfy Numeric/Ord/Eq/Add/Sub/Mul/Div — not
     // user traits, which name methods a primitive doesn't have.
-    if (ty->isArithmetic()) return isBuiltinTrait(trait) ? "" : "-";
+    if (trait == "Send" || trait == "Sync") {
+        std::string why = threadSafety(ty, trait == "Sync");
+        return why;
+    }
+    if (ty->isArithmetic()) return isBuiltinTrait(trait) && trait != "Drop" ? "" : "-";
     // Struct types: check if they have the required operator/method names —
     // whether 'trait' names a builtin trait or a user 'trait Name { ... }'
     // declaration, both are just a list of required method names.
@@ -170,6 +179,147 @@ std::string Sema::traitMismatch(const TypePtr &ty, const std::string &trait) con
         }
     }
     return "-";
+}
+
+// ── Ownership and thread-safety predicates ───────────────────────────────────
+namespace {
+const StructType *canonicalStruct(const std::unordered_map<std::string, TypePtr> &reg, const StructType *st) {
+    if (!st) return nullptr;
+    if (st->isDefined && !st->fields.empty()) return st;
+    auto it = reg.find(st->name);
+    if (it != reg.end() && it->second && it->second->kind == TypeKind::Struct)
+        return static_cast<const StructType *>(it->second.get());
+    return st;
+}
+bool hasMarker(const StructType &st, const char *m) {
+    for (auto &x : st.threadMarkers) if (x == m) return true;
+    return false;
+}
+} // namespace
+
+bool Sema::hasDropMethod(const StructType &st0) const {
+    const StructType &st = *canonicalStruct(typeRegistry_, &st0);
+    auto it = methodRegistry_.find(st.name + "::drop");
+    if (it == methodRegistry_.end() || !it->second) return false;
+    const FunctionDecl &f = *it->second;
+    return f.isMethod && !f.isStaticMethod && f.params.size() == 1;
+}
+
+bool Sema::isMustDrop(const TypePtr &t0) const {
+    TypePtr t = t0;
+    while (t && t->kind == TypeKind::Newtype) t = static_cast<NewtypeType &>(*t).base;
+    if (!t) return false;
+    switch (t->kind) {
+    case TypeKind::Struct: {
+        const StructType *st = canonicalStruct(typeRegistry_, static_cast<const StructType *>(t.get()));
+        auto it = mustDropCache_.find(st);
+        if (it != mustDropCache_.end()) return it->second == 1;
+        mustDropCache_[st] = 2;   // a by-value cycle is impossible; guard anyway
+        bool r = hasDropMethod(*st);
+        // A C union's members overlap: which one is live is unknown, so a
+        // union never owns (a tagged union's payload does).
+        if (!r && (!st->isUnion || st->isTaggedUnion))
+            for (auto &f : st->fields)
+                if (isMustDrop(f.type)) { r = true; break; }
+        mustDropCache_[st] = r ? 1 : 0;
+        return r;
+    }
+    case TypeKind::Array:    return isMustDrop(static_cast<ArrayType &>(*t).element);
+    case TypeKind::Optional: return isMustDrop(static_cast<OptionalType &>(*t).inner);
+    case TypeKind::Tuple:
+        for (auto &e : static_cast<TupleType &>(*t).elementTypes) if (isMustDrop(e)) return true;
+        return false;
+    default: return false;
+    }
+}
+
+bool Sema::isConsumeMethod(const FunctionDecl *fd) const {
+    if (!fd || !fd->isMethod || fd->isStaticMethod) return false;
+    if (fd->isConsume) return true;
+    const std::string &owner = fd->methodOwner;
+    std::string mname = fd->name.size() > owner.size() + 1 && fd->name.compare(0, owner.size(), owner) == 0
+                            ? fd->name.substr(owner.size() + 1) : fd->name;
+    if (mname == "drop" && fd->params.size() == 1) return true;
+    auto it = methodBodyDecl_.find(owner + "::" + mname);
+    return it != methodBodyDecl_.end() && it->second && it->second->isConsume;
+}
+
+// Send: a value of the type can move to another thread. Sync: a 'const &T'
+// to it can be shared between threads. syncMut: a mutable '&T' can be
+// shared (every write through it is synchronized). Auto-derived from the
+// structure: scalars are Send + Sync (not syncMut); raw pointers are
+// neither; a reference is Send only into static data (const: Sync of the
+// pointee; mutable: syncMut of it); aggregates are what all their members
+// are. Inside a Drop type, raw-pointer and '&heap' fields are the type's
+// own uniquely owned buffers, so they count as their pointee. Explicit
+// markers in the struct body override: 'unsafe impl Send/Sync;' (Sync also
+// gives syncMut: the type synchronizes its own state), 'impl !Send/!Sync;'.
+std::string Sema::threadSafety(const TypePtr &t0, bool sync, bool syncMut, bool inOwner, int depth) const {
+    TypePtr t = t0;
+    while (t && t->kind == TypeKind::Newtype) t = static_cast<NewtypeType &>(*t).base;
+    if (!t) return "-";
+    if (depth > 24) return "";
+    const char *what = syncMut ? "shared mutably between threads" : sync ? "shared between threads"
+                                                                         : "sent to another thread";
+    switch (t->kind) {
+    case TypeKind::Void: case TypeKind::Bool: case TypeKind::Char:
+    case TypeKind::Int8: case TypeKind::Int16: case TypeKind::Int32: case TypeKind::Int64:
+    case TypeKind::UInt8: case TypeKind::UInt16: case TypeKind::UInt32: case TypeKind::UInt64:
+    case TypeKind::Float32: case TypeKind::Float64: case TypeKind::Enum: case TypeKind::Vector:
+        if (syncMut) return "'" + t->str() + "' is plain data: concurrent writes race (use a Mutex or atomics)";
+        return "";
+    case TypeKind::Function: return "";
+    case TypeKind::Pointer: {
+        auto &pt = static_cast<PointerType &>(*t);
+        if (inOwner && !syncMut) {
+            if (!pt.base || pt.base->kind == TypeKind::Void) return "";
+            return threadSafety(pt.base, sync, false, false, depth + 1);
+        }
+        return "raw pointer '" + t->str() + "' can't be " + what + " (nothing guards what it points to)";
+    }
+    case TypeKind::Reference: {
+        auto &rt = static_cast<ReferenceType &>(*t);
+        if (rt.base && rt.base->kind == TypeKind::Function) return "";
+        if (syncMut) return "a reference stored in shared mutable memory can be overwritten concurrently";
+        if (inOwner && rt.region == Region::Heap) return threadSafety(rt.base, sync, false, false, depth + 1);
+        if (!sync && rt.region != Region::Static)
+            return "'" + t->str() + "' refers to " +
+                   (rt.region == Region::Stack ? std::string("stack") : rt.region == Region::Arena ? std::string("arena")
+                    : rt.region == Region::Heap ? std::string("heap") : std::string("borrowed")) +
+                   " data that may not outlive the other thread";
+        std::string why = threadSafety(rt.base, true, rt.mut, false, depth + 1);
+        return why.empty() ? "" : "'" + t->str() + "': " + why;
+    }
+    case TypeKind::Slice: {
+        if (syncMut) return "a slice stored in shared mutable memory can be overwritten concurrently";
+        if (!sync) return "slice '" + t->str() + "' is a view of memory that may not outlive the other thread";
+        auto &sl = static_cast<SliceType &>(*t);
+        std::string why = threadSafety(sl.element, true, true, false, depth + 1);
+        return why.empty() ? "" : "'" + t->str() + "': " + why;
+    }
+    case TypeKind::Array: return threadSafety(static_cast<ArrayType &>(*t).element, sync, syncMut, inOwner, depth + 1);
+    case TypeKind::Optional: return threadSafety(static_cast<OptionalType &>(*t).inner, sync, syncMut, inOwner, depth + 1);
+    case TypeKind::Tuple:
+        for (auto &e : static_cast<TupleType &>(*t).elementTypes) {
+            std::string why = threadSafety(e, sync, syncMut, inOwner, depth + 1);
+            if (!why.empty()) return why;
+        }
+        return "";
+    case TypeKind::Struct: {
+        const StructType *st = canonicalStruct(typeRegistry_, static_cast<const StructType *>(t.get()));
+        if (!sync && hasMarker(*st, "!Send")) return "'" + st->name + "' is marked 'impl !Send'";
+        if (sync && hasMarker(*st, "!Sync")) return "'" + st->name + "' is marked 'impl !Sync'";
+        if (!sync && hasMarker(*st, "Send")) return "";
+        if (sync && hasMarker(*st, "Sync")) return "";
+        bool owner = hasDropMethod(*st);
+        for (auto &f : st->fields) {
+            std::string why = threadSafety(f.type, sync, syncMut, owner, depth + 1);
+            if (!why.empty()) return why == "-" ? why : "'" + st->name + "' field '" + f.name + "': " + why;
+        }
+        return "";
+    }
+    default: return "-";
+    }
 }
 
 // ── Scope ─────────────────────────────────────────────────────────────────────
@@ -806,6 +956,7 @@ void Sema::collectFunction(FunctionDecl &fn) {
         if (dit != methodBodyDecl_.end() && dit->second != &fn &&
             dit->second->genericParams.size() == fn.genericParams.size()) {   // else reported above
             FunctionDecl &d = *dit->second;
+            fn.isConsume = fn.isConsume || d.isConsume;
             // The declaration was resolved when its struct was collected; a
             // typedef declared after the struct only resolves now.
             if (d.returnType) d.returnType = resolveType(d.returnType);
@@ -924,6 +1075,7 @@ void Sema::collectStruct(StructDecl &sd) {
     auto st = std::make_shared<StructType>(sd.name, sd.isUnion);
     st->isDefined = true;
     st->isPacked  = sd.isPacked;
+    st->threadMarkers = sd.threadMarkers;
 
     // Register the struct *before* resolving its fields — a self-referential
     // field like 'struct Node* next;' inside 'struct Node' needs
@@ -1038,6 +1190,9 @@ void Sema::collectStruct(StructDecl &sd) {
         synth->methodOwner   = sd.name;
         synth->isConstMethod = md.isConst;
         synth->isStaticMethod = md.isStatic;
+        synth->isConsume     = md.isConsume || (md.name == "drop" && md.params.empty() && !md.isStatic);
+        if (md.isConsume && md.isStatic)
+            diag_.error(md.loc, "a static method has no 'self' and can't be 'consume'");
         synth->genericParams = md.genericParams;
         synth->isExtern      = true; // no body here; defined elsewhere and linked
         collectFunction(*synth);

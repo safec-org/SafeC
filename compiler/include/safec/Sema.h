@@ -67,6 +67,21 @@ public:
     // Run all analyses; returns false if there were errors
     bool run();
 
+    // ── Ownership (Drop) and thread safety (Send/Sync) ──────────────────────
+    // A struct with a 'void drop()' method implements the builtin Drop
+    // trait. A value is must-drop when its type implements Drop or holds a
+    // must-drop value by value (a field, an array element, a tuple member,
+    // an optional's payload) — references, pointers and slices only borrow.
+    bool hasDropMethod(const StructType &st) const;
+    bool isMustDrop(const TypePtr &ty) const;
+    // drop() itself, or a method declared 'consume' in its struct body.
+    bool isConsumeMethod(const FunctionDecl *fd) const;
+    // "" when 'ty' is Send (sync=false) / Sync (sync=true), else why not.
+    // 'syncMut' asks whether shared *mutable* access is race-free (only
+    // types marked 'unsafe impl Sync' and aggregates of them).
+    std::string threadSafety(const TypePtr &ty, bool sync, bool syncMut = false,
+                             bool inOwner = false, int depth = 0) const;
+
 private:
     // ── Scope management ──────────────────────────────────────────────────────
     void pushScope(bool isUnsafe = false);
@@ -148,6 +163,7 @@ private:
     // body (monomorphized instances included) is type-checked.
     void checkMemoryFlow();
     std::vector<FunctionDecl *> checkedFns_;
+    mutable std::unordered_map<const StructType *, int> mustDropCache_;   // 0 no, 1 yes, 2 in progress
 
     // ── Region safety ─────────────────────────────────────────────────────────
     // Returns the scope depth a reference type originated from
