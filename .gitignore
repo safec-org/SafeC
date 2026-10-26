@@ -5,4 +5,5 @@ build/
 compiler/build/
 *.bc
 *.ll
-*.o__pycache__/
+*.o
+__pycache__/
