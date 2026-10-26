@@ -367,6 +367,13 @@ TypePtr Sema::resolveType(TypePtr ty) {
         if (resolvedElem != vt.element)
             return makeVector(resolvedElem, vt.width);
     }
+    // '[]Fixed' / '[]S24': the element type is a name like any other.
+    if (ty->kind == TypeKind::Slice) {
+        auto &sl = static_cast<SliceType &>(*ty);
+        auto resolvedElem = resolveType(sl.element);
+        if (resolvedElem != sl.element)
+            return makeSlice(resolvedElem, sl.constElem);
+    }
     // 'fn void(&Node<F16>)': resolve the parameter and return types too, so a
     // generic struct named there is the same instance as everywhere else.
     if (ty->kind == TypeKind::Function) {
