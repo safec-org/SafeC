@@ -26,10 +26,10 @@ struct SockAddrUn {
 };
 
 extern int socket(int domain, int type, int protocol);
-extern int bind(int fd, const unsigned char* addr, unsigned int addrlen);
+extern int bind(int fd, const SockAddrUn* addr, unsigned int addrlen);
 extern int listen(int fd, int backlog);
-extern int accept(int fd, unsigned char* addr, unsigned char* addrlen);
-extern int connect(int fd, const unsigned char* addr, unsigned int addrlen);
+extern int accept(int fd, SockAddrUn* addr, unsigned int* addrlen);
+extern int connect(int fd, const SockAddrUn* addr, unsigned int addrlen);
 extern int fcntl(int fd, int cmd, ...);   // variadic: arm64 Apple passes the 3rd arg on the stack
 extern int unlink(const char* path);
 extern int close(int fd);
@@ -76,7 +76,7 @@ inline int uds_listen_nb(const &char path) {
         return -1;
     }
     int rc;
-    unsafe { rc = bind(fd, (const unsigned char*)&addr, 110U); }
+    unsafe { rc = bind(fd, &addr, 110U); }
     if (rc != 0) {
         unsafe { close(fd); }
         return -1;
@@ -94,7 +94,7 @@ inline int uds_listen_nb(const &char path) {
 
 inline int uds_accept_nb(int listenfd) {
     int fd;
-    unsafe { fd = accept(listenfd, (unsigned char*)0, (unsigned char*)0); }
+    unsafe { fd = accept(listenfd, (SockAddrUn*)0, (unsigned int*)0); }
     if (fd < 0) {
         return -1;
     }
@@ -120,7 +120,7 @@ inline int uds_connect_nb(const &char path) {
         unsafe { close(fd); }
         return -1;
     }
-    unsafe { connect(fd, (const unsigned char*)&addr, 110U); }
+    unsafe { connect(fd, &addr, 110U); }
     // Non-blocking connect(): a non-zero return here almost always just
     // means EINPROGRESS, not failure — see uds.h's comment.
     return fd;

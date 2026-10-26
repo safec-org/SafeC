@@ -27,10 +27,10 @@ struct SockAddrIn {
 
 extern int open(const char* path, int flags, int mode);
 extern int socket(int domain, int type, int protocol);
-extern int bind(int fd, const unsigned char* addr, unsigned int addrlen);
+extern int bind(int fd, const SockAddrIn* addr, unsigned int addrlen);
 extern int listen(int fd, int backlog);
-extern int accept(int fd, unsigned char* addr, unsigned char* addrlen);
-extern int connect(int fd, const unsigned char* addr, unsigned int addrlen);
+extern int accept(int fd, SockAddrIn* addr, unsigned int* addrlen);
+extern int connect(int fd, const SockAddrIn* addr, unsigned int addrlen);
 // Real libc fcntl is 'int fcntl(int fd, int cmd, ...)' — genuinely
 // variadic, not (fd, cmd, arg). Declaring it with a fixed third 'int arg'
 // parameter instead of '...' is a real ABI mismatch on arm64/AAPCS64
@@ -74,8 +74,7 @@ static void sched_no_sigpipe_(int fd) {
 #define SCHED_EINTR         4
 #define SCHED_EINPROGRESS   36
 
-extern int poll(unsigned char* fds, unsigned int nfds, int timeout);
-extern int getsockopt(int fd, int level, int optname, unsigned char* optval, unsigned char* optlen);
+extern int getsockopt(int fd, int level, int optname, unsigned char* optval, unsigned int* optlen);
 extern int close(int fd);
 
 struct SchedPollFd {
@@ -83,6 +82,7 @@ struct SchedPollFd {
     short events;
     short revents;
 };
+extern int poll(SchedPollFd* fds, unsigned int nfds, int timeout);
 
 // 'struct timeval' for SO_RCVTIMEO/SO_SNDTIMEO (16 bytes). FreeBSD's
 // tv_usec is a long; macOS's is a 4-byte int followed by 4 bytes of
@@ -176,7 +176,7 @@ inline int tcp_listen_nb(unsigned short port) {
     addr.sin_zero   = 0UL;
 
     int rc;
-    unsafe { rc = bind(fd, (const unsigned char*)&addr, 16U); }
+    unsafe { rc = bind(fd, &addr, 16U); }
     if (rc != 0) {
         return -1;
     }
@@ -198,7 +198,7 @@ inline int tcp_listen_nb(unsigned short port) {
 
 inline int tcp_accept_nb(int listenfd) {
     int fd;
-    unsafe { fd = accept(listenfd, (unsigned char*)0, (unsigned char*)0); }
+    unsafe { fd = accept(listenfd, (SockAddrIn*)0, (unsigned int*)0); }
     if (fd < 0) {
         return -1;
     }
@@ -246,7 +246,7 @@ static int sched_connect_begin_(unsigned int addr_network_order, unsigned short 
     addr.sin_zero   = 0UL;
 
     int rc;
-    unsafe { rc = connect(fd, (const unsigned char*)&addr, 16U); }
+    unsafe { rc = connect(fd, &addr, 16U); }
     int e = (rc == 0) ? 0 : errno_get();
     unsafe { *err_out = e; }
     return fd;
@@ -282,13 +282,13 @@ static int sched_wait_connected_(int fd, int timeout_ms) {
         pfd.events = (short)SCHED_POLLOUT;
         pfd.revents = (short)0;
         int n;
-        unsafe { n = poll((unsigned char*)&pfd, 1U, wait_ms); }
+        unsafe { n = poll(&pfd, 1U, wait_ms); }
         if (n > 0) {
             int soerr = 0;
             unsigned int len = 4U;
             int grc;
             unsafe { grc = getsockopt(fd, SCHED_SOL_SOCKET, SCHED_SO_ERROR,
-                                      (unsigned char*)&soerr, (unsigned char*)&len); }
+                                      (unsigned char*)&soerr, &len); }
             return (grc != 0) ? errno_get() : soerr;
         }
         if (n == 0) {

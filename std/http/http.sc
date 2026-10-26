@@ -100,7 +100,7 @@ struct AddrInfo_ {
     int    ai_protocol;
     unsigned long ai_addrlen;
 #ifdef __linux__
-    unsigned char*  ai_addr;
+    unsigned char*  ai_addr;   // the sockaddr, as bytes
     char*  ai_canonname;
 #else
     char*  ai_canonname;
@@ -108,8 +108,8 @@ struct AddrInfo_ {
 #endif
     struct AddrInfo_* ai_next;
 };
-extern int  getaddrinfo(const char* node, const char* service, const unsigned char* hints, unsigned char** res);
-extern void freeaddrinfo(unsigned char* res);
+extern int  getaddrinfo(const char* node, const char* service, const AddrInfo_* hints, AddrInfo_** res);
+extern void freeaddrinfo(AddrInfo_* res);
 
 #ifdef _WIN32
 extern int getsockname(unsigned long long fd, unsigned char* addr, int* len);
@@ -646,12 +646,12 @@ int http_resolve_host(const &char host, &unsigned int addr_out) {
     hints.ai_addr = (unsigned char*)0;
     hints.ai_canonname = (char*)0;
     hints.ai_next = (struct AddrInfo_*)0;
-    unsigned char* resPtr = (unsigned char*)0;
+    struct AddrInfo_* resPtr = (struct AddrInfo_*)0;
     int rc;
-    unsafe { rc = getaddrinfo(host, (const char*)0, (const unsigned char*)&hints, &resPtr); }
-    if (rc != 0 || resPtr == (unsigned char*)0) { return 0; }
+    unsafe { rc = getaddrinfo(host, (const char*)0, (const AddrInfo_*)&hints, &resPtr); }
+    if (rc != 0 || resPtr == (struct AddrInfo_*)0) { return 0; }
     unsigned char* sa;
-    unsafe { sa = ((struct AddrInfo_*)resPtr)->ai_addr; }
+    unsafe { sa = resPtr->ai_addr; }
     int found = 0;
     if (sa != (unsigned char*)0) {
         // sockaddr_in.sin_addr sits at byte offset 4 on every platform

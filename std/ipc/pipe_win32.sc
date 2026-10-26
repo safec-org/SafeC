@@ -16,16 +16,20 @@
 
 namespace std {
 
-extern int  CreatePipe(unsigned char* hReadPipe, unsigned char* hWritePipe, unsigned char* lpPipeAttributes, unsigned int nSize);
-extern int  ReadFile(unsigned long long hFile, unsigned char* lpBuffer, unsigned int nNumberOfBytesToRead, unsigned char* lpNumberOfBytesRead, unsigned char* lpOverlapped);
-extern int  WriteFile(unsigned long long hFile, const unsigned char* lpBuffer, unsigned int nNumberOfBytesToWrite, unsigned char* lpNumberOfBytesWritten, unsigned char* lpOverlapped);
+// HANDLEs are held as integers; std passes no SECURITY_ATTRIBUTES or
+// OVERLAPPED (opaque, always null).
+struct Win32SecAttrs_ { char opaque_; };
+struct Win32Overlapped_ { char opaque_; };
+extern int  CreatePipe(unsigned long long* hReadPipe, unsigned long long* hWritePipe, Win32SecAttrs_* lpPipeAttributes, unsigned int nSize);
+extern int  ReadFile(unsigned long long hFile, unsigned char* lpBuffer, unsigned int nNumberOfBytesToRead, unsigned int* lpNumberOfBytesRead, Win32Overlapped_* lpOverlapped);
+extern int  WriteFile(unsigned long long hFile, const unsigned char* lpBuffer, unsigned int nNumberOfBytesToWrite, unsigned int* lpNumberOfBytesWritten, Win32Overlapped_* lpOverlapped);
 extern int  CloseHandle(unsigned long long hObject);
 
 inline int Pipe::init() {
     unsigned long long readH = 0ULL;
     unsigned long long writeH = 0ULL;
     int ok;
-    unsafe { ok = CreatePipe((unsigned char*)&readH, (unsigned char*)&writeH, (unsigned char*)0, 0U); }
+    unsafe { ok = CreatePipe(&readH, &writeH, (Win32SecAttrs_*)0, 0U); }
     if (ok == 0) {
         return -1;
     }
@@ -44,7 +48,7 @@ inline long long Pipe::read([]unsigned char buf_s) {
     unsafe { h = (unsigned long long)self.read_fd; }
     unsigned int got = 0U;
     int ok;
-    unsafe { ok = ReadFile(h, (unsigned char*)buf, (unsigned int)count, (unsigned char*)&got, (unsigned char*)0); }
+    unsafe { ok = ReadFile(h, (unsigned char*)buf, (unsigned int)count, &got, (Win32Overlapped_*)0); }
     if (ok == 0) {
         return -1LL;
     }
@@ -59,7 +63,7 @@ inline long long Pipe::write([]const unsigned char buf_s) {
     unsafe { h = (unsigned long long)self.write_fd; }
     unsigned int sent = 0U;
     int ok;
-    unsafe { ok = WriteFile(h, (const unsigned char*)buf, (unsigned int)count, (unsigned char*)&sent, (unsigned char*)0); }
+    unsafe { ok = WriteFile(h, (const unsigned char*)buf, (unsigned int)count, &sent, (Win32Overlapped_*)0); }
     if (ok == 0) {
         return -1LL;
     }

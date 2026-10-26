@@ -31,7 +31,7 @@ struct KEvent {
     unsigned short  flags;
     unsigned int    fflags;
     long            data;     // intptr_t
-    unsigned char*           udata;
+    unsigned char*  udata;    // void*: std never sets it (null)
 };
 
 struct TimeSpec {
@@ -40,10 +40,10 @@ struct TimeSpec {
 };
 
 extern int   kqueue();
-extern int   kevent(int kq, const unsigned char* changelist, int nchanges,
-                     unsigned char* eventlist, int nevents, const unsigned char* timeout);
+extern int   kevent(int kq, const KEvent* changelist, int nchanges,
+                     KEvent* eventlist, int nevents, const TimeSpec* timeout);
 extern int   close(int fd);
-extern unsigned char* signal(int sig, unsigned char* handler);
+extern fn void(int) signal(int sig, fn void(int) handler);   // sighandler_t
 
 } // namespace std
 
@@ -96,7 +96,7 @@ inline void Reactor::add(int fd, int filter) {
     // before kqueue ever gets a chance to report it — standard, documented
     // kqueue behavior, not optional.
     if (filter == SCHED_SIGNAL) {
-        unsafe { signal(fd, (unsigned char*)SAFEC_SIG_IGN); }
+        unsafe { signal(fd, (fn void(int))SAFEC_SIG_IGN); }
     }
     struct KEvent ev;
     ev.ident  = (unsigned long)fd;
@@ -106,7 +106,7 @@ inline void Reactor::add(int fd, int filter) {
     ev.data   = 0L;
     unsafe { ev.udata = (unsigned char*)0; }
     unsafe {
-        kevent(self.kq, (const unsigned char*)&ev, 1, (unsigned char*)0, 0, (const unsigned char*)0);
+        kevent(self.kq, &ev, 1, (KEvent*)0, 0, (const TimeSpec*)0);
     }
 }
 
@@ -119,7 +119,7 @@ inline void Reactor::remove(int fd, int filter) {
     ev.data   = 0L;
     unsafe { ev.udata = (unsigned char*)0; }
     unsafe {
-        kevent(self.kq, (const unsigned char*)&ev, 1, (unsigned char*)0, 0, (const unsigned char*)0);
+        kevent(self.kq, &ev, 1, (KEvent*)0, 0, (const TimeSpec*)0);
     }
 }
 
@@ -127,17 +127,17 @@ inline void Reactor::remove(int fd, int filter) {
 inline int Reactor::poll_events_raw_(fn void(?&Erased, int, int) on_ready, ?&Erased ctx, long long timeout_ms) {
     struct KEvent events[64];
     struct TimeSpec ts;
-    const unsigned char* toPtr;
+    const TimeSpec* toPtr;
     if (timeout_ms < 0LL) {
-        unsafe { toPtr = (const unsigned char*)0; } // NULL timeout = block indefinitely
+        unsafe { toPtr = (const TimeSpec*)0; } // NULL timeout = block indefinitely
     } else {
         ts.tv_sec  = timeout_ms / 1000LL;
         ts.tv_nsec = (timeout_ms % 1000LL) * 1000000LL;
-        unsafe { toPtr = (const unsigned char*)&ts; }
+        unsafe { toPtr = (const TimeSpec*)&ts; }
     }
     int n;
     unsafe {
-        n = kevent(self.kq, (const unsigned char*)0, 0, (unsigned char*)&events[0], 64, toPtr);
+        n = kevent(self.kq, (const KEvent*)0, 0, &events[0], 64, toPtr);
     }
     if (n <= 0) {
         return 0;

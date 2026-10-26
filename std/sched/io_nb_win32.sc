@@ -78,19 +78,18 @@ struct WSAData_ {
 static_assert(sizeof(struct WSAData_) == 408, "WSADATA is 408 bytes on 64-bit Windows");
 #endif
 
-extern int WSAStartup(unsigned short versionRequested, unsigned char* wsaData);
+extern int WSAStartup(unsigned short versionRequested, WSAData_* wsaData);
 extern int _open(const char* path, int flags, int mode); // MSVCRT — plain (blocking) file open
 extern unsigned long long socket(int domain, int type, int protocol);
-extern int bind(unsigned long long fd, const unsigned char* addr, int addrlen);
+extern int bind(unsigned long long fd, const SockAddrIn* addr, int addrlen);
 extern int listen(unsigned long long fd, int backlog);
-extern unsigned long long accept(unsigned long long fd, unsigned char* addr, unsigned char* addrlen);
-extern int connect(unsigned long long fd, const unsigned char* addr, int addrlen);
+extern unsigned long long accept(unsigned long long fd, SockAddrIn* addr, int* addrlen);
+extern int connect(unsigned long long fd, const SockAddrIn* addr, int addrlen);
 extern int ioctlsocket(unsigned long long fd, int cmd, unsigned int* argp);   // u_long: 32 bits on Windows
 extern int setsockopt(unsigned long long fd, int level, int optname, const unsigned char* optval, int optlen);
 extern int WSAGetLastError();
 extern void WSASetLastError(int err);
-extern int getsockopt(unsigned long long fd, int level, int optname, unsigned char* optval, unsigned char* optlen);
-extern int select(int nfds, unsigned char* readfds, unsigned char* writefds, unsigned char* exceptfds, const unsigned char* timeout);
+extern int getsockopt(unsigned long long fd, int level, int optname, unsigned char* optval, int* optlen);
 extern int closesocket(unsigned long long fd);
 
 #define SAFEC_WSAEWOULDBLOCK 10035
@@ -109,6 +108,7 @@ struct SchedWinTimeval {
     int tv_sec;
     int tv_usec;
 };
+extern int select(int nfds, SchedFdSet1* readfds, SchedFdSet1* writefds, SchedFdSet1* exceptfds, const SchedWinTimeval* timeout);
 
 inline unsigned short sched_htons(unsigned short host16) {
     return (unsigned short)(((host16 & (unsigned short)0xFF) << 8) |
@@ -129,7 +129,7 @@ inline unsigned int sched_ipv4(unsigned char a, unsigned char b,
 
 static void io_nb_wsa_init_() {
     struct WSAData_ wsaData;
-    unsafe { WSAStartup((unsigned short)SAFEC_WSA_VERSION, (unsigned char*)&wsaData); }
+    unsafe { WSAStartup((unsigned short)SAFEC_WSA_VERSION, &wsaData); }
 }
 
 inline int sock_would_block() {
@@ -197,7 +197,7 @@ inline int tcp_listen_nb(unsigned short port) {
     addr.sin_zero   = 0UL;
 
     int rc;
-    unsafe { rc = bind(fd, (const unsigned char*)&addr, 16); }
+    unsafe { rc = bind(fd, &addr, 16); }
     if (rc != 0) {
         return -1;
     }
@@ -214,7 +214,7 @@ inline int tcp_listen_nb(unsigned short port) {
 
 inline int tcp_accept_nb(int listenfd) {
     unsigned long long fd;
-    unsafe { fd = accept((unsigned long long)listenfd, (unsigned char*)0, (unsigned char*)0); }
+    unsafe { fd = accept((unsigned long long)listenfd, (SockAddrIn*)0, (int*)0); }
     // See tcp_listen_nb's identical check for why this must come before
     // touching 'fd' any further — this is the specific call site where
     // the missing check was actually found: an empty accept queue makes
@@ -270,7 +270,7 @@ static int sched_connect_begin_(unsigned int addr_network_order, unsigned short 
     addr.sin_zero   = 0UL;
 
     int rc;
-    unsafe { rc = connect(fd, (const unsigned char*)&addr, 16); }
+    unsafe { rc = connect(fd, &addr, 16); }
     int e = 0;
     if (rc != 0) {
         unsafe { e = WSAGetLastError(); }
@@ -306,8 +306,8 @@ static int sched_wait_connected_(unsigned long long fd, int timeout_ms) {
     tv.tv_usec = (timeout_ms % 1000) * 1000;
     int n;
     unsafe {
-        n = select(0, (unsigned char*)0, (unsigned char*)&wset, (unsigned char*)&eset,
-                   (timeout_ms > 0) ? (const unsigned char*)&tv : (const unsigned char*)0);
+        n = select(0, (SchedFdSet1*)0, &wset, &eset,
+                   (timeout_ms > 0) ? (const SchedWinTimeval*)&tv : (const SchedWinTimeval*)0);
     }
     if (n == 0) {
         return SAFEC_WSAETIMEDOUT;
@@ -321,7 +321,7 @@ static int sched_wait_connected_(unsigned long long fd, int timeout_ms) {
     int len = 4;
     int grc;
     unsafe { grc = getsockopt(fd, SCHED_SOL_SOCKET, SCHED_SO_ERROR,
-                              (unsigned char*)&soerr, (unsigned char*)&len); }
+                              (unsigned char*)&soerr, &len); }
     if (grc != 0) {
         unsafe { err = WSAGetLastError(); }
     } else {

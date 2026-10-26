@@ -12,7 +12,7 @@
 
 namespace std {
 
-extern int   pipe(unsigned char* pipefd);       // int pipefd[2]
+extern int   pipe(int* pipefd);       // int pipefd[2]
 extern ssize_t  read(int fd, unsigned char* buf, size_t count);
 extern ssize_t  write(int fd, const unsigned char* buf, size_t count);
 extern int   close(int fd);
@@ -21,7 +21,7 @@ extern int   fcntl(int fd, int cmd, ...);   // variadic: arm64 Apple passes the 
 inline int Pipe::init() {
     int fds[2];
     int rc;
-    unsafe { rc = pipe((unsigned char*)&fds[0]); }
+    unsafe { rc = pipe(&fds[0]); }
     if (rc != 0) {
         return -1;
     }
