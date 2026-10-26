@@ -1,0 +1,15 @@
+# SafeC Package.lock — auto-generated, do not edit manually
+
+[safec]
+hash = "7ecf8fc38c63c9b4"
+
+[sources]
+"src/check.sc" = "eacd32b889910bf1"
+"src/highlight.sc" = "4453007c4537b628"
+"src/main.sc" = "23b0fcba0ef85ea6"
+"src/model.sc" = "244442cf97e113cf"
+"src/pages.sc" = "52a4593c9faca63d"
+"src/render.sc" = "9740828498948547"
+"src/templates/layout.scx" = "e9cb76e3b96646eb"
+"src/util.sc" = "c6caecbb43337b1d"
+

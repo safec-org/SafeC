@@ -78,10 +78,61 @@ static int is_header(const &String rel) { return rel.ends_with(".h"); }
 
 // ── links ────────────────────────────────────────────────────────────────────
 
+// The name -> link_urls index table: open addressing over a slot array
+// sized once up front (crate_load counts the names first), never rehashed.
+// Hand-rolled rather than a std StrMap: safec's heap-flow analysis reads a
+// StrMap insert (which may rehash, freeing its old arrays) as possibly
+// freeing the Crate's own module/item storage, and rejects every later read.
+struct LinkTable {
+    struct Vec<long long> slots;      // -1 empty, else index into keys/vals
+    struct Vec<struct String> keys;
+    struct Vec<long long> vals;
+};
+static struct LinkTable gLinks;
+
+static unsigned long link_hash(const &char key) {
+    unsigned long h = 1469598103934665603UL;
+    unsigned long i = 0UL;
+    unsafe {
+        while (key[i] != '\0') {
+            h = (h ^ (unsigned long)(unsigned char)key[i]) * 1099511628211UL;
+            i = i + 1UL;
+        }
+    }
+    return h;
+}
+
+static void links_init(unsigned long names) {
+    unsigned long cap = 1024UL;
+    while (cap < names * 2UL) { cap = cap * 2UL; }
+    gLinks.slots = Vec::with_cap(cap);
+    for (unsigned long i = 0UL; i < cap; i = i + 1UL) { gLinks.slots.push(-1LL); }
+    gLinks.keys = Vec::new();
+    gLinks.vals = Vec::new();
+}
+
+// The slot holding 'key', or the empty slot where it would go.
+static unsigned long link_slot(const &char key) {
+    unsigned long mask = gLinks.slots.len - 1UL;
+    unsigned long i = link_hash(key) & mask;
+    for (;;) {
+        long long e = *gLinks.slots.at(i);
+        if (e < 0LL || gLinks.keys.at((unsigned long)e).eq_cstr(key)) { return i; }
+        i = (i + 1UL) & mask;
+    }
+    return 0UL;
+}
+
 static void add_link(&Crate c, const &String key, const &String url) {
-    if (key.len == 0UL || c.links.contains(key.as_ptr())) { return; }
+    if (key.len == 0UL) { return; }
+    // Full (more names than counted): drop the rest rather than loop.
+    if ((gLinks.keys.len + 1UL) * 10UL > gLinks.slots.len * 9UL) { return; }
+    unsigned long s = link_slot(key.as_ptr());
+    if (*gLinks.slots.at(s) >= 0LL) { return; }
     c.link_urls.push(url.clone());
-    c.links.insert(key.as_ptr(), (long long)c.link_urls.len - 1LL);
+    gLinks.keys.push(key.clone());
+    gLinks.vals.push((long long)c.link_urls.len - 1LL);
+    gLinks.slots.set(s, (long long)gLinks.keys.len - 1LL);
 }
 
 static void add_link_cstr(&Crate c, const &char key, const &String url) {
@@ -91,12 +142,9 @@ static void add_link_cstr(&Crate c, const &char key, const &String url) {
 }
 
 long long crate_resolve(const &Crate c, const &char name) {
-    ?&long long hit = c.links.get(name);
-    match (hit) {
-        case some(i): { return *i; }
-        case null: { }
-    }
-    return -1LL;
+    if (gLinks.slots.len == 0UL) { return -1LL; }
+    long long e = *gLinks.slots.at(link_slot(name));
+    return e < 0LL ? -1LL : *gLinks.vals.at((unsigned long)e);
 }
 
 // Registers 'Name', 'ns::Name' and each member 'Name::m' / 'ns::Name::m'.
@@ -169,11 +217,15 @@ static long long ensure_module(&Crate c, const &String path) {
     m.url = module_url(path);
     c.modules.push(m);
     long long idx = (long long)c.modules.len - 1LL;
-    if (path.len > 0UL) { c.modules.at((unsigned long)parent).children.push(idx); }
+    if (path.len > 0UL) {
+        &Module pm = c.modules.at((unsigned long)parent);
+        pm.children.push(idx);
+    }
     struct String key = path.clone();
     key.replace_all("/", "::");
-    add_link(c, &key, &m.url);
-    key.free();
+    struct String url = module_url(path);   // a copy: add_link grows c's tables
+    add_link(c, &key, &url);
+    key.free(); url.free();
     return idx;
 }
 
@@ -256,12 +308,21 @@ int crate_load(&Crate c, const &char config_path) {
     c.modules = Vec::new();
     c.items = Vec::new();
     c.sources = Vec::new();
-    c.links = StrMap::new();
     c.link_urls = Vec::new();
     c.readme = String::new();
-    const &char readme = util_vstr(&c.cfg, "readme", "");
-    if (readme[0] != '\0') { File::read_to_string(readme, &c.readme); }
+    struct String readme = String::from(util_vstr(&c.cfg, "readme", ""));
+    if (readme.len > 0UL) { File::read_to_string(readme.as_ptr(), &c.readme); }
+    readme.free();
     int show_private = util_vbool(&c.cfg, "private");
+
+    // Names to index: each item twice (Name, ns::Name), each member twice,
+    // each module once.
+    &Value all_items = util_vget(&doc, "items", &doc);
+    unsigned long names = 0UL;
+    for (unsigned long i = 0UL; i < all_items.array_len(); i = i + 1UL) {
+        names = names + 2UL + 2UL * util_vget(all_items.array_at(i), "members", &doc).array_len();
+    }
+    links_init(names + 4096UL);
 
     struct String empty = String::new();
     ensure_module(c, &empty);
@@ -302,29 +363,29 @@ int crate_load(&Crate c, const &char config_path) {
     for (int pass = 0; pass < 2; pass = pass + 1) {
         for (unsigned long i = 0UL; i < items.array_len(); i = i + 1UL) {
             &Value it = items.array_at(i);
-            const &char crate_name = util_vstr(it, "crate", "");
-            int local = crate_name[0] == '\0';
-            if ((pass == 0) != local) { continue; }
+            struct String crate_name = String::from(util_vstr(it, "crate", ""));
+            int local = crate_name.len == 0UL;
+            if ((pass == 0) != local) { crate_name.free(); continue; }
             struct String file = String::from(util_vstr(it, "file", ""));
             struct String mp = module_path_of(&file);
             if (!local) {
                 // Another crate's item: a link into its reference, when it
                 // is published (always a header item there).
-                const &char base = util_vstr(&externs, crate_name, "");
-                if (base[0] != '\0' && is_header(&file) && item_public(it, 1, 0)) {
-                    struct String url = String::from(base);
+                struct String url = String::from(util_vstr(externs, crate_name.as_ptr(), ""));
+                if (url.len > 0UL && is_header(&file) && item_public(it, 1, 0)) {
                     if (!url.ends_with("/")) { url.push_char('/'); }
                     struct String dir = module_dir(&mp);
                     url.push_str(&dir);
                     struct String page = item_page_name(it);
                     url.push_str(&page);
                     link_item(c, it, &url);
-                    url.free(); dir.free(); page.free();
+                    dir.free(); page.free();
                 }
-                file.free(); mp.free();
+                url.free();
+                file.free(); mp.free(); crate_name.free();
                 continue;
             }
-            if (!item_public(it, has_headers, show_private)) { file.free(); mp.free(); continue; }
+            if (!item_public(it, has_headers, show_private)) { file.free(); mp.free(); crate_name.free(); continue; }
             long long mi = ensure_module(c, &mp);
             struct Item item;
             item.kind = String::from(util_vstr(it, "kind", ""));
@@ -355,10 +416,12 @@ int crate_load(&Crate c, const &char config_path) {
             }
             item.url.push_str(&page);
             page.free();
+            crate_name.free();
             load_members(&item, it, show_private);
             link_item(c, it, &item.url);
             c.items.push(item);
-            c.modules.at((unsigned long)mi).items.push((long long)c.items.len - 1LL);
+            &Module owner = c.modules.at((unsigned long)mi);
+            owner.items.push((long long)c.items.len - 1LL);
             file.free(); mp.free();
         }
     }

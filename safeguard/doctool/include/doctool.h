@@ -99,10 +99,9 @@ struct Crate {
     struct Vec<struct Module> modules;
     struct Vec<struct Item> items;
     struct Vec<struct SourceFile> sources;
-    // Intra-doc link targets: "Vec", "std::Vec", "Vec::push", ... ->
-    // index into link_urls (absolute https:// for another crate's items,
-    // else relative to the doc root).
-    struct StrMap<long long> links;
+    // Intra-doc link targets ("Vec", "std::Vec", "Vec::push", ... map to an
+    // index here, see crate_resolve): absolute https:// for another
+    // crate's items, else relative to the doc root.
     struct Vec<struct String> link_urls;
     struct String readme;    // README.md text ("" if none)
 };
@@ -159,6 +158,8 @@ struct PageView {
     struct String content;    // raw
     struct String toc;        // raw
     struct String page_class; // "api-item", "api-module", "api-source"
+    struct String css;        // <root>assets/style.css
+    struct String js;         // <root>assets/doc.js
 };
 
 struct String tpl_page(const &PageView v);
