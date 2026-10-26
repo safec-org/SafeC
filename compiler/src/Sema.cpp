@@ -536,6 +536,16 @@ void Sema::collectDecls(TranslationUnit &tu) {
         default: break;
         }
     }
+    // A field can name a struct defined later in the file behind a
+    // reference ('?&struct VfsMount fs_ctx;' in a struct declared first):
+    // bind those placeholders now that every struct is registered.
+    for (auto &d : tu.decls) {
+        if (d->kind != DeclKind::Struct) continue;
+        auto &sd = static_cast<StructDecl &>(*d);
+        if (!sd.type || sd.type->kind != TypeKind::Struct) continue;
+        auto &st = static_cast<StructType &>(*sd.type);
+        for (auto &fd : st.fields) fd.type = resolveType(fd.type);
+    }
 }
 
 // Replace StructType{name} with GenericType{name} when 'name' is in the
@@ -5181,15 +5191,18 @@ bool Sema::canImplicitlyConvert(const TypePtr &from, const TypePtr &to) const {
 }
 
 StructType *Sema::asStruct(TypePtr &ty) {
-    if (ty && ty->kind == TypeKind::Struct) return static_cast<StructType *>(ty.get());
-    // Look up by name
+    // A struct named before its definition ('?&struct VfsMount' in a field
+    // of a struct declared earlier) is a placeholder: look the definition
+    // up by name.
     if (ty && ty->kind == TypeKind::Struct) {
         auto &st = static_cast<StructType &>(*ty);
+        if (st.isDefined || !st.typeArgs.empty()) return &st;
         auto it = typeRegistry_.find(st.name);
         if (it != typeRegistry_.end() && it->second->kind == TypeKind::Struct) {
             ty = it->second;
             return static_cast<StructType *>(ty.get());
         }
+        return &st;
     }
     return nullptr;
 }
