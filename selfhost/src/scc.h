@@ -709,3 +709,5 @@ void gen_module();
 int scc_compile_main(int main_file);
 void scc_init();
 void scc_preprocess(int main_file);
+void dbg(const char* s);
+void dbg_int(long v);

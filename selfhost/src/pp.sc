@@ -671,7 +671,9 @@ void do_directive(int hash_idx, int s, int e) {
 }
 
 void pp_run(int file) {
+    dbg("pp_run file "); dbg_int((long)file);
     int first = lex_file(file);
+    dbg("lexed "); dbg_int((long)(g_nptok - first));
     int eof = g_nptok - 1;
     int cond_base = g_cond_depth;
     int i = first;

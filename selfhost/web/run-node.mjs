@@ -2,7 +2,7 @@
 // Runs a wasm module produced by scc under Node: node run-node.mjs prog.wasm [args...]
 // Exit status: main's return value, the code passed to exit(), 134 for a
 // trap/abort (bounds check, unreachable), 136 for an arithmetic trap.
-import { readFileSync, writeSync } from 'node:fs';
+import { readFileSync, writeSync, readSync } from 'node:fs';
 
 class Exit extends Error { constructor(code) { super('exit'); this.code = code; } }
 
@@ -18,7 +18,7 @@ const imports = {
     __host_read(fd, ptr, len) {
       try {
         const b = Buffer.alloc(len);
-        const n = require('node:fs').readSync(0, b, 0, len, null);
+        const n = readSync(0, b, 0, len, null);
         new Uint8Array(memory.buffer, ptr, n).set(b.subarray(0, n));
         return n;
       } catch { return 0; }

@@ -78,7 +78,11 @@ int lit_char(const char* s, int i) {
     return c;
 }
 
+int g_fatal = 0;
+
 void fatal(const char* s) {
+    if (g_fatal == 1) { g_nerrors = g_nerrors + 1; return; }
+    g_fatal = 1;
     msg_reset();
     msg_lit("internal limit exceeded: ");
     msg_lit(s);
@@ -367,3 +371,13 @@ void util_init() {
     S_runtime = intern_lit("<runtime>");
     S_wild = intern_lit("_");
 }
+
+// debug tracing for the bootstrapped compiler (stage 2 under Node)
+#ifdef SCC_TRACE
+extern int __host_write(int fd, const char* buf, int len);
+void dbg(const char* s) { unsafe { __host_write(2, s, lit_len(s)); } }
+void dbg_int(long v) { tmp_reset(); tmp_int(v); tmp_char(10); unsafe { __host_write(2, (const char*)&g_tmp[0], g_tmp_len); } }
+#else
+void dbg(const char* s) { }
+void dbg_int(long v) { }
+#endif

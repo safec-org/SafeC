@@ -281,6 +281,17 @@ int g_stradr[NSTR_MAX];
 int g_region_buf[NSTR_MAX];
 int g_region_off[NSTR_MAX];
 
+// zero-initialized storage lives in "bss", above the data segment's maximum
+int g_bss_len = 0;
+int bss_alloc(int size, int al) {
+    if (al < 1) { al = 1; }
+    int off = align_to(g_bss_len, al);
+    if (size < 1) { size = 1; }
+    g_bss_len = off + size;
+    if (g_bss_len > 1073741824) { fatal("static data (bss)"); }
+    return DATA_BASE + DATA_MAX + off;
+}
+
 int data_alloc(int size, int al) {
     if (al < 1) { al = 1; }
     int off = align_to(g_data_len, al);
@@ -315,7 +326,7 @@ int region_buf(int r) {
         g_region_off[r] = data_alloc(8, 8);
         int cap = g_region_cap[r];
         if (cap < 0) { cap = 0; }
-        g_region_buf[r] = data_alloc(cap, 16);
+        g_region_buf[r] = bss_alloc(cap, 16);
     }
     return g_region_buf[r];
 }
@@ -440,9 +451,11 @@ void const_init(int addr, int t, int e, int gname_node) {
 int glob_addr(int g) {
     if (g_glob[g].addr != 0) { return g_glob[g].addr; }
     int t = g_glob[g].ty;
-    int a = data_alloc(ty_size(t), ty_align(t));
-    g_glob[g].addr = a;
     int n = g_glob[g].node;
+    int a = 0;
+    if (g_node[n].a != 0) { a = data_alloc(ty_size(t), ty_align(t)); }
+    else { a = bss_alloc(ty_size(t), ty_align(t)); }
+    g_glob[g].addr = a;
     if (g_node[n].a != 0) { const_init(a, t, g_node[n].a, n); }
     return a;
 }
@@ -496,8 +509,9 @@ void setup_local(int l) {
     int fl = g_local[l].flags;
     if ((fl & LF_STATIC) != 0) {
         g_lst_kind[l] = LS_STATIC;
-        g_lst_val[l] = data_alloc(ty_size(t), ty_align(t));
         int vn = g_local[l].node;
+        if (vn != 0 && g_node[vn].a != 0) { g_lst_val[l] = data_alloc(ty_size(t), ty_align(t)); }
+        else { g_lst_val[l] = bss_alloc(ty_size(t), ty_align(t)); }
         if (vn != 0 && g_node[vn].a != 0) { const_init(g_lst_val[l], t, g_node[vn].a, vn); }
         return;
     }
@@ -1041,16 +1055,28 @@ void gen_module() {
         i = i + 1;
     }
     g_rt_trap = find_func_by_name("__rt_trap");
-    if (g_main_fn == 0) {
-        msg_reset();
-        msg_lit("no 'main' function");
-        diag_at(0, 0, 0, 1);
-        return;
+    int nexp = 0;
+    i = 1;
+    while (i <= g_nfunc) {
+        if ((g_func[i].flags & NF_EXPORT) != 0 && g_node[g_func[i].node].a != 0 &&
+            g_tok[g_node[g_func[i].node].tok].file != g_rt_file) { nexp = nexp + 1; }
+        i = i + 1;
     }
-    func_index(g_main_fn);
-    g_export_sid[0] = S_main;
-    g_export_func[0] = g_main_fn;
-    g_nexport = 1;
+    g_nexport = 0;
+    if (g_main_fn == 0) {
+        // a library module (exports only) needs no main
+        if (nexp == 0) {
+            msg_reset();
+            msg_lit("no 'main' function");
+            diag_at(0, 0, 0, 1);
+            return;
+        }
+    } else {
+        func_index(g_main_fn);
+        g_export_sid[0] = S_main;
+        g_export_func[0] = g_main_fn;
+        g_nexport = 1;
+    }
     // exported functions
     i = 1;
     while (i <= g_nfunc) {
@@ -1069,8 +1095,8 @@ void gen_module() {
         gen_function(f);
         if (g_nerrors > 0) { return; }
     }
-    // memory layout: data, then the stack, then the heap
-    int data_end = align_to(DATA_BASE + g_data_len, 16);
+    // memory layout: data, bss, then the stack, then the heap
+    int data_end = DATA_BASE + DATA_MAX + align_to(g_bss_len, 16);
     g_stack_limit = data_end;
     g_stack_top = data_end + STACK_SIZE;
     g_heap_base = g_stack_top;

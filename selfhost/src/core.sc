@@ -4,7 +4,9 @@
 #include "driver.h"
 
 void scc_init() {
+    dbg("init\n");
     util_init();
+    dbg("kw\n");
     kw_init();
     types_init();
     pp_init();
@@ -27,11 +29,15 @@ void scc_preprocess(int main_file) {
 }
 
 int scc_compile_main(int main_file) {
+    dbg("pp\n");
     scc_preprocess(main_file);
+    dbg("parse\n");
     if (g_nerrors > 0) { return 0; }
     parse_program();
     if (g_nerrors > 0) { return 0; }
+    dbg("sema\n");
     sema_program();
+    dbg("gen\n");
     if (g_nerrors > 0) { return 0; }
     gen_module();
     if (g_nerrors > 0) { return 0; }

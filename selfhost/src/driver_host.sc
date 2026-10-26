@@ -86,6 +86,26 @@ void write_diags() {
     unsafe { write(2, (const void*)&g_diag[0], (unsigned long)g_diag_len); }
 }
 
+// -D NAME[=VALUE]
+char g_defname[256];
+char g_defval[256];
+void define_arg(int d, int eq) {
+    int n = g_str_len[d];
+    int nl = n;
+    if (eq >= 0) { nl = eq; }
+    if (nl > 255) { nl = 255; }
+    int k = 0;
+    while (k < nl) { g_defname[k] = (char)str_char(d, k); k = k + 1; }
+    g_defname[nl] = (char)0;
+    int vl = 0;
+    if (eq >= 0) {
+        k = eq + 1;
+        while (k < n && vl < 255) { g_defval[vl] = (char)str_char(d, k); vl = vl + 1; k = k + 1; }
+    } else { g_defval[0] = '1'; vl = 1; }
+    g_defval[vl] = (char)0;
+    unsafe { pp_define_lit((const char*)&g_defname[0], (const char*)&g_defval[0]); }
+}
+
 int main(int argc, char** argv) {
     scc_init();
     int input = 0;
@@ -100,6 +120,15 @@ int main(int argc, char** argv) {
         } else if (str_eq_lit(a, "-o") == 1 && i + 1 < argc) {
             i = i + 1;
             out = arg_sid(argv, i);
+        } else if (str_eq_lit(a, "-D") == 1 && i + 1 < argc) {
+            i = i + 1;
+            int d = arg_sid(argv, i);
+            // NAME or NAME=VALUE
+            tmp_reset();
+            int k = 0;
+            int eq = -1;
+            while (k < g_str_len[d]) { if (str_char(d, k) == '=' && eq < 0) { eq = k; } k = k + 1; }
+            define_arg(d, eq);
         } else if (str_eq_lit(a, "--dump-tokens") == 1) {
             dump = 1;
         } else if (str_eq_lit(a, "--check") == 1) {

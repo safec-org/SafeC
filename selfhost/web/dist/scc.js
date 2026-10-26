@@ -57,7 +57,14 @@ export function parseDiagnostics(text) {
 export async function compile(source, options = {}) {
   if (!sccModule) await init();
   let memory = null;
-  const imports = { env: { abort() { throw new Error('scc: internal error (abort)'); } } };
+  // scc.wasm built by the C++ safec imports env.abort; scc compiled by
+  // itself (the bootstrapped compiler) imports the scc runtime's host calls
+  const imports = { env: {
+    abort() { throw new Error('scc: internal error (abort)'); },
+    __host_write(fd, ptr, len) { return len; },
+    __host_read() { return 0; },
+    __host_exit(code) { throw new Error(`scc: internal error (exit ${code})`); },
+  } };
   const inst = await WebAssembly.instantiate(sccModule, imports);
   const ex = inst.exports;
   memory = ex.memory;

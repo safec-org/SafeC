@@ -66,6 +66,194 @@ double pow10_d(int e) {
     return r;
 }
 
+// ── exact decimal → double (round to nearest even) ───────────────────────────
+// big integers: base 2^32 limbs, little endian
+#define BN 96
+unsigned int g_bn_m[BN];   // the decimal mantissa
+int g_bn_mn = 0;
+unsigned int g_bn_d[BN];   // divisor 10^k
+int g_bn_dn = 0;
+unsigned int g_bn_q[BN];   // quotient
+int g_bn_qn = 0;
+unsigned int g_bn_r[BN];   // remainder
+int g_bn_rn = 0;
+int g_dc_ndig = 0;
+int g_dc_drop = 0;         // digits beyond capacity (scale)
+int g_dc_sticky = 0;       // nonzero digits dropped
+
+void dc_reset() {
+    g_bn_mn = 0;
+    g_dc_ndig = 0;
+    g_dc_drop = 0;
+    g_dc_sticky = 0;
+}
+
+// x = x * mul + add (for x in g_bn_m / g_bn_d selected by which)
+void bn_muladd(int which, unsigned int mul, unsigned int add) {
+    unsigned long carry = (unsigned long)add;
+    int n = g_bn_mn;
+    if (which == 1) { n = g_bn_dn; }
+    int i = 0;
+    while (i < n) {
+        unsigned long cur = 0UL;
+        if (which == 0) { cur = (unsigned long)g_bn_m[i] * (unsigned long)mul + carry; g_bn_m[i] = (unsigned int)(cur & 4294967295UL); }
+        else { cur = (unsigned long)g_bn_d[i] * (unsigned long)mul + carry; g_bn_d[i] = (unsigned int)(cur & 4294967295UL); }
+        carry = cur >> 32UL;
+        i = i + 1;
+    }
+    if (carry != 0UL && n < BN) {
+        if (which == 0) { g_bn_m[n] = (unsigned int)carry; g_bn_mn = n + 1; }
+        else { g_bn_d[n] = (unsigned int)carry; g_bn_dn = n + 1; }
+    }
+}
+
+void dc_digit(int d) {
+    if (g_bn_mn >= BN - 4) {
+        // more digits than needed for correct rounding: scale instead
+        g_dc_drop = g_dc_drop + 1;
+        if (d != 0) { g_dc_sticky = 1; }
+        return;
+    }
+    if (g_bn_mn == 0) {
+        if (d == 0) { return; }
+        g_bn_m[0] = (unsigned int)d;
+        g_bn_mn = 1;
+        return;
+    }
+    bn_muladd(0, 10U, (unsigned int)d);
+}
+
+int bn_bits(int which) {
+    int n = g_bn_mn;
+    if (which == 1) { n = g_bn_dn; }
+    if (which == 2) { n = g_bn_qn; }
+    while (n > 0) {
+        unsigned int top = g_bn_m[n - 1];
+        if (which == 1) { top = g_bn_d[n - 1]; }
+        if (which == 2) { top = g_bn_q[n - 1]; }
+        if (top != 0U) {
+            int b = 32;
+            while ((top & 2147483648U) == 0U) { top = top << 1U; b = b - 1; }
+            return (n - 1) * 32 + b;
+        }
+        n = n - 1;
+    }
+    return 0;
+}
+
+int bn_qbit(int i) { return (int)((g_bn_q[i / 32] >> (unsigned int)(i % 32)) & 1U); }
+
+// rounds q * 2^e2 (+ sticky) to the nearest double
+long bn_q_to_f64(int e2, int sticky) {
+    int L = bn_bits(2);
+    if (L == 0) { return 0L; }
+    int t = e2 + L - 53;
+    if (t < -1074) { t = -1074; }
+    int shift = t - e2;
+    unsigned long m = 0UL;
+    if (shift <= 0) {
+        // exact: q fits in 53 bits
+        int i = L - 1;
+        while (i >= 0) { m = (m << 1UL) | (unsigned long)bn_qbit(i); i = i - 1; }
+        m = m << (unsigned long)(0 - shift);
+    } else {
+        int i = L - 1;
+        while (i >= shift) { m = (m << 1UL) | (unsigned long)bn_qbit(i); i = i - 1; }
+        int half = 0;
+        if (shift - 1 < L) { half = bn_qbit(shift - 1); }
+        int rest = sticky;
+        i = shift - 2;
+        while (i >= 0 && rest == 0) { if (i < L && bn_qbit(i) == 1) { rest = 1; } i = i - 1; }
+        if (half == 1 && (rest == 1 || (m & 1UL) == 1UL)) { m = m + 1UL; }
+    }
+    if (m >= 9007199254740992UL) { m = m >> 1UL; t = t + 1; }
+    if (m == 0UL) { return 0L; }
+    if (m >= 4503599627370496UL) {
+        long ef = (long)(t + 52 + 1023);
+        if (ef >= 2047L) { return 9218868437227405312L; }
+        return (ef << 52L) | (long)(m - 4503599627370496UL);
+    }
+    return (long)m;   // subnormal (t == -1074)
+}
+
+// the double nearest to (decimal mantissa in g_bn_m) * 10^exp10
+long dc_to_f64_bits(int exp10) {
+    exp10 = exp10 + g_dc_drop;
+    if (g_bn_mn == 0) { return 0L; }
+    if (exp10 > 400) { return 9218868437227405312L; }
+    if (exp10 < -400 - g_bn_mn * 10) { return 0L; }
+    if (exp10 >= 0) {
+        int k = exp10;
+        while (k > 0 && g_bn_mn < BN) { bn_muladd(0, 10U, 0U); k = k - 1; }
+        int i = 0;
+        while (i < g_bn_mn) { g_bn_q[i] = g_bn_m[i]; i = i + 1; }
+        g_bn_qn = g_bn_mn;
+        return bn_q_to_f64(0, g_dc_sticky);
+    }
+    // q = floor(m * 2^s / 10^k), s chosen for >= 64 quotient bits
+    int k = 0 - exp10;
+    g_bn_d[0] = 1U;
+    g_bn_dn = 1;
+    int j = 0;
+    while (j < k && g_bn_dn < BN - 1) { bn_muladd(1, 10U, 0U); j = j + 1; }
+    int s = 66 + bn_bits(1) - bn_bits(0);
+    if (s < 0) { s = 0; }
+    int nb = bn_bits(0) + s;      // bits of the dividend m * 2^s
+    // shift-subtract long division, one dividend bit at a time
+    g_bn_rn = g_bn_dn + 1;
+    int i = 0;
+    while (i < g_bn_rn) { g_bn_r[i] = 0U; i = i + 1; }
+    g_bn_qn = nb / 32 + 1;
+    if (g_bn_qn > BN) { g_bn_qn = BN; }
+    i = 0;
+    while (i < g_bn_qn) { g_bn_q[i] = 0U; i = i + 1; }
+    int bit = nb - 1;
+    while (bit >= 0) {
+        // r = r * 2 + (bit of m*2^s)
+        int src = bit - s;
+        unsigned int in = 0U;
+        if (src >= 0) { in = (g_bn_m[src / 32] >> (unsigned int)(src % 32)) & 1U; }
+        unsigned int carry = in;
+        i = 0;
+        while (i < g_bn_rn) {
+            unsigned int top = g_bn_r[i] >> 31U;
+            g_bn_r[i] = (g_bn_r[i] << 1U) | carry;
+            carry = top;
+            i = i + 1;
+        }
+        // r >= d ?
+        int ge = 1;
+        i = g_bn_rn - 1;
+        while (i >= 0) {
+            unsigned int dv = 0U;
+            if (i < g_bn_dn) { dv = g_bn_d[i]; }
+            if (g_bn_r[i] != dv) {
+                if (g_bn_r[i] < dv) { ge = 0; }
+                break;
+            }
+            i = i - 1;
+        }
+        if (ge == 1) {
+            long borrow = 0L;
+            i = 0;
+            while (i < g_bn_rn) {
+                long dv = 0L;
+                if (i < g_bn_dn) { dv = (long)g_bn_d[i]; }
+                long diff = (long)g_bn_r[i] - dv - borrow;
+                if (diff < 0L) { diff = diff + 4294967296L; borrow = 1L; } else { borrow = 0L; }
+                g_bn_r[i] = (unsigned int)diff;
+                i = i + 1;
+            }
+            if (bit / 32 < g_bn_qn) { g_bn_q[bit / 32] = g_bn_q[bit / 32] | (1U << (unsigned int)(bit % 32)); }
+        }
+        bit = bit - 1;
+    }
+    int sticky = g_dc_sticky;
+    i = 0;
+    while (i < g_bn_rn) { if (g_bn_r[i] != 0U) { sticky = 1; } i = i + 1; }
+    return bn_q_to_f64(0 - s, sticky);
+}
+
 // ── lexing ───────────────────────────────────────────────────────────────────
 int g_lx_pos = 0;
 int g_lx_end = 0;
@@ -152,24 +340,18 @@ void lex_number(int line, int col, int flags) {
         base = 8;
         while (lx_peek(0) >= '0' && lx_peek(0) <= '7') { v = v *| 8L +| (long)(lx_adv() - '0'); }
     } else {
-        // decimal integer or float: collect significant digits
-        long mant = 0L;
-        int ndig = 0;
+        // decimal integer or float: all digits go to the exact converter
+        dc_reset();
         int exp10 = 0;
-        int extra = 0;
         while (is_digit(lx_peek(0))) {
             int d = lx_adv() - '0';
             v = v *| 10L +| (long)d;
-            if (ndig < 18) { mant = mant * 10L + (long)d; if (mant != 0L) { ndig = ndig + 1; } }
-            else { extra = extra + 1; }
+            dc_digit(d);
         }
         if (lx_peek(0) == '.' && lx_peek(1) != '.') {
             is_float = 1;
             lx_adv();
-            while (is_digit(lx_peek(0))) {
-                int d = lx_adv() - '0';
-                if (ndig < 18) { mant = mant * 10L + (long)d; if (mant != 0L) { ndig = ndig + 1; } exp10 = exp10 - 1; }
-            }
+            while (is_digit(lx_peek(0))) { dc_digit(lx_adv() - '0'); exp10 = exp10 - 1; }
         }
         if (lx_peek(0) == 'e' || lx_peek(0) == 'E') {
             int sgn = 1;
@@ -181,21 +363,7 @@ void lex_number(int line, int col, int flags) {
             while (is_digit(lx_peek(0))) { if (ev < 100000) { ev = ev * 10 + (lx_adv() - '0'); } else { lx_adv(); } }
             exp10 = exp10 + sgn * ev;
         }
-        exp10 = exp10 + extra;
-        if (is_float == 1) {
-            double d = (double)mant;
-            if (exp10 >= 0) {
-                if (exp10 > 308 + 20) { d = d * 1.0e308 * 1.0e308; }
-                else { d = d * pow10_d(exp10); }
-            } else {
-                int ne = 0 - exp10;
-                if (ne > 22 && ne <= 22 + 22) { d = d / pow10_d(22); d = d / pow10_d(ne - 22); }
-                else if (ne > 340) { d = 0.0; }
-                else if (ne > 44) { d = d / pow10_d(ne - 300); d = d / 1.0e300; }
-                else { d = d / pow10_d(ne); }
-            }
-            v = f64_bits(d);
-        }
+        if (is_float == 1) { v = dc_to_f64_bits(exp10); }
     }
     // suffixes
     while (1) {
