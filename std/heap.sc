@@ -26,7 +26,7 @@ inline unsigned long heap_hdr_() {
 inline void heap_init() {
     if (heap_ready_ != 0) { return; }
     unsafe {
-        heap_tlsf_ = TlsfAllocator::over(((unsigned char*)(unsigned char*)heap_buf_)[0..(unsigned long)HEAP_SIZE]);
+        heap_tlsf_ = TlsfAllocator::over(((unsigned char*)heap_buf_)[0..(unsigned long)HEAP_SIZE]);
     }
     heap_ready_ = 1;
 }
