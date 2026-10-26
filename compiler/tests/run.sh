@@ -18,9 +18,12 @@ FAIL=0
 while IFS= read -r -d '' t; do
     name="${t#"$HERE"/}"
     ll="$OUT/$(echo "$name" | tr '/' '_').ll"
+    # '// SAFEC-ARGS: <flags>' adds compiler flags (e.g. --target <triple>);
+    # '@STD@' in them stands for the repository root (for '-I @STD@/std').
+    read -r -a args <<<"$(sed -n 's|^// SAFEC-ARGS: *||p' "$t" | head -1 | sed "s|@STD@|$HERE/../..|g")"
     if grep -q 'EXPECT-ERROR:' "$t"; then
         # Negative test: must be rejected with exactly the expected errors.
-        if "$SAFEC_BIN" "$t" --emit-llvm -o "$ll" >"$OUT/err.txt" 2>&1; then
+        if "$SAFEC_BIN" "$t" --emit-llvm ${args[@]+"${args[@]}"} -o "$ll" >"$OUT/err.txt" 2>&1; then
             echo "  [FAIL] $name (compiled, expected errors)"
             FAIL=$((FAIL + 1))
         elif ! python3 "$HERE/filecheck.py" --errors "$t" "$OUT/err.txt" >"$OUT/check.txt" 2>&1; then
@@ -33,8 +36,6 @@ while IFS= read -r -d '' t; do
         fi
         continue
     fi
-    # '// SAFEC-ARGS: <flags>' adds compiler flags (e.g. --target <triple>).
-    read -r -a args <<<"$(sed -n 's|^// SAFEC-ARGS: *||p' "$t" | head -1)"
     if ! "$SAFEC_BIN" "$t" -O2 --emit-llvm ${args[@]+"${args[@]}"} -o "$ll" >"$OUT/err.txt" 2>&1; then
         echo "  [FAIL] $name (compile)"
         sed 's/^/      /' "$OUT/err.txt"

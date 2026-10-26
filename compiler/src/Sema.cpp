@@ -2025,6 +2025,7 @@ void Sema::checkStmt(Stmt &s, FunctionDecl &fn) {
         bool isNullLike = false, isOptional = false;
         TypePtr nullPayloadTy;
         classifyNullMatchSubject(subjectTy, isNullLike, isOptional, nullPayloadTy);
+        if (nullPayloadTy) nullPayloadTy = resolveType(nullPayloadTy);
         std::unordered_set<int> nullTagsSeen;
         for (auto &arm : ms.arms) {
             resolveMatchArmPatterns(arm.patterns, isTaggedUnion, unionSt,
@@ -3489,6 +3490,7 @@ TypePtr Sema::checkMatchExpr(MatchExpr &e) {
     bool isNullLike = false, isOptional = false;
     TypePtr nullPayloadTy;
     classifyNullMatchSubject(subjectTy, isNullLike, isOptional, nullPayloadTy);
+    if (nullPayloadTy) nullPayloadTy = resolveType(nullPayloadTy);
     if (e.arms.empty()) {
         diag_.error(e.loc, "match expression must have at least one arm");
         return makeError();

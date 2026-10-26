@@ -1909,6 +1909,17 @@ EV Walker::evalCallInner(CallExpr &e) {
                 if (oi.kind == OK::Local || oi.kind == OK::Ext || oi.kind == OK::Alloc || oi.kind == OK::Temp)
                     sortedUnion(cur_.lent[b], std::vector<int>{tok});
             }
+        } else if ((cn == "chan_send" || cn == "chan_recv") && args.size() >= 2 && e.args.size() >= 2) {
+            // chan_send(ch, &v) moves v to the receiver; chan_recv(ch, &out)
+            // stores a received value in out.
+            const ReferenceType *rt = refOf(e.args[1]->type);
+            if (rt && mustDrop(rt->base)) {
+                std::vector<CellRef> cells;
+                for (auto &x : args[1].v) cells.push_back(cellOf(x, ""));
+                if (cells.size() > 1) for (auto &c : cells) c.weak = true;
+                if (cn == "chan_send") ownConsumeCells(cells, kOMove, e.loc, e.args[1].get());
+                else ownAssign(cells, e.loc);
+            }
         } else if (cn == "__safec_join" && !e.args.empty() && e.args[0] &&
                    e.args[0]->kind == ExprKind::Ident && static_cast<IdentExpr &>(*e.args[0]).resolved) {
             auto ht = handleTok_.find(varObj(static_cast<IdentExpr &>(*e.args[0]).resolved));
@@ -2647,6 +2658,10 @@ std::string Walker::danglingIn(const VSet &v) const {
         auto t = cur_.tok.find(e.obj);
         if (t == cur_.tok.end()) continue;
         for (auto &k : t->second) {
+            // Pointing straight into the owner: its own use check reports it.
+            bool direct = false;
+            for (auto &x : v) if (canonBase(x.obj) == k.first) direct = true;
+            if (direct) continue;
             auto o = cur_.own.find(k);
             if (o == cur_.own.end() || (o->second & kOGone)) {
                 uint8_t b = o == cur_.own.end() ? kOGone : o->second;
