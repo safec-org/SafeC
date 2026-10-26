@@ -15,6 +15,13 @@
 // degenerate (sorted-insert) tree costs O(n) time per lookup but never
 // overflows a small bare-metal stack. get()/min_key()/max_key() hand out
 // references into a node, valid until that entry is removed.
+//
+// A BST owns its keys and values: it is a Drop type, and K/V may own
+// something themselves (String, Vec, ...). insert() takes both by value
+// (overwriting drops the old value and the duplicate key; an entry it can't
+// store is dropped), remove() moves the value out and drops the key, and
+// clear()/drop() drop every entry. Lookups take the key by value too and
+// drop it.
 #include <std/mem.h>
 #include <std/collections/node_pool.h>
 #include <std/cmp.h>
@@ -48,8 +55,8 @@ struct BST {
     ?&K           min_key() const;         // null if empty
     ?&K           max_key() const;         // null if empty
     void          foreach_inorder(fn void(const &K, &V) func);
-    void          clear();
-    void          drop();
+    void          clear();                 // drop every entry
+    void          drop();                  // drops the entries, releases the nodes (Drop)
     void          free() consume;   // = drop()
 
     ?&heap struct BSTNode<K, V> find_(const &K key) const;
@@ -121,7 +128,11 @@ int BST::insert(K key, V val) {
         match (cur) {
             case some(n): {
                 int c = self.ord.cmp(&key, &n.key);
-                if (c == 0) { n.val = val; return 1; }
+                if (c == 0) {
+                    drop(key);
+                    unsafe { drop(n.val); n.val = val; }
+                    return 1;
+                }
                 parent = cur;
                 dir = c < 0 ? -1 : 1;
                 cur = c < 0 ? n.left : n.right;
@@ -131,8 +142,8 @@ int BST::insert(K key, V val) {
     }
     ?&heap struct BSTNode<K, V> nq = self.pool.take();
     match (nq) {
-        case null: return 0;
-        case some(n): { n.key = key; n.val = val; n.left = null; n.right = null; }
+        case null: { drop(key); drop(val); return 0; }
+        case some(n): { unsafe { n.key = key; n.val = val; } n.left = null; n.right = null; }
     }
     self.relink_(parent, dir, nq);
     self.len = self.len + 1UL;
@@ -141,7 +152,9 @@ int BST::insert(K key, V val) {
 
 generic<K, V, C: Order>
 ?&V BST::get(K key) const {
-    match (self.find_(&key)) {
+    ?&heap struct BSTNode<K, V> found = self.find_(&key);
+    drop(key);
+    match (found) {
         case some(n): unsafe { return (?&V)&n.val; }
         case null: { }
     }
@@ -149,7 +162,11 @@ generic<K, V, C: Order>
 }
 
 generic<K, V, C: Order>
-int BST::contains(K key) const { return !self.find_(&key).is_null(); }
+int BST::contains(K key) const {
+    int hit = !self.find_(&key).is_null();
+    drop(key);
+    return hit;
+}
 
 generic<K, V, C: Order>
 ?V BST::remove(K key) {
@@ -171,10 +188,15 @@ generic<K, V, C: Order>
             case null: { }
         }
     }
+    drop(key);
     match (cur) {
         case null: return null;
         case some(n): {
-            V out = n.val;
+            V out;
+            unsafe {
+                out = n.val;         // moved out; the removed entry's key is dropped
+                drop(n.key);
+            }
             if (!n.left.is_null() && !n.right.is_null()) {
                 // Two children: pull up the in-order successor (leftmost
                 // node of the right subtree, which has no left child).
@@ -193,8 +215,7 @@ generic<K, V, C: Order>
                 }
                 match (s) {
                     case some(sn): {
-                        n.key = sn.key;
-                        n.val = sn.val;
+                        unsafe { n.key = sn.key; n.val = sn.val; }   // the successor's entry moves up
                         self.relink_(sp, sdir, sn.right);
                         self.pool.give(sn);
                     }
@@ -300,6 +321,30 @@ void BST::free() { self.drop(); }
 
 generic<K, V, C: Order>
 void BST::drop() {
+    if const (needs_drop(K) || needs_drop(V)) {
+        // Iterative teardown: rotate left children up until the node has
+        // none, then drop it and continue down its right spine (O(n), no
+        // recursion, no extra space; the links are discarded anyway).
+        ?&heap struct BSTNode<K, V> cur = self.root;
+        while (!cur.is_null()) {
+            match (cur) {
+                case some(n): {
+                    match (n.left) {
+                        case some(l): {
+                            n.left = l.right;
+                            l.right = cur;
+                            cur = l;
+                        }
+                        case null: {
+                            unsafe { drop(n.key); drop(n.val); }
+                            cur = n.right;
+                        }
+                    }
+                }
+                case null: { }
+            }
+        }
+    }
     self.pool.free_all();
     self.root = null;
     self.len = 0UL;

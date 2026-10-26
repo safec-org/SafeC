@@ -765,6 +765,215 @@ void t_ref_chains() {
     r.index.free();
 }
 
+// ── Containers of Drop elements ──────────────────────────────────────────────
+// Tracked counts live values: every container must drop each element it
+// still owns exactly once (clear/drop/overwrite/remove/OOM), and hand the
+// ones it gives back (pop/remove) to the caller undropped.
+static int g_tr_live = 0;
+static int g_tr_bad = 0;      // drops of an already-dropped value
+
+struct Tracked {
+    int id;
+    int alive;
+    void drop();
+};
+
+void Tracked::drop() {
+    if (self.alive != 1) g_tr_bad = g_tr_bad + 1;
+    self.alive = 0;
+    g_tr_live = g_tr_live - 1;
+}
+
+static struct Tracked tracked(int id) {
+    struct Tracked t;
+    t.id = id;
+    t.alive = 1;
+    g_tr_live = g_tr_live + 1;
+    return t;
+}
+
+// The id of a value handed back by pop()/remove() (-1 if none), dropping it.
+static int took(?struct Tracked v) {
+    int id = -1;
+    match (v) {
+        case some(t): { id = t.id; t.drop(); }
+        case none: { }
+    }
+    return id;
+}
+
+static int tr_cmp(const &struct Tracked a, const &struct Tracked b) { return a.id - b.id; }
+
+static struct Tracked g_sv_tr[4];
+static struct StaticMapSlot<struct Tracked> g_sm_tr[4];
+
+void t_drop_elems() {
+    g_tr_live = 0; g_tr_bad = 0;
+
+    // HashMap<K, String> / HashMap<K, Tracked>
+    struct HashMap<int, struct String> hs = HashMap::new();
+    int i = 0;
+    while (i < 100) { struct String v = String::new(); v.push_int(i); ASSERT_TRUE(hs.insert(i, v)); i = i + 1; }
+    ASSERT_TRUE(hs.insert(7, String::from("seven")));                 // overwrite drops "7"
+    match (hs.get(7)) { case some(v): ASSERT_TRUE(v.eq_cstr("seven")); case null: ASSERT_TRUE(0); }
+    match (hs.get(8)) { case some(v): ASSERT_TRUE(v.eq_cstr("8")); case null: ASSERT_TRUE(0); }
+    match (hs.remove(9)) { case some(v): { ASSERT_TRUE(v.eq_cstr("9")); v.drop(); } case none: ASSERT_TRUE(0); }
+    hs.clear();
+    ASSERT_EQ(hs.length(), 0UL);
+    hs.insert(1, String::from("one"));
+    hs.drop();
+
+    struct HashMap<int, struct Tracked> ht = HashMap::new();
+    i = 0;
+    while (i < 50) { ht.insert(i, tracked(i)); i = i + 1; }
+    ASSERT_EQ(g_tr_live, 50);
+    ht.insert(3, tracked(1003));                                      // overwrite
+    ASSERT_EQ(g_tr_live, 50);
+    ASSERT_EQ(took(ht.remove(4)), 4);                                 // moved out, then dropped
+    ASSERT_EQ(g_tr_live, 49);
+    ASSERT_EQ(took(ht.remove(4)), -1);
+    ht.clear();
+    ASSERT_EQ(g_tr_live, 0);
+    ht.insert(1, tracked(1));
+    ht.drop();
+    ASSERT_EQ(g_tr_live, 0);
+
+    // StrMap<String> / StrMap<Tracked>
+    struct StrMap<struct String> ss = StrMap::new();
+    ASSERT_TRUE(ss.insert("a", String::from("alpha")));
+    ASSERT_TRUE(ss.insert("b", String::from("beta")));
+    ASSERT_TRUE(ss.insert("a", String::from("aleph")));               // overwrite drops "alpha"
+    match (ss.get("a")) { case some(v): ASSERT_TRUE(v.eq_cstr("aleph")); case null: ASSERT_TRUE(0); }
+    match (ss.remove("b")) { case some(v): { ASSERT_TRUE(v.eq_cstr("beta")); v.drop(); } case none: ASSERT_TRUE(0); }
+    ss.clear();
+    ASSERT_EQ(ss.length(), 0UL);
+    ss.insert("c", String::from("gamma"));
+    ss.drop();
+
+    struct StrMap<struct Tracked> st = StrMap::new();
+    st.insert("x", tracked(1)); st.insert("y", tracked(2)); st.insert("x", tracked(3));
+    ASSERT_EQ(g_tr_live, 2);
+    ASSERT_EQ(took(st.remove("y")), 2);
+    st.clear();
+    ASSERT_EQ(g_tr_live, 0);
+    st.insert("z", tracked(4));
+    st.drop();
+    ASSERT_EQ(g_tr_live, 0);
+
+    // List
+    struct List<struct String> ls = List::new();
+    ls.push_back(String::from("one")); ls.push_front(String::from("zero"));
+    match (ls.pop_front()) { case some(v): { ASSERT_TRUE(v.eq_cstr("zero")); v.drop(); } case none: ASSERT_TRUE(0); }
+    ls.push_back(String::from("two"));
+    ls.drop();
+
+    struct List<struct Tracked> lt = List::new();
+    i = 0;
+    while (i < 20) { lt.push_back(tracked(i)); i = i + 1; }
+    ASSERT_EQ(took(lt.pop_front()), 0);
+    ASSERT_EQ(took(lt.pop_back()), 19);
+    struct Tracked key = tracked(5);
+    ASSERT_TRUE(lt.remove(&key, tr_cmp));                             // drops the match
+    key.drop();
+    ASSERT_EQ(g_tr_live, 17);
+    lt.clear();
+    ASSERT_EQ(g_tr_live, 0);
+    lt.push_back(tracked(1));
+    lt.drop();
+    ASSERT_EQ(g_tr_live, 0);
+
+    // Stack / Queue (the queue wraps around before clear)
+    struct Stack<struct String> sks = Stack::new();
+    sks.push(String::from("s1")); sks.push(String::from("s2"));
+    match (sks.pop()) { case some(v): { ASSERT_TRUE(v.eq_cstr("s2")); v.drop(); } case none: ASSERT_TRUE(0); }
+    sks.drop();
+    struct Stack<struct Tracked> skt = Stack::new();
+    i = 0;
+    while (i < 20) { skt.push(tracked(i)); i = i + 1; }
+    ASSERT_EQ(took(skt.pop()), 19);
+    skt.clear();
+    ASSERT_EQ(g_tr_live, 0);
+    skt.push(tracked(1));
+    skt.drop();
+    ASSERT_EQ(g_tr_live, 0);
+
+    struct Queue<struct String> qs = Queue::new();
+    qs.enqueue(String::from("q1")); qs.enqueue(String::from("q2"));
+    match (qs.dequeue()) { case some(v): { ASSERT_TRUE(v.eq_cstr("q1")); v.drop(); } case none: ASSERT_TRUE(0); }
+    qs.drop();
+    struct Queue<struct Tracked> qt = Queue::new();
+    i = 0;
+    while (i < 6) { qt.enqueue(tracked(i)); i = i + 1; }
+    ASSERT_EQ(took(qt.dequeue()), 0);
+    ASSERT_EQ(took(qt.dequeue()), 1);
+    i = 6;
+    while (i < 10) { qt.enqueue(tracked(i)); i = i + 1; }          // wraps the 8-slot ring
+    ASSERT_EQ(g_tr_live, 8);
+    qt.clear();
+    ASSERT_EQ(g_tr_live, 0);
+    qt.enqueue(tracked(1));
+    qt.drop();
+    ASSERT_EQ(g_tr_live, 0);
+
+    // BST (String values; Tracked values through removals of 0/1/2-child nodes)
+    struct BST<int, struct String, Less<int>> bs = BST::new();
+    bs.insert(2, String::from("two")); bs.insert(1, String::from("one"));
+    bs.insert(2, String::from("deux"));
+    match (bs.get(2)) { case some(v): ASSERT_TRUE(v.eq_cstr("deux")); case null: ASSERT_TRUE(0); }
+    bs.drop();
+    struct BST<int, struct Tracked, Less<int>> bt = BST::new();
+    int keys[9] = { 50, 30, 70, 20, 40, 60, 80, 35, 45 };
+    i = 0;
+    while (i < 9) { bt.insert(keys[i], tracked(keys[i])); i = i + 1; }
+    bt.insert(40, tracked(1040));
+    ASSERT_EQ(g_tr_live, 9);
+    ASSERT_EQ(took(bt.remove(30)), 30);       // two children
+    ASSERT_EQ(took(bt.remove(80)), 80);       // leaf
+    ASSERT_EQ(took(bt.remove(40)), 1040);     // one child
+    ASSERT_EQ(g_tr_live, 6);
+    bt.clear();
+    ASSERT_EQ(g_tr_live, 0);
+    i = 0;
+    while (i < 9) { bt.insert(keys[i], tracked(keys[i])); i = i + 1; }
+    bt.drop();
+    ASSERT_EQ(g_tr_live, 0);
+
+    // BTree (in place, cleared rather than dropped)
+    ?&heap BTree<struct Tracked> tq = alloc(sizeof(struct BTree<struct Tracked>));
+    if (!tq.is_null()) {
+        &BTree<struct Tracked> t = std::expect_ref(tq, "tq is null");
+        t.init();
+        unsigned long k = 0UL;
+        while (k < 100UL) { t.insert(k, tracked((int)k)); k = k + 1UL; }
+        t.insert(10UL, tracked(1010));
+        ASSERT_EQ(g_tr_live, 100);
+        ASSERT_EQ(took(t.remove(10UL)), 1010);
+        ASSERT_EQ(took(t.remove(55UL)), 55);
+        ASSERT_EQ(g_tr_live, 98);
+        t.clear();
+        ASSERT_EQ(g_tr_live, 0);
+        dealloc(tq);
+    }
+
+    // StaticVec / StaticMap
+    struct StaticVec<struct Tracked> sv = StaticVec::over(g_sv_tr[0..4]);
+    i = 0;
+    while (i < 5) { sv.push(tracked(i)); i = i + 1; }               // the 5th doesn't fit: dropped
+    ASSERT_EQ(g_tr_live, 4);
+    ASSERT_EQ(took(sv.pop()), 3);
+    sv.clear();
+    ASSERT_EQ(g_tr_live, 0);
+    struct StaticMap<struct Tracked> sm = StaticMap::over(g_sm_tr[0..4]);
+    unsigned long sk = 0UL;
+    while (sk < 5UL) { sm.insert(sk, tracked((int)sk)); sk = sk + 1UL; }   // 5th: full, dropped
+    sm.insert(2UL, tracked(1002));                                    // update drops the old
+    ASSERT_EQ(g_tr_live, 4);
+    sm.clear();
+    ASSERT_EQ(g_tr_live, 0);
+
+    ASSERT_EQ(g_tr_bad, 0);
+}
+
 int main() {
     struct TestSuite t = TestSuite::new();
     unsafe {
@@ -782,6 +991,7 @@ int main() {
         t.add("container traits", t_traits);
         t.add("slice views (Vec/Slice/String)", t_slice_views);
         t.add("reference call chains", t_ref_chains);
+        t.add("containers of Drop elements", t_drop_elems);
     }
     t.run();
     t.print_summary();

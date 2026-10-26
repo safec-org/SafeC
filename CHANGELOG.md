@@ -7,6 +7,23 @@ release tags.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Containers of `Drop` elements:** `HashMap<K, String>`, `StrMap<String>`,
+  `List<String>`, `Stack<String>`, `Queue<String>`, `BST<K, String, C>`,
+  `BTree<String>`, `StaticVec<String>` and `StaticMap<String>` failed the
+  ownership check inside std (the value was not dropped on the OOM / full
+  path, or was moved out of a node outside `unsafe`). Every container now
+  owns its elements the way `Vec` does: overwriting a key drops the old
+  value, a value that can't be stored is dropped, `remove()` / `pop()` move
+  it out, `List::remove` drops the element it unlinks, and `clear()` /
+  `drop()` drop every element still held (before, `StrMap::clear()` /
+  `drop()` and the others released the storage but leaked the values).
+  `BTree`, `StaticVec` and `StaticMap` live in place / over the caller's
+  storage and have no `drop()`: `clear()` them. Code that freed a map's
+  values itself before dropping it (`m.foreach(free_value); m.drop()`) now
+  frees them twice — drop the map alone.
+
 ### Changed — no `void*` anywhere in std
 
 - **The raw memory layer is bytes:** `alloc_raw_`, `dealloc_raw_`,

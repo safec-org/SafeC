@@ -10,6 +10,12 @@
 // list's own NodePool (see node_pool.h), so push/pop don't hit the
 // allocator per element and free() releases whole chunks. front()/back()/
 // find() hand out '?&T' into a node, valid until that node is removed.
+//
+// A List owns its elements: it is a Drop type, and T may own something
+// itself (String, Vec, ...). push_front/push_back take the element by value
+// (one they can't store is dropped), pop_front/pop_back move it out,
+// remove() drops the element it unlinks, and clear()/drop() drop every
+// element still in the list.
 #include <std/mem.h>
 #include <std/collections/node_pool.h>
 
@@ -39,14 +45,14 @@ struct List {
     ?&T           back() const;
     unsigned long length() const;
     int           is_empty() const;
-    void          clear();
-    void          drop();
+    void          clear();               // drop every element
+    void          drop();                // drops the elements, releases the nodes (Drop)
     void          free() consume;   // = drop()
 
     // cmp: <0, 0, >0 like strcmp; only == 0 matters here
     ?&T           find(const &T key, fn int(const &T, const &T) cmp) const;
     int           contains(const &T key, fn int(const &T, const &T) cmp) const;
-    int           remove(const &T key, fn int(const &T, const &T) cmp);  // first match; 0 if none
+    int           remove(const &T key, fn int(const &T, const &T) cmp);  // drops the first match; 0 if none
     void          foreach(fn void(&T) func);
     void          reverse();
 
@@ -68,8 +74,8 @@ generic<T>
 ?&heap struct ListNode<T> List::node_(T value) {
     ?&heap struct ListNode<T> nq = self.pool.take();
     match (nq) {
-        case some(n): { n.value = value; n.next = null; n.prev = null; }
-        case null: { }
+        case some(n): { unsafe { n.value = value; } n.next = null; n.prev = null; }
+        case null: drop(value);
     }
     return nq;
 }
@@ -129,10 +135,12 @@ generic<T>
     match (self.head) {
         case null: return null;
         case some(n): {
-            T v = n.value;
-            self.unlink_(n);
-            self.pool.give(n);
-            return v;
+            unsafe {
+                T v = n.value;       // moved out before give() reuses the node's first word
+                self.unlink_(n);
+                self.pool.give(n);
+                return v;
+            }
         }
     }
     return null;
@@ -143,10 +151,12 @@ generic<T>
     match (self.tail) {
         case null: return null;
         case some(n): {
-            T v = n.value;
-            self.unlink_(n);
-            self.pool.give(n);
-            return v;
+            unsafe {
+                T v = n.value;       // moved out before give() reuses the node's first word
+                self.unlink_(n);
+                self.pool.give(n);
+                return v;
+            }
         }
     }
     return null;
@@ -181,6 +191,15 @@ void List::free() { self.drop(); }
 
 generic<T>
 void List::drop() {
+    if const (needs_drop(T)) {
+        ?&heap struct ListNode<T> cur = self.head;
+        while (!cur.is_null()) {
+            match (cur) {
+                case some(n): { unsafe { drop(n.value); } cur = n.next; }
+                case null: { }
+            }
+        }
+    }
     self.pool.free_all();
     self.head = null;
     self.tail = null;
@@ -219,6 +238,7 @@ int List::remove(const &T key, fn int(const &T, const &T) cmp) {
                 int hit = 0;
                 unsafe { hit = cmp(&n.value, key) == 0; }
                 if (hit) {
+                    unsafe { drop(n.value); }
                     self.unlink_(n);
                     self.pool.give(n);
                     return 1;
