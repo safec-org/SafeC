@@ -1706,11 +1706,331 @@ float fmodf(float x, float y) { return (float)fmod((double)x, (double)y); }
 float roundf(float x) { return (float)round((double)x); }
 
 // ── time ─────────────────────────────────────────────────────────────────────
+// The playground has no clock: time() and clock_gettime() report 0 (the
+// epoch) and nanosleep() returns at once. Calendar conversion is real and
+// exact (proleptic Gregorian, any year), and there is no time zone: local
+// time is UTC. A struct tm is handled as its 9 leading int fields, as
+// std/time.sc passes it: sec, min, hour, mday, mon (0-11), year (since
+// 1900), wday (0 = Sunday), yday (0-365), isdst.
 long time(long* t) {
     unsafe { if (t != null) { *t = 0L; } }
     return 0L;
 }
 long clock() { return 0L; }
+
+// struct timespec on wasm32: two 4-byte fields
+struct SafecTimespec_ { int tv_sec; int tv_nsec; };
+int clock_gettime(int clk, SafecTimespec_* ts) {
+    unsafe { if (ts != null) { ts->tv_sec = 0; ts->tv_nsec = 0; } }
+    return 0;
+}
+int nanosleep(const SafecTimespec_* req, SafecTimespec_* rem) {
+    unsafe { if (rem != null) { rem->tv_sec = 0; rem->tv_nsec = 0; } }
+    return 0;
+}
+
+// floor division and the matching non-negative remainder
+long long __rt_fdiv(long long a, long long b) {
+    long long q = a / b;
+    if ((a % b != 0LL) && ((a < 0LL) != (b < 0LL))) { q = q - 1LL; }
+    return q;
+}
+long long __rt_fmod(long long a, long long b) { return a - __rt_fdiv(a, b) * b; }
+
+// days since 1970-01-01 of y-m-d (m 1-12), and back (H. Hinnant's algorithm)
+long long __rt_days_from_civil(long long y, long long m, long long d) {
+    if (m <= 2LL) { y = y - 1LL; }
+    long long era = __rt_fdiv(y, 400LL);
+    long long yoe = y - era * 400LL;
+    long long mp = m > 2LL ? m - 3LL : m + 9LL;
+    long long doy = (153LL * mp + 2LL) / 5LL + d - 1LL;
+    long long doe = yoe * 365LL + yoe / 4LL - yoe / 100LL + doy;
+    return era * 146097LL + doe - 719468LL;
+}
+void __rt_civil_from_days(long long z, long long* yo, long long* mo, long long* dd) {
+    z = z + 719468LL;
+    long long era = __rt_fdiv(z, 146097LL);
+    long long doe = z - era * 146097LL;
+    long long yoe = (doe - doe / 1460LL + doe / 36524LL - doe / 146096LL) / 365LL;
+    long long doy = doe - (365LL * yoe + yoe / 4LL - yoe / 100LL);
+    long long mp = (5LL * doy + 2LL) / 153LL;
+    long long d = doy - (153LL * mp + 2LL) / 5LL + 1LL;
+    long long m = mp < 10LL ? mp + 3LL : mp - 9LL;
+    unsafe {
+        *yo = yoe + era * 400LL + (m <= 2LL ? 1LL : 0LL);
+        *mo = m;
+        *dd = d;
+    }
+}
+
+int* gmtime_r(const long long* t, int* tm) {
+    unsafe {
+        long long s = *t;
+        long long days = __rt_fdiv(s, 86400LL);
+        long long rem = s - days * 86400LL;
+        long long y = 0LL;
+        long long m = 0LL;
+        long long d = 0LL;
+        __rt_civil_from_days(days, &y, &m, &d);
+        tm[0] = (int)(rem % 60LL);
+        tm[1] = (int)((rem / 60LL) % 60LL);
+        tm[2] = (int)(rem / 3600LL);
+        tm[3] = (int)d;
+        tm[4] = (int)(m - 1LL);
+        tm[5] = (int)(y - 1900LL);
+        tm[6] = (int)__rt_fmod(days + 4LL, 7LL);     // 1970-01-01 was a Thursday
+        tm[7] = (int)(days - __rt_days_from_civil(y, 1LL, 1LL));
+        tm[8] = 0;
+    }
+    return tm;
+}
+int* localtime_r(const long long* t, int* tm) { return gmtime_r(t, tm); }
+
+// the seconds tm's fields stand for (out of range fields carry over), and tm
+// normalized to them, wday and yday included
+long long __rt_timegm(int* tm) {
+    long long secs = 0LL;
+    unsafe {
+        long long mon = (long long)tm[4];
+        long long y = (long long)tm[5] + 1900LL + __rt_fdiv(mon, 12LL);
+        mon = __rt_fmod(mon, 12LL);
+        long long days = __rt_days_from_civil(y, mon + 1LL, 1LL) + (long long)tm[3] - 1LL;
+        secs = days * 86400LL + (long long)tm[2] * 3600LL + (long long)tm[1] * 60LL + (long long)tm[0];
+        gmtime_r(&secs, tm);
+    }
+    return secs;
+}
+long long mktime(int* tm) { return __rt_timegm(tm); }
+
+const char* __rt_wday_name(int i, int full) {
+    if (i < 0 || i > 6) { return "?"; }
+    const char* longn[7] = { "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday" };
+    const char* shortn[7] = { "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat" };
+    unsafe { if (full != 0) { return longn[i]; } return shortn[i]; }
+}
+const char* __rt_mon_name(int i, int full) {
+    if (i < 0 || i > 11) { return "?"; }
+    const char* longn[12] = { "January", "February", "March", "April", "May", "June", "July",
+                              "August", "September", "October", "November", "December" };
+    const char* shortn[12] = { "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec" };
+    unsafe { if (full != 0) { return longn[i]; } return shortn[i]; }
+}
+
+// strftime's output cursor: n bytes so far into s (of max); past max only counts
+void __rt_tf_ch(char* s, unsigned long max, unsigned long* n, char c) {
+    unsafe {
+        if (*n < max) { s[*n] = c; }
+        *n = *n + 1UL;
+    }
+}
+void __rt_tf_str(char* s, unsigned long max, unsigned long* n, const char* t) {
+    unsafe {
+        int i = 0;
+        while (t[i] != (char)0) { __rt_tf_ch(s, max, n, t[i]); i = i + 1; }
+    }
+}
+// v in decimal, at least w digits, padded with 'pad' (0: no padding)
+void __rt_tf_num(char* s, unsigned long max, unsigned long* n, long long v, int w, char pad) {
+    char d[24];
+    int k = 0;
+    int neg = 0;
+    if (v < 0LL) { neg = 1; v = 0LL - v; }
+    unsafe {
+        while (v > 0LL || k == 0) { d[k] = (char)(48LL + v % 10LL); v = v / 10LL; k = k + 1; }
+        if (neg == 1) { __rt_tf_ch(s, max, n, '-'); w = w - 1; }
+        int i = k;
+        while (i < w && pad != (char)0) { __rt_tf_ch(s, max, n, pad); i = i + 1; }
+        while (k > 0) { k = k - 1; __rt_tf_ch(s, max, n, d[k]); }
+    }
+}
+void __rt_tf(char* s, unsigned long max, unsigned long* n, const char* fmt, const int* tm) {
+    unsafe {
+        int i = 0;
+        while (fmt[i] != (char)0) {
+            char c = fmt[i];
+            if (c != '%' || fmt[i + 1] == (char)0) { __rt_tf_ch(s, max, n, c); i = i + 1; continue; }
+            char f = fmt[i + 1];
+            i = i + 2;
+            int hour12 = tm[2] % 12;
+            if (hour12 == 0) { hour12 = 12; }
+            long long year = (long long)tm[5] + 1900LL;
+            if (f == 'Y') { __rt_tf_num(s, max, n, year, 1, (char)0); }
+            else if (f == 'C') { __rt_tf_num(s, max, n, __rt_fdiv(year, 100LL), 2, '0'); }
+            else if (f == 'y') { __rt_tf_num(s, max, n, __rt_fmod(year, 100LL), 2, '0'); }
+            else if (f == 'm') { __rt_tf_num(s, max, n, (long long)tm[4] + 1LL, 2, '0'); }
+            else if (f == 'd') { __rt_tf_num(s, max, n, (long long)tm[3], 2, '0'); }
+            else if (f == 'e') { __rt_tf_num(s, max, n, (long long)tm[3], 2, ' '); }
+            else if (f == 'H') { __rt_tf_num(s, max, n, (long long)tm[2], 2, '0'); }
+            else if (f == 'k') { __rt_tf_num(s, max, n, (long long)tm[2], 2, ' '); }
+            else if (f == 'I') { __rt_tf_num(s, max, n, (long long)hour12, 2, '0'); }
+            else if (f == 'l') { __rt_tf_num(s, max, n, (long long)hour12, 2, ' '); }
+            else if (f == 'M') { __rt_tf_num(s, max, n, (long long)tm[1], 2, '0'); }
+            else if (f == 'S') { __rt_tf_num(s, max, n, (long long)tm[0], 2, '0'); }
+            else if (f == 'j') { __rt_tf_num(s, max, n, (long long)tm[7] + 1LL, 3, '0'); }
+            else if (f == 'w') { __rt_tf_num(s, max, n, (long long)tm[6], 1, (char)0); }
+            else if (f == 'u') { __rt_tf_num(s, max, n, tm[6] == 0 ? 7LL : (long long)tm[6], 1, (char)0); }
+            else if (f == 'a') { __rt_tf_str(s, max, n, __rt_wday_name(tm[6], 0)); }
+            else if (f == 'A') { __rt_tf_str(s, max, n, __rt_wday_name(tm[6], 1)); }
+            else if (f == 'b' || f == 'h') { __rt_tf_str(s, max, n, __rt_mon_name(tm[4], 0)); }
+            else if (f == 'B') { __rt_tf_str(s, max, n, __rt_mon_name(tm[4], 1)); }
+            else if (f == 'p') { __rt_tf_str(s, max, n, tm[2] < 12 ? "AM" : "PM"); }
+            else if (f == 'P') { __rt_tf_str(s, max, n, tm[2] < 12 ? "am" : "pm"); }
+            else if (f == 'Z') { __rt_tf_str(s, max, n, "UTC"); }
+            else if (f == 'z') { __rt_tf_str(s, max, n, "+0000"); }
+            else if (f == 's') {
+                int c2[11];
+                int k = 0;
+                while (k < 9) { c2[k] = tm[k]; k = k + 1; }
+                __rt_tf_num(s, max, n, __rt_timegm(&c2[0]), 1, (char)0);
+            }
+            else if (f == 'n') { __rt_tf_ch(s, max, n, '\n'); }
+            else if (f == 't') { __rt_tf_ch(s, max, n, '\t'); }
+            else if (f == '%') { __rt_tf_ch(s, max, n, '%'); }
+            else if (f == 'F') { __rt_tf(s, max, n, "%Y-%m-%d", tm); }
+            else if (f == 'T') { __rt_tf(s, max, n, "%H:%M:%S", tm); }
+            else if (f == 'R') { __rt_tf(s, max, n, "%H:%M", tm); }
+            else if (f == 'D' || f == 'x') { __rt_tf(s, max, n, "%m/%d/%y", tm); }
+            else if (f == 'X') { __rt_tf(s, max, n, "%H:%M:%S", tm); }
+            else if (f == 'r') { __rt_tf(s, max, n, "%I:%M:%S %p", tm); }
+            else if (f == 'c') { __rt_tf(s, max, n, "%a %b %e %H:%M:%S %Y", tm); }
+            else { __rt_tf_ch(s, max, n, '%'); __rt_tf_ch(s, max, n, f); }
+        }
+    }
+}
+// the bytes written, not counting the NUL; 0 when they don't fit in max
+unsigned long strftime(char* s, unsigned long max, const char* fmt, const int* tm) {
+    unsigned long n = 0UL;
+    __rt_tf(s, max, &n, fmt, tm);
+    unsafe {
+        if (n + 1UL > max) { if (max > 0UL) { s[0] = (char)0; } return 0UL; }
+        s[n] = (char)0;
+    }
+    return n;
+}
+
+// strptime's number: up to 'w' digits (after optional blanks, and a sign
+// when 'sign' is set) in [lo, hi]; the index past it, or -1
+int __rt_tp_num(const char* s, int i, int w, int sign, long long lo, long long hi, long long* out) {
+    unsafe {
+        while (isspace((int)s[i]) != 0) { i = i + 1; }
+        int neg = 0;
+        if (sign != 0 && (s[i] == '-' || s[i] == '+')) { neg = s[i] == '-' ? 1 : 0; i = i + 1; }
+        long long v = 0LL;
+        int k = 0;
+        while (k < w && s[i] >= '0' && s[i] <= '9') { v = v * 10LL + (long long)(s[i] - '0'); i = i + 1; k = k + 1; }
+        if (k == 0) { return -1; }
+        if (neg == 1) { v = 0LL - v; }
+        if (v < lo || v > hi) { return -1; }
+        *out = v;
+    }
+    return i;
+}
+// a month or weekday name (full or abbreviated, any case) at s+i: its
+// index, with *next past it, or -1
+int __rt_tp_name(const char* s, int i, int months, int* next) {
+    int count = months != 0 ? 12 : 7;
+    int best = -1;
+    int bestLen = 0;
+    int k = 0;
+    while (k < count) {
+        int full = 1;
+        while (full >= 0) {
+            const char* nm = months != 0 ? __rt_mon_name(k, full) : __rt_wday_name(k, full);
+            int len = (int)strlen(nm);
+            int j = 0;
+            unsafe {
+                while (j < len && s[i + j] != (char)0 && tolower((int)s[i + j]) == tolower((int)nm[j])) { j = j + 1; }
+            }
+            if (j == len && len > bestLen) { best = k; bestLen = len; }
+            full = full - 1;
+        }
+        k = k + 1;
+    }
+    unsafe { *next = i + bestLen; }
+    return best;
+}
+int __rt_tp(const char* s, int i, const char* fmt, int* tm, int* have) {
+    unsafe {
+        int f = 0;
+        while (fmt[f] != (char)0 && i >= 0) {
+            char c = fmt[f];
+            if (isspace((int)c) != 0) {
+                while (isspace((int)s[i]) != 0) { i = i + 1; }
+                f = f + 1;
+                continue;
+            }
+            if (c != '%' || fmt[f + 1] == (char)0) {
+                if (s[i] != c) { return -1; }
+                i = i + 1;
+                f = f + 1;
+                continue;
+            }
+            char d = fmt[f + 1];
+            f = f + 2;
+            long long v = 0LL;
+            if (d == 'Y') { i = __rt_tp_num(s, i, 4, 1, -9999LL, 9999LL, &v); if (i >= 0) { tm[5] = (int)(v - 1900LL); have[0] = 1; } }
+            else if (d == 'y') {
+                i = __rt_tp_num(s, i, 2, 0, 0LL, 99LL, &v);
+                if (i >= 0) { tm[5] = (int)(v < 69LL ? v + 100LL : v); have[0] = 1; }
+            }
+            else if (d == 'm') { i = __rt_tp_num(s, i, 2, 0, 1LL, 12LL, &v); if (i >= 0) { tm[4] = (int)(v - 1LL); have[1] = 1; } }
+            else if (d == 'd' || d == 'e') { i = __rt_tp_num(s, i, 2, 0, 1LL, 31LL, &v); if (i >= 0) { tm[3] = (int)v; have[2] = 1; } }
+            else if (d == 'H' || d == 'k') { i = __rt_tp_num(s, i, 2, 0, 0LL, 23LL, &v); if (i >= 0) { tm[2] = (int)v; have[3] = 0; } }
+            else if (d == 'I' || d == 'l') { i = __rt_tp_num(s, i, 2, 0, 1LL, 12LL, &v); if (i >= 0) { tm[2] = (int)(v % 12LL); have[3] = 1; } }
+            else if (d == 'M') { i = __rt_tp_num(s, i, 2, 0, 0LL, 59LL, &v); if (i >= 0) { tm[1] = (int)v; } }
+            else if (d == 'S') { i = __rt_tp_num(s, i, 2, 0, 0LL, 61LL, &v); if (i >= 0) { tm[0] = (int)v; } }
+            else if (d == 'j') { i = __rt_tp_num(s, i, 3, 0, 1LL, 366LL, &v); if (i >= 0) { tm[7] = (int)(v - 1LL); have[5] = 1; } }
+            else if (d == 'b' || d == 'B' || d == 'h') {
+                while (isspace((int)s[i]) != 0) { i = i + 1; }
+                int nx = i;
+                int k = __rt_tp_name(s, i, 1, &nx);
+                if (k < 0) { return -1; }
+                tm[4] = k; have[1] = 1; i = nx;
+            }
+            else if (d == 'a' || d == 'A') {
+                while (isspace((int)s[i]) != 0) { i = i + 1; }
+                int nx = i;
+                int k = __rt_tp_name(s, i, 0, &nx);
+                if (k < 0) { return -1; }
+                tm[6] = k; have[6] = 1; i = nx;
+            }
+            else if (d == 'p') {
+                while (isspace((int)s[i]) != 0) { i = i + 1; }
+                int a = tolower((int)s[i]);
+                if ((a != 'a' && a != 'p') || tolower((int)s[i + 1]) != 'm') { return -1; }
+                have[4] = a == 'p' ? 1 : 0;
+                i = i + 2;
+            }
+            else if (d == 'n' || d == 't') { while (isspace((int)s[i]) != 0) { i = i + 1; } }
+            else if (d == '%') { if (s[i] != '%') { return -1; } i = i + 1; }
+            else if (d == 'T') { i = __rt_tp(s, i, "%H:%M:%S", tm, have); }
+            else if (d == 'R') { i = __rt_tp(s, i, "%H:%M", tm, have); }
+            else if (d == 'F') { i = __rt_tp(s, i, "%Y-%m-%d", tm, have); }
+            else if (d == 'D') { i = __rt_tp(s, i, "%m/%d/%y", tm, have); }
+            else { return -1; }
+        }
+    }
+    return i;
+}
+// parses s by fmt into tm's fields; past the parsed text, or null. Like
+// glibc, wday and yday are computed when the date fields allow it.
+char* strptime(const char* s, const char* fmt, int* tm) {
+    int have[7];   // year, mon, mday, 12-hour, pm, yday, wday
+    int k = 0;
+    while (k < 7) { have[k] = 0; k = k + 1; }
+    int i = __rt_tp(s, 0, fmt, tm, &have[0]);
+    if (i < 0) { return null; }
+    unsafe {
+        if (have[3] == 1 && have[4] == 1) { tm[2] = tm[2] + 12; }
+        if (have[0] == 1 && have[1] == 1 && have[2] == 1) {
+            long long y = (long long)tm[5] + 1900LL;
+            long long days = __rt_days_from_civil(y, (long long)tm[4] + 1LL, (long long)tm[3]);
+            if (have[6] == 0) { tm[6] = (int)__rt_fmod(days + 4LL, 7LL); }
+            if (have[5] == 0) { tm[7] = (int)(days - __rt_days_from_civil(y, 1LL, 1LL)); }
+        }
+        return (char*)(s + i);
+    }
+}
 
 // ── spawn/join (the playground has no threads: spawn runs the function
 // to completion right away; join is then a no-op) ─────────────────────────────

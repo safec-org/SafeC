@@ -48,6 +48,11 @@ release tags.
   (`#include <io.h>`, `"prelude.h"`): write `<std/io.h>`. The `safeguard
   new` template says `<std/prelude.h>`; the smoke test builds a project
   using both `<math.h>` and `<std/math.h>`.
+- **std/time links in the playground:** scc's runtime had no `gmtime_r`, so
+  a program using std/time failed with "undefined function". The runtime
+  now provides `gmtime_r`, `localtime_r` (UTC: the playground has no time
+  zone), `mktime`, `strftime`, `strptime`, `clock_gettime` (the epoch: no
+  clock) and `nanosleep`; a difftest corpus case checks them against glibc.
 
 ### Changed — no `void*` anywhere in std
 
