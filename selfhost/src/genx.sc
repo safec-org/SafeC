@@ -1302,6 +1302,12 @@ void gen_expr(int e) {
     }
     if (k == E_INDEX) { gen_index_addr(e); emit_load(t, 0); g_pw = pw_of(t); return; }
     if (k == E_SLICE) { gen_slice(e); return; }
+    if (k == E_FORCE && g_ty[g_node[g_node[e].a].ty].kind == TY_REF && g_ty[g_ty[g_node[g_node[e].a].ty].base].kind == TY_FN) {
+        // '?fn' -> 'fn': the same table index, nothing to load
+        gen_expr(g_node[e].a);
+        g_pw = 32;
+        return;
+    }
     if (k == E_DEREF || k == E_FORCE) {
         int a = g_node[e].a;
         gen_expr(a);
