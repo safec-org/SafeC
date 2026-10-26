@@ -4952,11 +4952,18 @@ bool Sema::canImplicitlyConvert(const TypePtr &from, const TypePtr &to) const {
     // later accesses skip the volatile semantics; that takes an explicit cast.
     if (dropsVolatile(from, to)) return false;
     if (typeEqual(from, to)) return true;
-    // '[]T' -> '[]const T': dropping write access is always fine.
+    // '[]T' -> '[]const T': dropping write access is always fine. Byte
+    // slices interconvert across char / signed char / unsigned char (the
+    // same 8-bit interop their elements have), so text is a byte buffer.
     if (from->kind == TypeKind::Slice && to->kind == TypeKind::Slice) {
         auto &fs = static_cast<const SliceType &>(*from);
         auto &ts = static_cast<const SliceType &>(*to);
-        if (ts.constElem && typeEqual(fs.element, ts.element)) return true;
+        auto byte = [](const TypePtr &t) {
+            return t && (t->kind == TypeKind::Char || t->kind == TypeKind::Int8 ||
+                         t->kind == TypeKind::UInt8);
+        };
+        bool sameElem = typeEqual(fs.element, ts.element) || (byte(fs.element) && byte(ts.element));
+        if (sameElem && (ts.constElem || !fs.constElem)) return true;
     }
     // A function whose signature differs from the target function type only
     // by raw 'T*' vs region-less '&T'/'?&T' in some parameter/return slots

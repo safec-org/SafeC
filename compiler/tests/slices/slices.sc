@@ -29,3 +29,11 @@ int rvalues() {
     int a[3] = {7, 8, 9};
     return (int)whole(a[0..3]).len + whole(a[0..3])[2] + whole(a[0..3])[1..3][0];
 }
+
+// Byte slices interconvert across char / unsigned char / signed char.
+unsigned long count_bytes([]const unsigned char b) { return b.len; }
+int bytes_of_text() {
+    char t[3] = {'a', 'b', 'c'};
+    []char ct = t[0..3];
+    return (int)count_bytes(ct) - 3;
+}
