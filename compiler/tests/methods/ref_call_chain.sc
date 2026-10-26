@@ -1,4 +1,4 @@
-// SAFEC-RUN
+// EXEC
 // A method called through a member chain on a call that returns a
 // reference ('l.at(i).vals.push(x)', 'a.b().c.d()') gets the referenced
 // object as self, not a temporary copy of it — the mutation sticks. So do
