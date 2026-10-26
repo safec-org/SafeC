@@ -46,28 +46,29 @@
 #include <std/ml/device.h>
 #include <std/ml/device_kernels.h>
 #include <std/ml/gpu_mps.h>
+#include <std/ml/mps_ffi.h>
 
 namespace std {
 
 extern unsigned char* malloc(size_t size);
 extern void  free(unsigned char* ptr);
 extern unsigned char* memcpy(unsigned char* dst, const unsigned char* src, size_t n);
-extern long  write(int fd, const void* buf, unsigned long n);
+extern long  write(int fd, const char* buf, unsigned long n);
 
 #if defined(__APPLE__)
-extern void* objc_getClass(const char* name);
-extern void* sel_registerName(const char* name);
-extern void* objc_msgSend(void* recv, void* op);
-extern void* objc_autoreleasePoolPush();
-extern void  objc_autoreleasePoolPop(void* pool);
+extern MtlObject* objc_getClass(const char* name);
+extern ObjcSel_* sel_registerName(const char* name);
+extern MtlObject* objc_msgSend(MtlObject* recv, ObjcSel_* op);   // cast to each message's signature
+extern ObjcPool_* objc_autoreleasePoolPush();
+extern void  objc_autoreleasePoolPop(ObjcPool_* pool);
 #else
 // No Metal elsewhere (gpu_mps.sc's stand-ins): mps_device_handle() is null,
 // so the backend is never available.
-static void* objc_getClass(const char* name) { return (void*)0; }
-static void* sel_registerName(const char* name) { return (void*)0; }
-static void* objc_msgSend(void* recv, void* op) { return (void*)0; }
-static void* objc_autoreleasePoolPush() { return (void*)0; }
-static void  objc_autoreleasePoolPop(void* pool) { }
+static MtlObject* objc_getClass(const char* name) { return null; }
+static ObjcSel_* sel_registerName(const char* name) { return null; }
+static MtlObject* objc_msgSend(MtlObject* recv, ObjcSel_* op) { return null; }
+static ObjcPool_* objc_autoreleasePoolPush() { return null; }
+static void  objc_autoreleasePoolPop(ObjcPool_* pool) { }
 #endif
 
 // Message shapes (objc_msgSend cast per shape, assigned before the call: see
@@ -77,21 +78,25 @@ struct DmpsSize_ {
     unsigned long height;
     unsigned long depth;
 };
-typedef fn void*(void*, void*) DmpsMsg0;
-typedef fn void*(void*, void*, void*) DmpsMsg1;
-typedef fn void*(void*, void*, void*, void*) DmpsMsg2;
-typedef fn void*(void*, void*, void*, void*, void*) DmpsMsg3;
-typedef fn void*(void*, void*, unsigned long) DmpsMsgPU;
-typedef fn void*(void*, void*, unsigned long, unsigned long) DmpsMsgPUU;
-typedef fn unsigned long(void*, void*) DmpsMsgU;
-typedef fn int(void*, void*, void*) DmpsMsgB1;
-typedef fn void(void*, void*) DmpsMsgV;
-typedef fn void(void*, void*, void*) DmpsMsgV1;
-typedef fn void(void*, void*, unsigned long) DmpsMsgVU;
-typedef fn void(void*, void*, unsigned long, unsigned long) DmpsMsgVUU;
-typedef fn void(void*, void*, void*, unsigned long) DmpsMsgV1U;
-typedef fn void(void*, void*, const void*, unsigned long, unsigned long) DmpsMsgBytes;
-typedef fn void(void*, void*, struct DmpsSize_, struct DmpsSize_) DmpsMsgDispatch;
+typedef fn MtlObject*(MtlObject*, ObjcSel_*) DmpsMsg0;
+typedef fn MtlObject*(MtlObject*, ObjcSel_*, MtlObject*) DmpsMsg1;
+typedef fn MtlObject*(MtlObject*, ObjcSel_*, const char*) DmpsMsgCStr;   // initWithUTF8String:
+typedef fn const char*(MtlObject*, ObjcSel_*) DmpsMsgStr;               // UTF8String
+// ...:error: messages: the last argument is where an NSError* goes
+typedef fn MtlObject*(MtlObject*, ObjcSel_*, MtlObject*, struct MtlObject**) DmpsMsg2;
+typedef fn MtlObject*(MtlObject*, ObjcSel_*, MtlObject*, MtlObject*, struct MtlObject**) DmpsMsg3;
+typedef fn MtlObject*(MtlObject*, ObjcSel_*, unsigned long) DmpsMsgPU;
+typedef fn MtlObject*(MtlObject*, ObjcSel_*, unsigned long, unsigned long) DmpsMsgPUU;
+typedef fn unsigned long(MtlObject*, ObjcSel_*) DmpsMsgU;
+typedef fn int(MtlObject*, ObjcSel_*, ObjcSel_*) DmpsMsgB1;             // respondsToSelector:
+typedef fn void(MtlObject*, ObjcSel_*) DmpsMsgV;
+typedef fn void(MtlObject*, ObjcSel_*, MtlObject*) DmpsMsgV1;
+typedef fn void(MtlObject*, ObjcSel_*, unsigned long) DmpsMsgVU;
+typedef fn void(MtlObject*, ObjcSel_*, unsigned long, unsigned long) DmpsMsgVUU;
+typedef fn void(MtlObject*, ObjcSel_*, MtlObject*, unsigned long) DmpsMsgV1U;
+typedef fn void(MtlObject*, ObjcSel_*, const unsigned char*, unsigned long, unsigned long) DmpsMsgBytes;
+typedef fn void(MtlObject*, ObjcSel_*, struct MtlObject**, unsigned long, unsigned long) DmpsMsgUseList;   // useResources:count:usage:
+typedef fn void(MtlObject*, ObjcSel_*, struct DmpsSize_, struct DmpsSize_) DmpsMsgDispatch;
 
 #define DMPS_BLOCK 256UL
 #define DMPS_MAX_GROUPS 4096UL
@@ -111,7 +116,7 @@ typedef fn void(void*, void*, struct DmpsSize_, struct DmpsSize_) DmpsMsgDispatc
 struct DmpsBuf_ {
     unsigned long addr;
     unsigned long bytes;
-    void* buf;
+    MtlObject* buf;
     unsigned char* cpu;
 };
 
@@ -126,22 +131,22 @@ struct DmpsGemm_ {
 };
 
 static int   g_dmps_state = 0;          // 0 = not yet, 1 = ready, -1 = unusable
-static void* g_dmps_dev = (void*)0;
-static void* g_dmps_queue = (void*)0;
-static void* g_dmps_rset = (void*)0;    // the residency set (null before macOS 15: useResources instead)
-static void* g_dmps_event = (void*)0;
-static void* g_dmps_lib[4];             // builds: plain, DK_TAGGED, and both with DK_ATTN64
+static MtlObject* g_dmps_dev = null;
+static MtlObject* g_dmps_queue = null;
+static MtlObject* g_dmps_rset = null;    // the residency set (null before macOS 15: useResources instead)
+static MtlObject* g_dmps_event = null;
+static MtlObject* g_dmps_lib[4];             // builds: plain, DK_TAGGED, and both with DK_ATTN64
 static int   g_dmps_lib_state[4];
-static void* g_dmps_pipe[2 * DK_COUNT];
+static MtlObject* g_dmps_pipe[2 * DK_COUNT];
 static int   g_dmps_pipe_state[2 * DK_COUNT];   // 0 = not yet, 1 = built, -1 = can't
-static void* g_dmps_apipe[6];           // the attention kernels of the DK_ATTN64 builds
+static MtlObject* g_dmps_apipe[6];           // the attention kernels of the DK_ATTN64 builds
 static int   g_dmps_apipe_state[6];
-static void* g_dmps_gemm[24];           // mk_gemm<tile>_<op(a)><op(b)>_<type>
+static MtlObject* g_dmps_gemm[24];           // mk_gemm<tile>_<op(a)><op(b)>_<type>
 static int   g_dmps_gemm_state[24];
-static void* g_dmps_conv[36];           // mk_conv_<op><shape>_<type>
+static MtlObject* g_dmps_conv[36];           // mk_conv_<op><shape>_<type>
 static int   g_dmps_conv_state[36];
-static void* g_dmps_copy = (void*)0;
-static void* g_dmps_upload = (void*)0;
+static MtlObject* g_dmps_copy = null;
+static MtlObject* g_dmps_upload = null;
 
 // Buffers sorted by address.
 static struct DmpsBuf_* g_dmps_bufs = (struct DmpsBuf_*)0;
@@ -150,43 +155,43 @@ static unsigned long g_dmps_capbufs = 0UL;
 
 // The open command buffer and its encoder (retained; null when none), and
 // the committed ones not yet known to be done.
-static void* g_dmps_cb = (void*)0;
-static void* g_dmps_enc = (void*)0;
-static void* g_dmps_last_pipe = (void*)0;
+static MtlObject* g_dmps_cb = null;
+static MtlObject* g_dmps_enc = null;
+static MtlObject* g_dmps_last_pipe = null;
 static unsigned long g_dmps_count = 0UL;
 static unsigned long g_dmps_serial = 0UL;   // what the last committed command buffer signals
-static void* g_dmps_flight[DMPS_FLIGHT];
+static MtlObject* g_dmps_flight[DMPS_FLIGHT];
 static unsigned long g_dmps_nflight = 0UL;
 static int g_dmps_reported = 0;
 
 // Selectors on the encoding path, resolved once.
-static void* s_dmps_setPipe = (void*)0;
-static void* s_dmps_setBytes = (void*)0;
-static void* s_dmps_dispatch = (void*)0;
-static void* s_dmps_barrier = (void*)0;
-static void* s_dmps_status = (void*)0;
-static void* s_dmps_release = (void*)0;
+static ObjcSel_* s_dmps_setPipe = null;
+static ObjcSel_* s_dmps_setBytes = null;
+static ObjcSel_* s_dmps_dispatch = null;
+static ObjcSel_* s_dmps_barrier = null;
+static ObjcSel_* s_dmps_status = null;
+static ObjcSel_* s_dmps_release = null;
 
-static void dmps_log_(const char* what, void* nserror) {
+static void dmps_log_(const char* what, MtlObject* nserror) {
     unsafe {
         const char* msg = "";
-        if (nserror != (void*)0) {
+        if (nserror != null) {
             DmpsMsg0 m0 = (DmpsMsg0)objc_msgSend;
-            void* d = m0(nserror, sel_registerName("localizedDescription"));
-            if (d != (void*)0) msg = (const char*)m0(d, sel_registerName("UTF8String"));
+            MtlObject* d = m0(nserror, sel_registerName("localizedDescription"));
+            if (d != null) { DmpsMsgStr ms = (DmpsMsgStr)objc_msgSend; msg = ms(d, sel_registerName("UTF8String")); }
         }
         unsigned long n = 0UL;
         while (what[n] != (char)0) n = n + 1UL;
-        write(2, (const void*)what, n);
+        write(2, (const char*)what, n);
         n = 0UL;
         while (msg[n] != (char)0) n = n + 1UL;
-        write(2, (const void*)msg, n);
-        write(2, (const void*)"\n", 1UL);
+        write(2, (const char*)msg, n);
+        write(2, (const char*)"\n", 1UL);
     }
 }
 
-static void dmps_release_obj_(void* o) {
-    if (o == (void*)0) return;
+static void dmps_release_obj_(MtlObject* o) {
+    if (o == null) return;
     unsafe {
         DmpsMsgV mv = (DmpsMsgV)objc_msgSend;
         mv(o, s_dmps_release);
@@ -198,11 +203,11 @@ static int dmps_ensure_() {
     g_dmps_state = -1;
     unsafe {
         match (mps_device_handle()) {
-            case some(d): { g_dmps_dev = (void*)d; }
+            case some(d): { g_dmps_dev = (MtlObject*)d; }
             case null: { return 0; }
         }
         match (mps_queue_handle()) {
-            case some(q): { g_dmps_queue = (void*)q; }
+            case some(q): { g_dmps_queue = (MtlObject*)q; }
             case null: { return 0; }
         }
         s_dmps_setPipe = sel_registerName("setComputePipelineState:");
@@ -215,16 +220,16 @@ static int dmps_ensure_() {
         DmpsMsg2 m2 = (DmpsMsg2)objc_msgSend;
         DmpsMsgB1 responds = (DmpsMsgB1)objc_msgSend;
         g_dmps_event = m0(g_dmps_dev, sel_registerName("newEvent"));
-        if (g_dmps_event == (void*)0) return 0;
-        void* resSel = sel_registerName("newResidencySetWithDescriptor:error:");
+        if (g_dmps_event == null) return 0;
+        ObjcSel_* resSel = sel_registerName("newResidencySetWithDescriptor:error:");
         if ((responds(g_dmps_dev, sel_registerName("respondsToSelector:"), resSel) & 255) != 0) {
-            void* desc = m0(objc_getClass("MTLResidencySetDescriptor"), sel_registerName("new"));
+            MtlObject* desc = m0(objc_getClass("MTLResidencySetDescriptor"), sel_registerName("new"));
             DmpsMsgVU setCap = (DmpsMsgVU)objc_msgSend;
             setCap(desc, sel_registerName("setInitialCapacity:"), 256UL);
-            void* err = (void*)0;
-            g_dmps_rset = m2(g_dmps_dev, resSel, desc, (void*)&err);
+            MtlObject* err = null;
+            g_dmps_rset = m2(g_dmps_dev, resSel, desc, &err);
             dmps_release_obj_(desc);
-            if (g_dmps_rset != (void*)0) {
+            if (g_dmps_rset != null) {
                 DmpsMsgV1 m1v = (DmpsMsgV1)objc_msgSend;
                 m1v(g_dmps_queue, sel_registerName("addResidencySet:"), g_dmps_rset);
             }
@@ -257,30 +262,31 @@ static int dmps_library_(int b) {
             memcpy((unsigned char*)(text + np), (const unsigned char*)src, ns + 1UL);
             src = (const char*)text;
         }
-        void* pool = objc_autoreleasePoolPush();
+        ObjcPool_* pool = objc_autoreleasePoolPush();
         DmpsMsg0 m0 = (DmpsMsg0)objc_msgSend;
         DmpsMsg1 m1 = (DmpsMsg1)objc_msgSend;
         DmpsMsg3 m3 = (DmpsMsg3)objc_msgSend;
         DmpsMsgVU mvu = (DmpsMsgVU)objc_msgSend;
         DmpsMsgB1 responds = (DmpsMsgB1)objc_msgSend;
-        void* str = m1(m0(objc_getClass("NSString"), sel_registerName("alloc")), sel_registerName("initWithUTF8String:"),
-                       (void*)src);
-        void* opts = m0(m0(objc_getClass("MTLCompileOptions"), sel_registerName("alloc")), sel_registerName("init"));
-        void* mathMode = sel_registerName("setMathMode:");
+        DmpsMsgCStr mcs = (DmpsMsgCStr)objc_msgSend;
+        MtlObject* str = mcs(m0(objc_getClass("NSString"), sel_registerName("alloc")), sel_registerName("initWithUTF8String:"),
+                             src);
+        MtlObject* opts = m0(m0(objc_getClass("MTLCompileOptions"), sel_registerName("alloc")), sel_registerName("init"));
+        ObjcSel_* mathMode = sel_registerName("setMathMode:");
         if ((responds(opts, sel_registerName("respondsToSelector:"), mathMode) & 255) != 0) {
             mvu(opts, mathMode, 0UL);                                                  // MTLMathModeSafe
             mvu(opts, sel_registerName("setMathFloatingPointFunctions:"), 1UL);        // ...Precise
         } else {
             mvu(opts, sel_registerName("setFastMathEnabled:"), 0UL);
         }
-        void* err = (void*)0;
-        void* lib = m3(g_dmps_dev, sel_registerName("newLibraryWithSource:options:error:"), str, opts, (void*)&err);
-        if (lib == (void*)0) dmps_log_("device_mps: the kernels don't compile: ", err);
+        MtlObject* err = null;
+        MtlObject* lib = m3(g_dmps_dev, sel_registerName("newLibraryWithSource:options:error:"), str, opts, &err);
+        if (lib == null) dmps_log_("device_mps: the kernels don't compile: ", err);
         dmps_release_obj_(str);
         dmps_release_obj_(opts);
         objc_autoreleasePoolPop(pool);
         if (text != (char*)0) free((unsigned char*)text);
-        if (lib == (void*)0) return 0;
+        if (lib == null) return 0;
         g_dmps_lib[b] = lib;
     }
     g_dmps_lib_state[b] = 1;
@@ -289,35 +295,36 @@ static int dmps_library_(int b) {
 
 // The pipeline for function 'name' of build b, null when it can't be built
 // for 'threads' threads per threadgroup.
-static void* dmps_make_pipe_(int b, const char* name, unsigned long threads) {
-    if (!dmps_library_(b)) return (void*)0;
+static MtlObject* dmps_make_pipe_(int b, const char* name, unsigned long threads) {
+    if (!dmps_library_(b)) return null;
     unsafe {
-        void* pool = objc_autoreleasePoolPush();
+        ObjcPool_* pool = objc_autoreleasePoolPush();
         DmpsMsg0 m0 = (DmpsMsg0)objc_msgSend;
         DmpsMsg1 m1 = (DmpsMsg1)objc_msgSend;
         DmpsMsg2 m2 = (DmpsMsg2)objc_msgSend;
-        void* str = m1(m0(objc_getClass("NSString"), sel_registerName("alloc")), sel_registerName("initWithUTF8String:"),
-                       (void*)name);
-        void* f = m1(g_dmps_lib[b], sel_registerName("newFunctionWithName:"), str);
+        DmpsMsgCStr mcs = (DmpsMsgCStr)objc_msgSend;
+        MtlObject* str = mcs(m0(objc_getClass("NSString"), sel_registerName("alloc")), sel_registerName("initWithUTF8String:"),
+                             name);
+        MtlObject* f = m1(g_dmps_lib[b], sel_registerName("newFunctionWithName:"), str);
         dmps_release_obj_(str);
-        void* pipe = (void*)0;
-        if (f != (void*)0) {
-            void* err = (void*)0;
-            pipe = m2(g_dmps_dev, sel_registerName("newComputePipelineStateWithFunction:error:"), f, (void*)&err);
-            if (pipe == (void*)0) dmps_log_("device_mps: a kernel's pipeline failed: ", err);
+        MtlObject* pipe = null;
+        if (f != null) {
+            MtlObject* err = null;
+            pipe = m2(g_dmps_dev, sel_registerName("newComputePipelineStateWithFunction:error:"), f, &err);
+            if (pipe == null) dmps_log_("device_mps: a kernel's pipeline failed: ", err);
             dmps_release_obj_(f);
         } else {
             unsigned long n = 0UL;
             while (name[n] != (char)0) n = n + 1UL;
-            write(2, (const void*)"device_mps: no such kernel: ", 28UL);
-            write(2, (const void*)name, n);
-            write(2, (const void*)"\n", 1UL);
+            write(2, (const char*)"device_mps: no such kernel: ", 28UL);
+            write(2, (const char*)name, n);
+            write(2, (const char*)"\n", 1UL);
         }
-        if (pipe != (void*)0) {
+        if (pipe != null) {
             DmpsMsgU mu = (DmpsMsgU)objc_msgSend;
             if (mu(pipe, sel_registerName("maxTotalThreadsPerThreadgroup")) < threads) {
                 dmps_release_obj_(pipe);
-                pipe = (void*)0;
+                pipe = null;
             }
         }
         objc_autoreleasePoolPop(pool);
@@ -340,25 +347,25 @@ static unsigned long dmps_block_(int kernel) {
 
 // The fused attention kernels with 16 x 16 tiles (the DK_ATTN64 builds), when
 // the head dims allow; null otherwise.
-static void* dmps_attn64_pipe_(int kernel, int tagged, const &DevArgs args) {
-    if (kernel != DK_ATTN_FWD && kernel != DK_ATTN_BWD_Q && kernel != DK_ATTN_BWD_KV) return (void*)0;
+static MtlObject* dmps_attn64_pipe_(int kernel, int tagged, const &DevArgs args) {
+    if (kernel != DK_ATTN_FWD && kernel != DK_ATTN_BWD_Q && kernel != DK_ATTN_BWD_KV) return null;
     unsafe {
-        if (args.u[3] > 64U || args.u[4] > 64U) return (void*)0;
+        if (args.u[3] > 64U || args.u[4] > 64U) return null;
         unsigned long slot = (unsigned long)tagged * 3UL + (unsigned long)(kernel - DK_ATTN_FWD);
         if (g_dmps_apipe_state[slot] == 0) {
             g_dmps_apipe[slot] = dmps_make_pipe_(2 + tagged, device_kernel_name_(kernel), DMPS_ATTN64_T * DMPS_ATTN64_T);
-            g_dmps_apipe_state[slot] = g_dmps_apipe[slot] != (void*)0 ? 1 : -1;
+            g_dmps_apipe_state[slot] = g_dmps_apipe[slot] != null ? 1 : -1;
         }
         return g_dmps_apipe[slot];
     }
 }
 
-static void* dmps_pipe_(int kernel, int tagged) {
+static MtlObject* dmps_pipe_(int kernel, int tagged) {
     unsigned long slot = (unsigned long)tagged * (unsigned long)DK_COUNT + (unsigned long)kernel;
     unsafe {
         if (g_dmps_pipe_state[slot] == 0) {
             g_dmps_pipe[slot] = dmps_make_pipe_(tagged, device_kernel_name_(kernel), dmps_block_(kernel));
-            g_dmps_pipe_state[slot] = g_dmps_pipe[slot] != (void*)0 ? 1 : -1;
+            g_dmps_pipe_state[slot] = g_dmps_pipe[slot] != null ? 1 : -1;
         }
         return g_dmps_pipe[slot];
     }
@@ -394,44 +401,44 @@ static unsigned char* dmps_host_(unsigned long h) {
 static void dmps_use_all_() {
     if (g_dmps_nbufs == 0UL) return;
     unsafe {
-        void** list = (void**)malloc(sizeof(void*) * g_dmps_nbufs);
-        if (list == (void**)0) return;
+        struct MtlObject** list = (struct MtlObject**)malloc(sizeof(MtlObject*) * g_dmps_nbufs);
+        if (list == null) return;
         unsigned long i = 0UL;
         while (i < g_dmps_nbufs) { list[i] = g_dmps_bufs[i].buf; i = i + 1UL; }
-        DmpsMsgBytes use = (DmpsMsgBytes)objc_msgSend;
-        use(g_dmps_enc, sel_registerName("useResources:count:usage:"), (const void*)list, g_dmps_nbufs, 3UL);
+        DmpsMsgUseList use = (DmpsMsgUseList)objc_msgSend;
+        use(g_dmps_enc, sel_registerName("useResources:count:usage:"), list, g_dmps_nbufs, 3UL);
         free((unsigned char*)list);
     }
 }
 
 // The open encoder, started (on a new command buffer) if there is none.
 static int dmps_begin_() {
-    if (g_dmps_enc != (void*)0) return 1;
+    if (g_dmps_enc != null) return 1;
     // gpu_mps.h work in an open batch runs first
     if (mps_batch_is_active()) mps_batch_submit();
     unsafe {
-        void* pool = objc_autoreleasePoolPush();
+        ObjcPool_* pool = objc_autoreleasePoolPush();
         DmpsMsg0 m0 = (DmpsMsg0)objc_msgSend;
         DmpsMsgPU mpu = (DmpsMsgPU)objc_msgSend;
-        void* retain = sel_registerName("retain");
+        ObjcSel_* retain = sel_registerName("retain");
         g_dmps_cb = m0(m0(g_dmps_queue, sel_registerName("commandBufferWithUnretainedReferences")), retain);
-        if (g_dmps_cb != (void*)0 && g_dmps_serial > 0UL) {
+        if (g_dmps_cb != null && g_dmps_serial > 0UL) {
             DmpsMsgV1U wait = (DmpsMsgV1U)objc_msgSend;
             wait(g_dmps_cb, sel_registerName("encodeWaitForEvent:value:"), g_dmps_event, g_dmps_serial);
         }
-        if (g_dmps_cb != (void*)0)
+        if (g_dmps_cb != null)
             g_dmps_enc = m0(mpu(g_dmps_cb, sel_registerName("computeCommandEncoderWithDispatchType:"), DMPS_CONCURRENT), retain);
         objc_autoreleasePoolPop(pool);
-        if (g_dmps_enc == (void*)0) {
+        if (g_dmps_enc == null) {
             dmps_release_obj_(g_dmps_cb);
-            g_dmps_cb = (void*)0;
+            g_dmps_cb = null;
             return 0;
         }
         DmpsMsgVUU tgMem = (DmpsMsgVUU)objc_msgSend;
         tgMem(g_dmps_enc, sel_registerName("setThreadgroupMemoryLength:atIndex:"), DMPS_RED_BYTES, 0UL);
-        if (g_dmps_rset == (void*)0) dmps_use_all_();
+        if (g_dmps_rset == null) dmps_use_all_();
     }
-    g_dmps_last_pipe = (void*)0;
+    g_dmps_last_pipe = null;
     g_dmps_count = 0UL;
     return 1;
 }
@@ -453,12 +460,12 @@ static void dmps_retire_() {
 
 // Commits the open command buffer (no wait).
 static void dmps_commit_() {
-    if (g_dmps_cb == (void*)0) return;
+    if (g_dmps_cb == null) return;
     unsafe {
         DmpsMsgV mv = (DmpsMsgV)objc_msgSend;
         mv(g_dmps_enc, sel_registerName("endEncoding"));
         dmps_release_obj_(g_dmps_enc);
-        g_dmps_enc = (void*)0;
+        g_dmps_enc = null;
         g_dmps_serial = g_dmps_serial + 1UL;
         DmpsMsgV1U signal = (DmpsMsgV1U)objc_msgSend;
         signal(g_dmps_cb, sel_registerName("encodeSignalEvent:value:"), g_dmps_event, g_dmps_serial);
@@ -470,11 +477,11 @@ static void dmps_commit_() {
         }
         g_dmps_flight[g_dmps_nflight] = g_dmps_cb;
         g_dmps_nflight = g_dmps_nflight + 1UL;
-        g_dmps_cb = (void*)0;
+        g_dmps_cb = null;
     }
 }
 
-static int dmps_busy_() { return g_dmps_cb != (void*)0 || g_dmps_nflight > 0UL; }
+static int dmps_busy_() { return g_dmps_cb != null || g_dmps_nflight > 0UL; }
 
 // Commits and waits for everything queued; 0 if the GPU reported an error.
 static int dmps_wait_() {
@@ -482,7 +489,7 @@ static int dmps_wait_() {
     if (g_dmps_nflight == 0UL) return 1;
     int ok = 1;
     unsafe {
-        void* pool = objc_autoreleasePoolPush();
+        ObjcPool_* pool = objc_autoreleasePoolPush();
         DmpsMsgV mv = (DmpsMsgV)objc_msgSend;
         DmpsMsgU mu = (DmpsMsgU)objc_msgSend;
         DmpsMsg0 m0 = (DmpsMsg0)objc_msgSend;
@@ -509,7 +516,7 @@ static int dmps_wait_() {
 // One dispatch of 'groups' threadgroups of 'threads' on the open encoder,
 // 'args' (len bytes) at buffer 0 and 'extra' (extraLen bytes, if any) at
 // buffer 1; then a barrier, so the next one sees its writes.
-static int dmps_dispatch_ex_(void* pipe, const void* args, unsigned long len, const void* extra, unsigned long extraLen,
+static int dmps_dispatch_ex_(MtlObject* pipe, const unsigned char* args, unsigned long len, const unsigned char* extra, unsigned long extraLen,
                              unsigned long groupsX, unsigned long groupsY, unsigned long groupsZ, unsigned long threads) {
     if (!dmps_begin_()) return 0;
     unsafe {
@@ -535,9 +542,9 @@ static int dmps_dispatch_ex_(void* pipe, const void* args, unsigned long len, co
     return 1;
 }
 
-static int dmps_dispatch_(void* pipe, const void* args, unsigned long len, unsigned long groupsX, unsigned long groupsY,
+static int dmps_dispatch_(MtlObject* pipe, const unsigned char* args, unsigned long len, unsigned long groupsX, unsigned long groupsY,
                           unsigned long groupsZ, unsigned long threads) {
-    unsafe { return dmps_dispatch_ex_(pipe, args, len, (const void*)0, 0UL, groupsX, groupsY, groupsZ, threads); }
+    unsafe { return dmps_dispatch_ex_(pipe, args, len, null, 0UL, groupsX, groupsY, groupsZ, threads); }
 }
 
 // The GEMM kernel for g: 64 x 64 tiles when there are enough of them to fill
@@ -565,10 +572,10 @@ static int dmps_gemm_(const &DmpsGemm_ g, unsigned long batch) {
             while (sfx[j] != (char)0) { name[i] = sfx[j]; i = i + 1UL; j = j + 1UL; }
             name[i] = (char)0;
             g_dmps_gemm[slot] = dmps_make_pipe_(0, (const char*)&name[0], 128UL);
-            g_dmps_gemm_state[slot] = g_dmps_gemm[slot] != (void*)0 ? 1 : -1;
+            g_dmps_gemm_state[slot] = g_dmps_gemm[slot] != null ? 1 : -1;
         }
-        if (g_dmps_gemm[slot] == (void*)0) { device_note_cpu_launch_(DEVICE_MPS); return 0; }   // the tensor op runs on the CPU
-        return dmps_dispatch_(g_dmps_gemm[slot], (const void*)g, sizeof(struct DmpsGemm_), (n + tile - 1UL) / tile,
+        if (g_dmps_gemm[slot] == null) { device_note_cpu_launch_(DEVICE_MPS); return 0; }   // the tensor op runs on the CPU
+        return dmps_dispatch_(g_dmps_gemm[slot], (const unsigned char*)g, sizeof(struct DmpsGemm_), (n + tile - 1UL) / tile,
                               (m + tile - 1UL) / tile, batch, 128UL);
     }
 }
@@ -605,7 +612,7 @@ static int dmps_conv_shape_(int op, unsigned long m, unsigned long n) {
 }
 
 // The pipeline for conv kernel op (0 fwd, 1 bwd_x, 2 bwd_w), a shape, type t.
-static void* dmps_conv_pipe_(int op, int shape, int t) {
+static MtlObject* dmps_conv_pipe_(int op, int shape, int t) {
     unsigned long slot = ((unsigned long)op * 4UL + (unsigned long)shape) * 3UL + (unsigned long)t;
     unsafe {
         if (g_dmps_conv_state[slot] == 0) {
@@ -621,7 +628,7 @@ static void* dmps_conv_pipe_(int op, int shape, int t) {
             while (sfx[j] != (char)0) { name[i] = sfx[j]; i = i + 1UL; j = j + 1UL; }
             name[i] = (char)0;
             g_dmps_conv[slot] = dmps_make_pipe_(0, (const char*)&name[0], 128UL);
-            g_dmps_conv_state[slot] = g_dmps_conv[slot] != (void*)0 ? 1 : -1;
+            g_dmps_conv_state[slot] = g_dmps_conv[slot] != null ? 1 : -1;
         }
         return g_dmps_conv[slot];
     }
@@ -677,19 +684,19 @@ unsigned long MpsBackend::alloc(unsigned long bytes) {
             g_dmps_capbufs = cap;
         }
         DmpsMsgPUU newBuf = (DmpsMsgPUU)objc_msgSend;
-        void* buf = newBuf(g_dmps_dev, sel_registerName("newBufferWithLength:options:"), bytes, DMPS_SHARED_UNTRACKED);
-        if (buf == (void*)0) return 0UL;
+        MtlObject* buf = newBuf(g_dmps_dev, sel_registerName("newBufferWithLength:options:"), bytes, DMPS_SHARED_UNTRACKED);
+        if (buf == null) return 0UL;
         DmpsMsgU mu = (DmpsMsgU)objc_msgSend;
         DmpsMsg0 m0 = (DmpsMsg0)objc_msgSend;
         unsigned long addr = mu(buf, sel_registerName("gpuAddress"));
         unsigned char* cpu = (unsigned char*)m0(buf, sel_registerName("contents"));
         if (addr == 0UL || dev_tag_(addr) != 0UL || cpu == (unsigned char*)0) { dmps_release_obj_(buf); return 0UL; }
-        if (g_dmps_rset != (void*)0) {
+        if (g_dmps_rset != null) {
             DmpsMsgV1 m1v = (DmpsMsgV1)objc_msgSend;
             DmpsMsgV mv = (DmpsMsgV)objc_msgSend;
             m1v(g_dmps_rset, sel_registerName("addAllocation:"), buf);
             mv(g_dmps_rset, sel_registerName("commit"));
-        } else if (g_dmps_enc != (void*)0) {
+        } else if (g_dmps_enc != null) {
             DmpsMsgV1U use = (DmpsMsgV1U)objc_msgSend;
             use(g_dmps_enc, sel_registerName("useResource:usage:"), buf, 3UL);
         }
@@ -711,8 +718,8 @@ void MpsBackend::release(unsigned long handle) {
     if (i < 0L) return;
     if (dmps_busy_()) dmps_wait_();
     unsafe {
-        void* buf = g_dmps_bufs[i].buf;
-        if (g_dmps_rset != (void*)0) {
+        MtlObject* buf = g_dmps_bufs[i].buf;
+        if (g_dmps_rset != null) {
             DmpsMsgV1 m1v = (DmpsMsgV1)objc_msgSend;
             DmpsMsgV mv = (DmpsMsgV)objc_msgSend;
             m1v(g_dmps_rset, sel_registerName("removeAllocation:"), buf);
@@ -733,12 +740,12 @@ int MpsBackend::upload(unsigned long dst, const &float src, unsigned long n) {
     unsigned char* p = dmps_host_(dst);
     if (p == (unsigned char*)0) return 0;
     if (dmps_busy_() && n * 4UL <= DMPS_INLINE_BYTES) {
-        if (g_dmps_upload == (void*)0) g_dmps_upload = dmps_make_pipe_(0, "mk_upload", DMPS_BLOCK);
-        if (g_dmps_upload != (void*)0) {
+        if (g_dmps_upload == null) g_dmps_upload = dmps_make_pipe_(0, "mk_upload", DMPS_BLOCK);
+        if (g_dmps_upload != null) {
             struct DevArgs a = dev_args_();
             unsafe {
                 a.p[2] = dst; a.u[7] = (unsigned int)n;
-                return dmps_dispatch_ex_(g_dmps_upload, (const void*)&a, sizeof(struct DevArgs), (const void*)src, n * 4UL,
+                return dmps_dispatch_ex_(g_dmps_upload, (const unsigned char*)&a, sizeof(struct DevArgs), (const unsigned char*)src, n * 4UL,
                                          (n + DMPS_BLOCK - 1UL) / DMPS_BLOCK, 1UL, 1UL, DMPS_BLOCK);
             }
         }
@@ -759,12 +766,12 @@ int MpsBackend::download(&float dst, unsigned long src, unsigned long n) {
 int MpsBackend::copy(unsigned long dst, unsigned long src, unsigned long n) {
     if (n == 0UL) return 1;
     if (!dmps_ensure_()) return 0;
-    if (g_dmps_copy == (void*)0) g_dmps_copy = dmps_make_pipe_(0, "mk_copy", DMPS_BLOCK);
-    if (g_dmps_copy == (void*)0) { device_note_cpu_launch_(DEVICE_MPS); return 0; }
+    if (g_dmps_copy == null) g_dmps_copy = dmps_make_pipe_(0, "mk_copy", DMPS_BLOCK);
+    if (g_dmps_copy == null) { device_note_cpu_launch_(DEVICE_MPS); return 0; }
     struct DevArgs a = dev_args_();
     unsafe {
         a.p[0] = src; a.p[2] = dst; a.u[7] = (unsigned int)n;
-        return dmps_dispatch_(g_dmps_copy, (const void*)&a, sizeof(struct DevArgs), (n + DMPS_BLOCK - 1UL) / DMPS_BLOCK, 1UL,
+        return dmps_dispatch_(g_dmps_copy, (const unsigned char*)&a, sizeof(struct DevArgs), (n + DMPS_BLOCK - 1UL) / DMPS_BLOCK, 1UL,
                               1UL, DMPS_BLOCK);
     }
 }
@@ -832,8 +839,8 @@ int MpsBackend::conv(const &DevConv c) {
             (((unsigned long)k.Wi + (unsigned long)k.sW - 1UL) / (unsigned long)k.sW);
     }
     int shape = dmps_conv_shape_(op, m, n * phases);
-    void* pipe = dmps_conv_pipe_(op, shape, c.dtype);
-    if (pipe == (void*)0) { device_note_cpu_launch_(DEVICE_MPS); return 0; }   // im2col + GEMM instead
+    MtlObject* pipe = dmps_conv_pipe_(op, shape, c.dtype);
+    if (pipe == null) { device_note_cpu_launch_(DEVICE_MPS); return 0; }   // im2col + GEMM instead
     unsigned long groupsX = (n + dmps_shape_cols_(shape) - 1UL) / dmps_shape_cols_(shape);
     unsigned long groupsY = (m + dmps_shape_rows_(shape) - 1UL) / dmps_shape_rows_(shape);
     unsigned long splits = phases;
@@ -852,7 +859,7 @@ int MpsBackend::conv(const &DevConv c) {
         k.kSplit = (unsigned int)per;
         splits = (kTot + per - 1UL) / per;
     }
-    unsafe { return dmps_dispatch_(pipe, (const void*)&k, sizeof(struct DmpsConv_), groupsX, groupsY, splits, 128UL); }
+    unsafe { return dmps_dispatch_(pipe, (const unsigned char*)&k, sizeof(struct DmpsConv_), groupsX, groupsY, splits, 128UL); }
 }
 int MpsBackend::storage16() { return 1; }
 
@@ -864,9 +871,9 @@ int MpsBackend::launch(int kernel, unsigned long n, const &DevArgs args) {
         while (i < (unsigned long)DEVK_PTRS) { if (dev_tag_(args.p[i]) != 0UL) tagged = 1; i = i + 1UL; }
     }
     unsigned long tile = DMPS_ATTN64_T;
-    void* pipe = dmps_attn64_pipe_(kernel, tagged, args);
-    if (pipe == (void*)0) { pipe = dmps_pipe_(kernel, tagged); tile = DMPS_ATTN_T; }
-    if (pipe == (void*)0) return dmps_cpu_launch_(kernel, n, args, tagged);
+    MtlObject* pipe = dmps_attn64_pipe_(kernel, tagged, args);
+    if (pipe == null) { pipe = dmps_pipe_(kernel, tagged); tile = DMPS_ATTN_T; }
+    if (pipe == null) return dmps_cpu_launch_(kernel, n, args, tagged);
     int attn = kernel == DK_ATTN_FWD || kernel == DK_ATTN_BWD_Q || kernel == DK_ATTN_BWD_KV;
     unsigned long threads = attn ? tile * tile : DMPS_BLOCK;
     unsigned long groups = ((dmps_rows_(kernel) ? 32UL * n : n) + DMPS_BLOCK - 1UL) / DMPS_BLOCK;
@@ -881,7 +888,7 @@ int MpsBackend::launch(int kernel, unsigned long n, const &DevArgs args) {
         if (groups > 65535UL) groups = 65535UL;
         if (groups == 0UL) groups = 1UL;
     }
-    unsafe { return dmps_dispatch_(pipe, (const void*)args, sizeof(struct DevArgs), groups, 1UL, 1UL, threads); }
+    unsafe { return dmps_dispatch_(pipe, (const unsigned char*)args, sizeof(struct DevArgs), groups, 1UL, 1UL, threads); }
 }
 
 unsigned long MpsBackend::offset(unsigned long handle, unsigned long bytes) { return handle + bytes; }
