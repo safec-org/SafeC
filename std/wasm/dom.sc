@@ -371,7 +371,7 @@ void dom_console(int level, const &char text) {
 
 // ── Callback table ─────────────────────────────────────────────────────────
 
-int dom_register_callback_kind_raw_(int kind, void* handler, void* userdata) {
+static int dom_register_callback_kind_raw_(int kind, void* handler, void* userdata) {
     int i = 0;
     while (i < DOM_MAX_CALLBACKS) {
         int used;
@@ -414,16 +414,19 @@ void dom_unregister_callback(int callbackId) {
     }
 }
 
-int dom_register_callback_raw_(void* handler, void* userdata) {
+int dom_register_callback_raw_(fn void(?&Erased) fh, ?&Erased fu) {
+    void* handler;
+    void* userdata;
+    unsafe { handler = (void*)fh; userdata = (void*)fu; }
     return dom_register_callback_kind_raw_(DOM_CB_PLAIN_, handler, userdata);
 }
 
-int dom_on_click_raw_(const &char selector, void* handler, void* userdata) {
+int dom_on_click_raw_(const &char selector, fn void(?&Erased) fh, ?&Erased fu) {
     int handle = dom_get_element(selector);
     if (handle < 0) {
         return -1;
     }
-    int id = dom_register_callback_raw_(handler, userdata);
+    int id = dom_register_callback_raw_(fh, fu);
     if (id < 0) { return -1; }
     unsafe { js_add_click_listener(handle, id); }
     return handle;
@@ -459,7 +462,10 @@ double DomEvent::timestamp() const { return dom_ev_num_(DOM_EV_TIMESTAMP); }
 void   DomEvent::prevent_default() const { unsafe { js_event_control(0); } }
 void   DomEvent::stop_propagation() const { unsafe { js_event_control(1); } }
 
-int dom_add_listener_raw_(int handle, const &char type, void* handler, void* userdata, int flags) {
+int dom_add_listener_raw_(int handle, const &char type, fn void(?&Erased, &DomEvent) fh, ?&Erased fu, int flags) {
+    void* handler;
+    void* userdata;
+    unsafe { handler = (void*)fh; userdata = (void*)fu; }
     int id = dom_register_callback_kind_raw_(DOM_CB_EVENT_ | ((flags & DOM_LISTEN_ONCE) != 0 ? DOM_KIND_ONESHOT_ : 0),
                                              handler, userdata);
     if (id < 0) { return -1; }
@@ -473,7 +479,7 @@ int dom_add_listener_raw_(int handle, const &char type, void* handler, void* use
     return id;
 }
 
-int dom_on_selector_raw_(const &char selector, const &char type, void* handler, void* userdata) {
+int dom_on_selector_raw_(const &char selector, const &char type, fn void(?&Erased, &DomEvent) handler, ?&Erased userdata) {
     int h = dom_query(selector);
     if (h < 0) { return -1; }
     return dom_add_listener_raw_(h, type, handler, userdata, 0);
@@ -490,7 +496,10 @@ void dom_off(int listenerId) {
 
 // ── Timers ─────────────────────────────────────────────────────────────────
 
-int dom_set_timer_raw_(void* handler, void* userdata, int ms, int repeat) {
+int dom_set_timer_raw_(fn void(?&Erased) fh, ?&Erased fu, int ms, int repeat) {
+    void* handler;
+    void* userdata;
+    unsafe { handler = (void*)fh; userdata = (void*)fu; }
     int kind = DOM_CB_PLAIN_ | DOM_KIND_TIMER_ | (repeat ? 0 : DOM_KIND_ONESHOT_);
     int id = dom_register_callback_kind_raw_(kind, handler, userdata);
     if (id < 0) { return -1; }
@@ -509,7 +518,10 @@ void dom_clear_timer(int timerId) {
     dom_unregister_callback(timerId);
 }
 
-int dom_request_animation_frame_raw_(void* handler, void* userdata) {
+int dom_request_animation_frame_raw_(fn void(?&Erased, double) fh, ?&Erased fu) {
+    void* handler;
+    void* userdata;
+    unsafe { handler = (void*)fh; userdata = (void*)fu; }
     int id = dom_register_callback_kind_raw_(DOM_CB_FRAME_ | DOM_KIND_ONESHOT_, handler, userdata);
     if (id < 0) { return -1; }
     int jsId;
@@ -539,7 +551,10 @@ struct String DomFetchResponse::header(const &char name) const {
 }
 
 int dom_fetch_raw_(const &char method, const &char url, const ?&char headers, const ?&char body,
-                   void* handler, void* userdata) {
+                   fn void(?&Erased, &DomFetchResponse) fh, ?&Erased fu) {
+    void* handler;
+    void* userdata;
+    unsafe { handler = (void*)fh; userdata = (void*)fu; }
     int id = dom_register_callback_kind_raw_(DOM_CB_FETCH_ | DOM_KIND_ONESHOT_, handler, userdata);
     if (id < 0) { return -1; }
     const char* hp = (const char*)0;
