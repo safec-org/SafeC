@@ -18,9 +18,9 @@ namespace std {
 
 struct TlsfBlock {
     unsigned long size;       // block size (excluding header), low bit = free flag
-    void*         prev_phys;  // previous physical block (for coalescing)
-    void*         next_free;  // next free block in this size class
-    void*         prev_free;  // prev free block in this size class
+    ?&TlsfBlock   prev_phys;  // previous physical block (for coalescing)
+    ?&TlsfBlock   next_free;  // next free block in this size class
+    ?&TlsfBlock   prev_free;  // prev free block in this size class
 
     // Query free bit (bit 0 of size field).
     int           is_free_() const;
@@ -41,7 +41,7 @@ struct TlsfAllocator {
     unsigned long cap;
     unsigned int  fl_bitmap;                                  // first-level bitmap
     unsigned int  sl_bitmap[TLSF_FL_MAX];                     // second-level bitmaps
-    void*         blocks[TLSF_FL_MAX * TLSF_SL_COUNT];       // free-list heads (raw ptrs)
+    ?&TlsfBlock   blocks[TLSF_FL_MAX * TLSF_SL_COUNT];       // free-list heads
 
     // A TLSF allocator over a user-provided heap buffer of `cap` bytes.
     static struct TlsfAllocator over(&unsigned char buffer, unsigned long cap);
@@ -69,7 +69,7 @@ struct TlsfAllocator {
     // Internal helpers.
     void          insert_(&TlsfBlock blk);
     void          remove_(&TlsfBlock blk);
-    void*         find_(unsigned long size);
+    ?&TlsfBlock   find_(unsigned long size);
 };
 
 // Compute first-level and second-level indices for a given size.

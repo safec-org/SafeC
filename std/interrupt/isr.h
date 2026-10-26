@@ -7,7 +7,7 @@
 namespace std {
 
 struct IsrTable {
-    void* handlers[ISR_MAX];  // fn void() handlers, stored erased (null = none)
+    ?fn void() handlers[ISR_MAX];  // null = none
     int   count;              // number of registered handlers
 
     // Register a handler for IRQ number `irq`. Returns 1 on success, 0 if out of range.

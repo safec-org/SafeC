@@ -536,7 +536,7 @@ extern int getpid();
 
 void t_signals() {
     unsafe {
-        signal_handle(SIG_USR1(), on_usr1);
+        ASSERT_EQ(signal_handle(SIG_USR1(), on_usr1), 0);
         ASSERT_EQ(signal_raise(SIG_USR1()), 0);
         ASSERT_EQ(gSigCount, SIG_USR1());
         ASSERT_EQ(signal_kill(getpid(), SIG_USR1()), 0);

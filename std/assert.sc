@@ -16,14 +16,14 @@ extern int   fflush(void* stream);
 extern void  abort();
 
 // Print failure diagnostics to stderr and abort the process.
-void assert_fail_(const char* file, int line, const char* msg) {
+void assert_fail_(const ?&char file, int line, const ?&char msg) {
     unsafe {
         fputs("Assertion failed", SAFEC_STDERR_);
-        if (msg != (const char*)0) {
+        if (!msg.is_null()) {
             fputs(": ", SAFEC_STDERR_);
             fputs(msg, SAFEC_STDERR_);
         }
-        if (file == (const char*)0) {      // location unknown
+        if (file.is_null()) {              // location unknown
             fputc('\n', SAFEC_STDERR_);
             fflush(SAFEC_STDERR_);
             abort();
@@ -61,13 +61,13 @@ inline void runtime_assert_at(int cond, const &char msg, const &char file, int l
 // No caller location: a function can't see its call site (see assert.h).
 inline void runtime_assert(int cond, const &char msg) {
     if (cond == 0) {
-        unsafe { assert_fail_((const char*)0, 0, msg); }
+        assert_fail_(null, 0, msg);
     }
 }
 
 inline void assert_true(int cond) {
     if (cond == 0) {
-        assert_fail_((const char*)0, 0, (const char*)0);
+        assert_fail_(null, 0, null);
     }
 }
 

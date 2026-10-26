@@ -7,10 +7,15 @@
 
 namespace std {
 
+// A free slot's first word: the link to the next free slot.
+struct SlabLink_ {
+    ?&SlabLink_ next;
+};
+
 struct SlabAllocator {
     &heap void    base;       // heap-backed backing buffer
     int           owned;   // 1 if SlabAllocator::new allocated base (destroy() frees it)
-    void*         free_head;  // head of embedded free-list (raw — unsafe arithmetic)
+    ?&SlabLink_   free_head;  // head of the embedded free list (walked inside unsafe)
     unsigned long obj_size;   // slot size: the requested size rounded up to a multiple of 8
     unsigned long cap;        // max number of objects
     unsigned long used;       // currently allocated count

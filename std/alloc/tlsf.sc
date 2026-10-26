@@ -148,7 +148,7 @@ void TlsfAllocator::remove_(&TlsfBlock blk) {
     }
 }
 
-void* TlsfAllocator::find_(unsigned long size) {
+?&TlsfBlock TlsfAllocator::find_(unsigned long size) {
     // Round the request up to the start of the next size class first
     // ("mapping_search" in the TLSF paper): every block in the request's
     // own class is only >= that class's lower bound, which may be smaller

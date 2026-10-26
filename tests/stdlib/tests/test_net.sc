@@ -305,15 +305,15 @@ void t_tcp() {
     }
 }
 
-// A NetDriver: anything with transmit(frame, len).
+// A NetDriver: anything with transmit(frame).
 struct LoopDrv {
     int frames;
     unsigned long bytes;
-    int transmit(const &unsigned char frame, unsigned long len);
+    int transmit([]const unsigned char frame);
 };
-int LoopDrv::transmit(const &unsigned char frame, unsigned long len) {
+int LoopDrv::transmit([]const unsigned char frame) {
     self.frames = self.frames + 1;
-    self.bytes = self.bytes + len;
+    self.bytes = self.bytes + frame.len;
     return 0;
 }
 
