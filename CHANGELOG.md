@@ -7,6 +7,8 @@ release tags.
 
 ## [Unreleased]
 
+## [1.0.0-beta-7] - 2026-10-27
+
 ### Fixed
 
 - **Compile time:** the memory-flow check grew exponentially with a run of
@@ -56,10 +58,6 @@ release tags.
   prints them again on a hit. A cache entry without one (from an older safec)
   is a miss, and `--clear-cache` removes both files. The smoke test compiles a
   file twice into a fresh cache and compares the warnings.
-
-## [1.0.0-beta-7] - 2026-10-27
-
-### Fixed
 
 - A local declaration whose type is a typedef name followed by two or more
   `*` (`Foo_t** x = pp;`, `Foo_t*** w;`) parses as a declaration instead of
