@@ -213,7 +213,8 @@ These are not implemented, and the error is a parse or name error:
 - **Capacity**: scc keeps everything in fixed-size tables. The browser
   build (`-D SCC_SMALL`) allows about 1 MB of source and 120,000 tokens,
   which is plenty for any playground program. The native build allows 4 MB
-  of source and 400,000 tokens. Past the limit, scc reports `internal limit
+  of source and 400,000 tokens. A string literal (adjacent pieces joined)
+  can be up to 64 KiB in both. Past a limit, scc reports `internal limit
   exceeded: <table>`.
 - **Diagnostics**: scc stops after the first phase that reports errors
   (preprocessing, parsing, semantic analysis), as safec does. After the

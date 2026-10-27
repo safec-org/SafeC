@@ -151,11 +151,12 @@ int intern_bytes(int from_src, int off, int len) {
 
 void tmp_reset() { g_tmp_len = 0; }
 
+// A full buffer is a fatal error, not a truncation: a string literal past
+// TMP_MAX bytes would otherwise compile to a silently shortened one.
 void tmp_char(int c) {
-    if (g_tmp_len < TMP_MAX) {
-        g_tmp[g_tmp_len] = (unsigned char)c;
-        g_tmp_len = g_tmp_len + 1;
-    }
+    if (g_tmp_len >= TMP_MAX) { fatal("string buffer"); return; }
+    g_tmp[g_tmp_len] = (unsigned char)c;
+    g_tmp_len = g_tmp_len + 1;
 }
 
 void tmp_lit(const char* s) {
