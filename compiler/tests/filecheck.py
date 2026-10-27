@@ -17,6 +17,10 @@ Directives, read from '// ' comments in the test source:
                      on any line when it's a comment line of its own (repeat
                      it once per expected occurrence). Checked with --errors
                      <stderr-file>; every reported error must be expected.
+  EXPECT-WARNING: msg (and EXPECT-WARNING-IN:)
+                     the same for warnings, in a test that compiles: checked
+                     with --warnings <stderr-file>; every reported warning
+                     must be expected.
   EXPECT-ERROR-IN: file:line[:col]: msg
                      the same, for an error reported in a given file (an
                      #include'd header, or the test itself to pin the
@@ -37,23 +41,26 @@ def compile_pattern(pat):
     return re.compile("".join(out))
 
 
-def check_errors(src, errfile):
+def check_errors(src, errfile, level="error"):
+    # level "warning": the same over EXPECT-WARNING directives and the
+    # reported warnings (--warnings).
+    tag = "EXPECT-ERROR" if level == "error" else "EXPECT-WARNING"
     # (line or None, msg): a trailing directive is tied to its own line; a
     # whole-line one ('// EXPECT-ERROR: msg' alone) may match any line.
     expected = []
     for n, line in enumerate(open(src), 1):
-        m = re.search(r"//\s*EXPECT-ERROR-IN:\s?(.+?):(\d+)(?::(\d+))?:\s?(.*)$", line)
+        m = re.search(r"//\s*" + tag + r"-IN:\s?(.+?):(\d+)(?::(\d+))?:\s?(.*)$", line)
         if m:
             col = int(m.group(3)) if m.group(3) else None
             expected.append((int(m.group(2)), m.group(4).strip(), n, (m.group(1).strip(), col)))
             continue
-        m = re.search(r"//\s*EXPECT-ERROR:\s?(.*)$", line)
+        m = re.search(r"//\s*" + tag + r":\s?(.*)$", line)
         if m:
             anchored = line[:m.start()].strip() != ""
             expected.append((n if anchored else None, m.group(1).strip(), n, None))
     reported = []
     for line in open(errfile):
-        m = re.search(r"^(.*?):(\d+):(\d+): error: (.*)$", line)
+        m = re.search(r"^(.*?):(\d+):(\d+): " + level + r": (.*)$", line)
         if m:
             reported.append((int(m.group(2)), m.group(4), (m.group(1), int(m.group(3)))))
     # Each reported error satisfies at most one directive: line-tied ones
@@ -66,13 +73,13 @@ def check_errors(src, errfile):
                     and (want_file is None or (rf[0].replace("\\", "/").endswith(want_file[0])
                                                and want_file[1] in (None, rf[1])))), None)
         if hit is None:
-            print(f"{src}:{n}: expected error not reported: {msg}")
+            print(f"{src}:{n}: expected {level} not reported: {msg}")
             failures += 1
         else:
             used[hit] = True
     for i, (rn, rmsg, _) in enumerate(reported):
         if not used[i]:
-            print(f"{src}:{rn}: unexpected error: {rmsg}")
+            print(f"{src}:{rn}: unexpected {level}: {rmsg}")
             failures += 1
     return 1 if failures else 0
 
@@ -80,6 +87,8 @@ def check_errors(src, errfile):
 def main():
     if sys.argv[1] == "--errors":
         return check_errors(sys.argv[2], sys.argv[3])
+    if sys.argv[1] == "--warnings":
+        return check_errors(sys.argv[2], sys.argv[3], "warning")
     src, ll = sys.argv[1], sys.argv[2]
     directives = []
     for n, line in enumerate(open(src), 1):

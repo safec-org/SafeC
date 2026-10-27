@@ -9,6 +9,7 @@
 #
 #   // SAFEC-ARGS: <flags>  extra compiler flags; '%root' is the repository
 #                           root ('-I %root' for '#include <std/...>')
+#   // EXPECT-WARNING: <text> the compile must report exactly these warnings
 #   // MAX-SECONDS: <n>     the -O2 --emit-llvm compile must take at most n
 #                           seconds (a compile-time regression test)
 #
@@ -86,6 +87,11 @@ while IFS= read -r -d '' t; do
         FAIL=$((FAIL + 1))
     elif ! python3 "$HERE/filecheck.py" "$t" "$ll" >"$OUT/check.txt" 2>&1; then
         echo "  [FAIL] $name"
+        sed 's/^/      /' "$OUT/check.txt"
+        FAIL=$((FAIL + 1))
+    elif grep -qE 'EXPECT-WARNING(-IN)?:' "$t" &&
+         ! python3 "$HERE/filecheck.py" --warnings "$t" "$OUT/err.txt" >"$OUT/check.txt" 2>&1; then
+        echo "  [FAIL] $name (warnings)"
         sed 's/^/      /' "$OUT/check.txt"
         FAIL=$((FAIL + 1))
     elif grep -q '^// EXEC$' "$t" && command -v "$CLANG_BIN" >/dev/null 2>&1; then
