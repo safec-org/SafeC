@@ -874,7 +874,7 @@ if [[ "$PKG_OK" -eq 1 ]]; then
         fail "a build with a std section missing"
         cat /tmp/sg_pre1.txt
     fi
-    if grep -E 'clang(\.exe)? -c .*collections_vec_sc\.ll' /tmp/sg_pre1.txt | grep -q -- ' -O2'; then
+    if grep -E 'clang(-[0-9]+)?(\.exe)? -c .*collections_vec_sc\.ll' /tmp/sg_pre1.txt | grep -q -- ' -O2'; then
         pass "std is compiled optimized (-O2) in a debug build"
     else
         fail "std's optimization flags in a debug build"
