@@ -962,6 +962,17 @@ std::string Preprocessor::expandFunctionLike(const MacroDef &def,
         }
     }
 
+    // '...': the arguments from the last named parameter on are all
+    // __VA_ARGS__, commas included ('F(1, 2, 3)' with 'F(...)' passes
+    // '1, 2, 3', not just '1').
+    if (def.isVariadic && !def.params.empty() && args.size() > def.params.size()) {
+        size_t va = def.params.size() - 1;
+        std::string joined = args[va];
+        for (size_t i = va + 1; i < args.size(); ++i) joined += ", " + args[i];
+        args.resize(va);
+        args.push_back(joined);
+    }
+
     // Pre-expand each argument
     std::vector<std::string> expArgs;
     for (auto &a : args) {
