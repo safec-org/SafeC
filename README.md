@@ -21,7 +21,7 @@ irm https://raw.githubusercontent.com/safec-org/SafeC/main/install.ps1 | iex
 
 ```bash
 bash install.sh --prefix=/opt/safec          # or specify install directory
-bash install.sh --version=v1.0.0-beta-4      # or pin a specific release
+bash install.sh --version=v1.0.0-beta-7      # or pin a specific release
 bash install.sh --std=core,collections,gui   # only these prebuilt std sections (default: all)
 bash install.sh --std=+ml                    # add a section to an existing install later
 ```
