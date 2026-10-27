@@ -1,5 +1,15 @@
 cmake_minimum_required(VERSION 3.20)
-project(SafeC VERSION 1.0.0 LANGUAGES C CXX)
+# The release version is ../VERSION (e.g. 1.0.0-beta-7: the release tag
+# without its 'v'); 'safec --version' prints it. project() takes only its
+# numeric part.
+file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/../VERSION" SAFEC_RELEASE_VERSION LIMIT_COUNT 1)
+string(REGEX MATCH "^[0-9]+\\.[0-9]+\\.[0-9]+" SAFEC_NUMERIC_VERSION "${SAFEC_RELEASE_VERSION}")
+if(NOT SAFEC_NUMERIC_VERSION)
+  message(FATAL_ERROR "../VERSION must start with MAJOR.MINOR.PATCH, has '${SAFEC_RELEASE_VERSION}'")
+endif()
+project(SafeC VERSION ${SAFEC_NUMERIC_VERSION} LANGUAGES C CXX)
+# Re-run CMake when VERSION changes (a version bump rebuilds with it).
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/../VERSION")
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -43,7 +53,7 @@ set(SAFEC_SOURCES
 )
 
 add_executable(safec ${SAFEC_SOURCES})
-target_compile_definitions(safec PRIVATE SAFEC_VERSION="${PROJECT_VERSION}")
+target_compile_definitions(safec PRIVATE SAFEC_VERSION="${SAFEC_RELEASE_VERSION}")
 # The LLVM install safec is built against: its clang reads the IR safec
 # emits (an older clang rejects newer IR, e.g. 'getelementptr ... nuw').
 target_compile_definitions(safec PRIVATE SAFEC_LLVM_BINDIR="${LLVM_TOOLS_BINARY_DIR}")
