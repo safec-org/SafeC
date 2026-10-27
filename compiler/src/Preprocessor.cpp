@@ -344,7 +344,7 @@ std::string Preprocessor::handleDirective(const std::string &rest,
         return {};
     }
 
-    diag_.warn({lineNo, 1, filename.c_str()},
+    diag_.warn({lineNo, 1, internFileName(filename)},
                "unknown preprocessor directive '#" + dir + "'");
     return {};
 }
@@ -359,21 +359,21 @@ void Preprocessor::handleDefine(const std::string &rest,
     size_t pos = 0;
     skipWS(rest, pos);
     if (pos >= rest.size() || !isIdentStart(rest[pos])) {
-        diag_.error({lineNo, 1, filename.c_str()}, "invalid #define");
+        diag_.error({lineNo, 1, internFileName(filename)}, "invalid #define");
         return;
     }
     std::string name = readIdentAt(rest, pos);
 
     MacroDef def;
     def.name = name;
-    def.loc  = {lineNo, 1, filename.c_str()};
+    def.loc  = {lineNo, 1, internFileName(filename)};
     def.file = filename;
 
     // Function-like if '(' immediately follows name (no space)
     if (pos < rest.size() && rest[pos] == '(') {
         def.isFunctionLike = true;
         if (!opts_.compatMode) {
-            diag_.error({lineNo, 1, filename.c_str()},
+            diag_.error({lineNo, 1, internFileName(filename)},
                 "function-like macros are not allowed in safe mode; "
                 "use generic<T> functions instead (or pass --compat-preprocessor)");
             return;
@@ -407,13 +407,13 @@ void Preprocessor::handleDefine(const std::string &rest,
         for (size_t i = 0; i < def.body.size(); ++i) {
             if (def.body[i] == '#') {
                 if (i + 1 < def.body.size() && def.body[i + 1] == '#') {
-                    diag_.error({lineNo, 1, filename.c_str()},
+                    diag_.error({lineNo, 1, internFileName(filename)},
                         "token pasting '##' is not allowed in safe mode");
                     return;
                 }
                 if (!def.isFunctionLike) {
                     // Object-like macros shouldn't have # either
-                    diag_.error({lineNo, 1, filename.c_str()},
+                    diag_.error({lineNo, 1, internFileName(filename)},
                         "stringification '#' is not allowed in safe mode");
                     return;
                 }
@@ -460,7 +460,7 @@ void Preprocessor::handleElif(const std::string &rest,
                                 const std::string &filename,
                                 unsigned lineNo) {
     if (condStack_.empty()) {
-        diag_.error({lineNo, 1, filename.c_str()}, "#elif without #if");
+        diag_.error({lineNo, 1, internFileName(filename)}, "#elif without #if");
         return;
     }
     CondState &top = condStack_.back();
@@ -477,7 +477,7 @@ void Preprocessor::handleElif(const std::string &rest,
 
 void Preprocessor::handleElse(const std::string &filename, unsigned lineNo) {
     if (condStack_.empty()) {
-        diag_.error({lineNo, 1, filename.c_str()}, "#else without #if");
+        diag_.error({lineNo, 1, internFileName(filename)}, "#else without #if");
         return;
     }
     CondState &top = condStack_.back();
@@ -487,7 +487,7 @@ void Preprocessor::handleElse(const std::string &filename, unsigned lineNo) {
 
 void Preprocessor::handleEndif(const std::string &filename, unsigned lineNo) {
     if (condStack_.empty()) {
-        diag_.error({lineNo, 1, filename.c_str()}, "#endif without #if");
+        diag_.error({lineNo, 1, internFileName(filename)}, "#endif without #if");
         return;
     }
     condStack_.pop_back();
@@ -501,7 +501,7 @@ std::string Preprocessor::handleInclude(const std::string &rest,
                                          const std::string &curFile,
                                          unsigned lineNo, int depth) {
     if (depth >= opts_.maxIncludeDepth) {
-        diag_.error({lineNo, 1, curFile.c_str()},
+        diag_.error({lineNo, 1, internFileName(curFile)},
                     "maximum #include depth exceeded");
         return {};
     }
@@ -510,7 +510,7 @@ std::string Preprocessor::handleInclude(const std::string &rest,
     size_t pos = 0;
     skipWS(rest, pos);
     if (pos >= rest.size()) {
-        diag_.error({lineNo, 1, curFile.c_str()}, "invalid #include");
+        diag_.error({lineNo, 1, internFileName(curFile)}, "invalid #include");
         return {};
     }
 
@@ -526,13 +526,13 @@ std::string Preprocessor::handleInclude(const std::string &rest,
         while (pos < rest.size() && rest[pos] != '>') name += rest[pos++];
         ++pos; // closing >
     } else {
-        diag_.error({lineNo, 1, curFile.c_str()},
+        diag_.error({lineNo, 1, internFileName(curFile)},
                     "expected '\"filename\"' or '<filename>' after #include");
         return {};
     }
 
     if (name.empty()) {
-        diag_.error({lineNo, 1, curFile.c_str()}, "empty filename in #include");
+        diag_.error({lineNo, 1, internFileName(curFile)}, "empty filename in #include");
         return {};
     }
 
@@ -541,7 +541,7 @@ std::string Preprocessor::handleInclude(const std::string &rest,
     // (multiple-definition link errors, or two diverging copies of its
     // statics), so it is compiled separately and linked instead.
     if (name.size() >= 3 && name.compare(name.size() - 3, 3, ".sc") == 0) {
-        diag_.error({lineNo, 1, curFile.c_str()},
+        diag_.error({lineNo, 1, internFileName(curFile)},
                     "#include must name a header (.h), not a source file '" + name +
                     "': compile it as its own translation unit and include its .h");
         return {};
@@ -570,14 +570,14 @@ std::string Preprocessor::handleInclude(const std::string &rest,
             if (cHeaderImporter_->available()) {
                 std::string decls =
                     cHeaderImporter_->import(name, opts_.includePaths,
-                                              {lineNo, 1, curFile.c_str()});
+                                              {lineNo, 1, internFileName(curFile)});
                 if (!decls.empty()) return "# 1 \"<" + name + ">\"\n" + decls;
             }
         }
         if (isSystem && opts_.importCHeaders)
             path = resolveInclude(name, isSystem, curFile, /*searchSysDirs=*/true);
         if (path.empty()) {
-            diag_.error({lineNo, 1, curFile.c_str()},
+            diag_.error({lineNo, 1, internFileName(curFile)},
                         "cannot find include file '" + name + "'");
             return {};
         }
@@ -661,13 +661,13 @@ void Preprocessor::handlePragma(const std::string &rest,
 void Preprocessor::handleError(const std::string &rest,
                                 const std::string &filename,
                                 unsigned lineNo) {
-    diag_.error({lineNo, 1, filename.c_str()}, "#error " + trim(rest));
+    diag_.error({lineNo, 1, internFileName(filename)}, "#error " + trim(rest));
 }
 
 void Preprocessor::handleWarning(const std::string &rest,
                                   const std::string &filename,
                                   unsigned lineNo) {
-    diag_.warn({lineNo, 1, filename.c_str()}, "#warning " + trim(rest));
+    diag_.warn({lineNo, 1, internFileName(filename)}, "#warning " + trim(rest));
 }
 
 // =============================================================================
@@ -738,7 +738,7 @@ std::string Preprocessor::expandTokens(const std::string &text,
             }
             // Disabled built-ins
             if (name == "__TIME__" || name == "__DATE__") {
-                diag_.error({lineNo, 1, filename.c_str()},
+                diag_.error({lineNo, 1, internFileName(filename)},
                     "__TIME__ and __DATE__ are disabled in SafeC "
                     "(non-deterministic build info)");
                 result += "0";

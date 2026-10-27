@@ -38,7 +38,7 @@ while IFS= read -r -d '' t; do
     fi
     # '// SAFEC-ARGS: <flags>' adds compiler flags (e.g. --target <triple>).
     read -r -a args <<<"$(sed -n 's|^// SAFEC-ARGS: *||p' "$t" | head -1 | sed "s|%root|$ROOT|g")"
-    if grep -q 'EXPECT-ERROR:' "$t"; then
+    if grep -qE 'EXPECT-ERROR(-IN)?:' "$t"; then
         # Negative test: must be rejected with exactly the expected errors.
         if "$SAFEC_BIN" "$t" --emit-llvm ${args[@]+"${args[@]}"} -o "$ll" >"$OUT/err.txt" 2>&1; then
             echo "  [FAIL] $name (compiled, expected errors)"
