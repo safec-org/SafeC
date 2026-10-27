@@ -132,6 +132,33 @@ else
     fail "standard library: $STD_TOTAL files, $STD_FAILED unexpected failure(s)"
 fi
 
+# ── 3a. Warnings survive the incremental cache ───────────────────────────────
+# A cache hit skips lexing, parsing, sema and codegen, so their warnings must
+# come from the '.diag' file stored beside the cached bitcode. Compiled twice
+# into a fresh cache dir: the second (cached) run prints the same warnings.
+section "Warnings on incremental-cache hits"
+CW="$(mktemp -d)"
+cat > "$CW/w.sc" <<'EOF'
+int pick(int x) {
+    switch (x) {
+        case 1: return 10;
+    }
+    return 0;
+}
+int main() { return pick(1) - 10; }
+EOF
+"$SAFEC_BIN" "$CW/w.sc" --emit-llvm --cache-dir "$CW/cache" -o "$CW/w.ll" 2>"$CW/first.txt"
+"$SAFEC_BIN" "$CW/w.sc" --emit-llvm --cache-dir "$CW/cache" -o "$CW/w.ll" 2>"$CW/second.txt"
+if grep -q "switch statement may not be exhaustive" "$CW/first.txt" &&
+   cmp -s "$CW/first.txt" "$CW/second.txt"; then
+    pass "a cache hit prints the same warnings as the compile that filled the cache"
+else
+    fail "warnings differ between the first compile and the cache hit"
+    echo "    first:";  sed 's/^/      /' "$CW/first.txt"
+    echo "    cached:"; sed 's/^/      /' "$CW/second.txt"
+fi
+rm -rf "$CW"
+
 # ── 3b. Compiler IR regression tests ──────────────────────────────────────────
 # compiler/tests/**/*.sc compiled at -O2 and checked against their
 # '// CHECK:' lines (e.g. volatile accesses surviving optimization).

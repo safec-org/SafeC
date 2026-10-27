@@ -128,7 +128,7 @@ static llvm::cl::opt<std::string>
              llvm::cl::init(".safec_cache"));
 
 static llvm::cl::opt<bool>
-    ClearCache("clear-cache", llvm::cl::desc("Delete all cached .bc files and exit"));
+    ClearCache("clear-cache", llvm::cl::desc("Delete all cached .bc (and .bc.diag) files and exit"));
 
 static llvm::cl::opt<std::string>
     DebugInfoLevel("g",
@@ -812,6 +812,11 @@ static int compileOneFile(const std::string &inputPath, const std::string &outpu
         return 0;
     }
 
+    // Diagnostics printed from here on (lexer, parser, sema, codegen) are
+    // not reproduced by a cache hit, which skips those stages: the cache
+    // keeps them in a '.diag' file beside the bitcode and prints them again.
+    const size_t diagTranscriptMark = diag.transcript().size();
+
     // ── 2b. Incremental cache check ───────────────────────────────────────────
     // Skipped entirely for --dump-ast: that mode inspects the parse tree
     // itself, which the cache (populated from --emit-llvm/object-file runs)
@@ -831,13 +836,19 @@ static int compileOneFile(const std::string &inputPath, const std::string &outpu
             llvm::sys::path::filename(inputPath).str() + ".bc");
 
         auto mbOrErr = llvm::MemoryBuffer::getFile(cachePath);
-        if (mbOrErr) {
+        // A cached module without its '.diag' (written by an older safec)
+        // can't reproduce the warnings: treat it as a miss.
+        auto diagOrErr = llvm::MemoryBuffer::getFile((cachePath + ".diag").str());
+        if (mbOrErr && diagOrErr) {
             if (Verbose)
                 fprintf(stderr, "[safec] Cache hit: %s\n", cachePath.c_str());
             llvm::LLVMContext ctx2;
             auto modOrErr = llvm::parseBitcodeFile(**mbOrErr, ctx2);
             if (modOrErr) {
                 auto &cachedMod = *modOrErr;
+                llvm::StringRef cachedDiags = (*diagOrErr)->getBuffer();
+                if (!cachedDiags.empty())
+                    fwrite(cachedDiags.data(), 1, cachedDiags.size(), stderr);
                 if (outputPath == "-") {
                     cachedMod->print(llvm::outs(), nullptr);
                 } else if (EmitLLVM) {
@@ -994,9 +1005,18 @@ static int compileOneFile(const std::string &inputPath, const std::string &outpu
         llvm::sys::path::append(cachePath,
             std::string(hexBuf) + "_" +
             llvm::sys::path::filename(inputPath).str() + ".bc");
+        // The '.diag' goes first: a hit needs both files, so a write
+        // interrupted between the two leaves a miss, never a hit that drops
+        // the warnings.
         std::error_code EC;
-        llvm::raw_fd_ostream cacheOut(cachePath, EC, llvm::sys::fs::OF_None);
-        if (!EC) llvm::WriteBitcodeToFile(*mod, cacheOut);
+        {
+            llvm::raw_fd_ostream diagOut((cachePath + ".diag").str(), EC, llvm::sys::fs::OF_Text);
+            if (!EC) diagOut << llvm::StringRef(diag.transcript()).substr(diagTranscriptMark);
+        }
+        if (!EC) {
+            llvm::raw_fd_ostream cacheOut(cachePath, EC, llvm::sys::fs::OF_None);
+            if (!EC) llvm::WriteBitcodeToFile(*mod, cacheOut);
+        }
         if (Verbose) fprintf(stderr, "[safec] Cache written: %s\n", cachePath.c_str());
     }
 
@@ -1150,7 +1170,7 @@ int main(int argc, char **argv) {
         llvm::sys::fs::directory_iterator it(CacheDir, EC), end;
         for (; !EC && it != end; it.increment(EC)) {
             llvm::StringRef p = it->path();
-            if (p.ends_with(".bc"))
+            if (p.ends_with(".bc") || p.ends_with(".bc.diag"))
                 llvm::sys::fs::remove(p);
         }
         if (Verbose) fprintf(stderr, "[safec] Cache cleared: %s\n", CacheDir.c_str());
