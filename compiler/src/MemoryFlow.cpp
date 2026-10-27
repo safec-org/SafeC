@@ -139,11 +139,28 @@ std::string starAll(const std::string &p) {
     return out;
 }
 
-// At most one element of a multi-dimensional index is kept apart.
-std::string normPath(const std::string &p) {
+// At most one element of a multi-dimensional index is kept apart, and a
+// path more than kMaxCellDepth selectors deep is cut there and summarized
+// as one weak cell ('[*]': every write to it merges). Real nesting never
+// gets that deep, but copying an aggregate into a part of an object that
+// may be the same one (a node's 'val' from "any node", through a summary's
+// collapsed entry path) nests its paths once per evaluation: without the
+// cut a run of such calls grows the state exponentially.
+constexpr int kMaxCellDepth = 12;
+std::string normPath(const std::string &p0) {
+    const std::string *p = &p0;
+    std::string cut;
+    int depth = 0;
+    for (size_t i = 0; i < p0.size(); ++i) {
+        if ((p0[i] == '.' || p0[i] == '[') && ++depth > kMaxCellDepth) {
+            cut = p0.substr(0, i) + "[*]";
+            p = &cut;
+            break;
+        }
+    }
     int n = 0;
-    for (char c : p) if (c == '[') ++n;
-    return n > 1 ? starAll(p) : p;
+    for (char c : *p) if (c == '[') ++n;
+    return n > 1 ? starAll(*p) : *p;
 }
 
 bool hasStar(const std::string &p) { return p.find("[*]") != std::string::npos; }
@@ -908,8 +925,22 @@ void Walker::clearSubtree(int obj, const std::string &prefix) {
 
 // dst := src for an aggregate: explicit cells are copied, unwritten entry
 // memory is copied as a lazy reference to its entry path.
-void Walker::copyAgg(const std::vector<CellRef> &dst, const std::vector<CellRef> &src) {
-    if (dst.empty()) return;
+void Walker::copyAgg(const std::vector<CellRef> &dst0, const std::vector<CellRef> &src0) {
+    if (dst0.empty()) return;
+    // The same cell listed twice (a summary's entry paths resolving to the
+    // same caller objects) is one copy: without this a call's cost grows
+    // with every alias of the cells it touches.
+    auto dedup = [](const std::vector<CellRef> &in, bool keepWeak) {
+        std::vector<CellRef> out;
+        std::set<std::pair<int, std::string>> seen;
+        for (auto &c : in) {
+            if (seen.insert({c.obj, c.path}).second) { out.push_back(c); continue; }
+            if (keepWeak && c.weak)
+                for (auto &o : out) if (o.obj == c.obj && o.path == c.path) o.weak = true;
+        }
+        return out;
+    };
+    std::vector<CellRef> dst = dedup(dst0, true), src = dedup(src0, false);
     struct Snap {
         int obj; std::string path;
         std::vector<std::pair<std::string, VSet>> vals;
@@ -944,7 +975,11 @@ void Walker::copyAgg(const std::vector<CellRef> &dst, const std::vector<CellRef>
             clearSubtree(d.obj, d.path);
             auto &oc = cur_.mem[d.obj];
             for (auto &kv : sn.vals) vsUnion(oc.vals[normPath(d.path + kv.first)], kv.second);
-            for (auto &kv : sn.lazy) oc.lazy[d.path + kv.first] = kv.second;
+            for (auto &kv : sn.lazy) {
+                std::string at = normPath(d.path + kv.first);
+                if (hasStar(at)) sortedUnion(oc.lazy[at], kv.second);
+                else oc.lazy[at] = kv.second;
+            }
             if (!sn.def.empty()) oc.lazy[d.path] = sn.def;
             vsUnion(oc.any, sn.any);
             if (oc.vals.empty() && oc.lazy.empty() && oc.any.empty()) cur_.mem.erase(d.obj);
@@ -972,7 +1007,7 @@ void Walker::copyAgg(const std::vector<CellRef> &dst, const std::vector<CellRef>
                 sortedUnion(mine, eps);
                 if (!mine.empty()) cur_.mem[d.obj].lazy[at] = mine;
             };
-            for (auto &kv : sn.lazy) addLazy(d.path + kv.first, kv.second);
+            for (auto &kv : sn.lazy) addLazy(normPath(d.path + kv.first), kv.second);
             if (!sn.def.empty()) addLazy(d.path, sn.def);
             if (!sn.any.empty()) vsUnion(cur_.mem[d.obj].any, sn.any);
         }
@@ -2236,7 +2271,13 @@ Walker::Res Walker::resolveCells(const std::string &ep, const std::vector<int> &
             std::vector<CellRef> next;
             for (auto &cell : res.cells)
                 for (auto &x : lookup(cur_, cell.obj, cell.path)) next.push_back(cellOf(x, ""));
-            res.cells = std::move(next);
+            // Several cells may point to the same object: following each
+            // '*' without merging them multiplies the cells per dereference.
+            std::set<std::tuple<int, std::string, int>> seen;
+            res.cells.clear();
+            for (auto &c : next)
+                if (seen.insert({c.obj, c.path, c.elem}).second) res.cells.push_back(std::move(c));
+                else for (auto &o : res.cells) if (o.obj == c.obj && o.path == c.path && o.elem == c.elem) o.bits |= c.bits;
             ++i;
         } else if (c == '~') {
             std::vector<CellRef> next;
@@ -2427,6 +2468,7 @@ EV Walker::applySummary(const Expr &e, FunctionDecl *callee, const Summary &s, s
     for (auto &r2 : s.resets) resetRegion(r2, false);
     for (auto &ft : freeTos) freeTo(ft.first, ft.second);
 
+    std::unordered_set<std::string> weakCopies;
     for (auto &p : pend) {
         if (p.closure) {
             VSet all = p.any;
@@ -2441,6 +2483,18 @@ EV Walker::applySummary(const Expr &e, FunctionDecl *callee, const Summary &s, s
             for (auto &l : p.lazy) {
                 std::vector<CellRef> d2 = dst;
                 for (auto &x : d2) x.path = normPath(x.path + l.first);
+                // Several of the callee's entry paths can resolve to the
+                // same caller cells (every node of a summarized tree): the
+                // same weak copy again adds nothing.
+                if (!single) {
+                    std::string key = std::to_string(d2[0].obj) + "|" + d2[0].path;
+                    std::vector<std::pair<int, std::string>> ss;
+                    for (auto &x : l.second) ss.push_back({x.obj, x.path});
+                    std::sort(ss.begin(), ss.end());
+                    ss.erase(std::unique(ss.begin(), ss.end()), ss.end());
+                    for (auto &x : ss) key += "|" + std::to_string(x.first) + ":" + x.second;
+                    if (!weakCopies.insert(std::move(key)).second) continue;
+                }
                 copyAgg(d2, l.second);
             }
             for (auto &kv : p.vals) writeCell(c.obj, c.path + kv.first, kv.second, single);
