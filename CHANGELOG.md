@@ -9,6 +9,11 @@ release tags.
 
 ### Fixed
 
+- A local declaration whose type is a typedef name followed by two or more
+  `*` (`Foo_t** x = pp;`, `Foo_t*** w;`) parses as a declaration instead of
+  failing with "undeclared identifier"; nested prefix operators in
+  expressions (`**pp`, `a * **pp`, `-*p`, `- -x`) parse too (compiler and
+  selfhost).
 - **Containers of `Drop` elements:** `HashMap<K, String>`, `StrMap<String>`,
   `List<String>`, `Stack<String>`, `Queue<String>`, `BST<K, String, C>`,
   `BTree<String>`, `StaticVec<String>` and `StaticMap<String>` failed the
