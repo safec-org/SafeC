@@ -181,10 +181,16 @@ std::string Preprocessor::processFile(const std::string &src,
     // invocations below) are followed by padding newlines so every later
     // token keeps its real source line.
     unsigned outLine = 1;
+    // '#line N ["file"]': the presumed line and file of what follows, for
+    // __LINE__/__FILE__, diagnostics, and (through a line marker) the
+    // lexer's token locations.
+    long lineDelta = 0;
+    std::string presumed = filename;
     for (size_t li = 0; li < lines.size(); ++li) {
-        auto &[line, lineNo] = lines[li];
-        while (outLine < lineNo) { output += '\n'; ++outLine; }
-        outLine = lineNo + 1;
+        auto &[line, physLine] = lines[li];
+        while (outLine < physLine) { output += '\n'; ++outLine; }
+        outLine = physLine + 1;
+        unsigned lineNo = (unsigned)std::max(1L, (long)physLine + lineDelta);
         curLine_ = lineNo;
 
         // Find first non-whitespace
@@ -198,15 +204,43 @@ std::string Preprocessor::processFile(const std::string &src,
             std::string directiveLine = stripLineComment(line);
             std::string rest = (i + 1 < directiveLine.size())
                                     ? directiveLine.substr(i + 1) : std::string{};
-            // Skip optional whitespace between # and directive name
-            std::string injected = handleDirective(rest, filename, lineNo, depth);
+            std::string dirFileName;
+            {
+                size_t q = 0; skipWS(rest, q);
+                std::string dname = readIdentAt(rest, q);
+                if (dname == "line" && isActive()) {
+                    std::string arg = expandLine(rest.substr(q), presumed, lineNo);
+                    size_t p = 0; skipWS(arg, p);
+                    if (p >= arg.size() || !std::isdigit((unsigned char)arg[p])) {
+                        diag_.error({lineNo, 1, internFileName(presumed)}, "#line expects a line number");
+                        output += '\n';
+                        continue;
+                    }
+                    long n = 0;
+                    while (p < arg.size() && std::isdigit((unsigned char)arg[p]) && n < 2147483647L)
+                        n = n * 10 + (arg[p++] - '0');
+                    skipWS(arg, p);
+                    if (p < arg.size() && arg[p] == '"') {
+                        size_t e = arg.find('"', p + 1);
+                        if (e != std::string::npos) presumed = arg.substr(p + 1, e - p - 1);
+                    }
+                    // The next physical line is line n.
+                    lineDelta = n - (long)(physLine + 1);
+                    output += "# " + std::to_string(n) + " \"" + presumed + "\"\n";
+                    continue;
+                }
+                // An #include resolves against the real file; the other
+                // directives report at the presumed one.
+                dirFileName = dname == "include" ? filename : presumed;
+            }
+            std::string injected = handleDirective(rest, dirFileName, lineNo, depth);
             if (!injected.empty()) {
                 // Injected include content (already wrapped in a leading
                 // '# 1 "<child>"' marker by handleInclude); resume this
                 // file's numbering after it.
                 output += injected;
                 if (output.back() != '\n') output += '\n';
-                output += "# " + std::to_string(lineNo + 1) + " \"" + filename + "\"\n";
+                output += "# " + std::to_string(lineNo + 1) + " \"" + presumed + "\"\n";
             } else {
                 output += '\n'; // blank line to preserve line numbers
             }
@@ -226,7 +260,7 @@ std::string Preprocessor::processFile(const std::string &src,
                 effective += ' ';
                 effective += stripLineComment(nxt);
             }
-            output += expandLine(effective, filename, lineNo);
+            output += expandLine(effective, presumed, lineNo);
             output += '\n';
         } else {
             output += '\n'; // skipped line
@@ -727,7 +761,7 @@ std::string Preprocessor::expandTokens(const std::string &text,
             // Handle __FILE__ and __LINE__ built-ins
             if (name == "__FILE__") {
                 result += '"';
-                result += curFile_;
+                result += filename;   // the presumed file (#line)
                 result += '"';
                 continue;
             }
