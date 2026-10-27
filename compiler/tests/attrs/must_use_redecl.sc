@@ -1,6 +1,8 @@
+// SAFEC-ARGS: --no-incremental
 // must_use / warn_unused_result on any declaration of a function applies to
 // it: a prototype's attribute was lost when the definition that followed
-// (or preceded) it didn't repeat it.
+// (or preceded) it didn't repeat it. (--no-incremental: a cached build
+// skips the checks that report these warnings.)
 must_use int f(int x);
 int g(int x) __attribute__((warn_unused_result));
 int f(int x) { return x; }
