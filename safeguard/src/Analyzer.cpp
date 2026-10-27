@@ -364,10 +364,7 @@ AnalysisResult Analyzer::analyzeFile(const std::string& srcPath,
 bool Analyzer::analyze() {
     std::string stdDir = findStdDir();
     std::vector<std::string> incs;
-    if (!stdDir.empty()) {
-        incs.push_back(stdDir);
-        incs.push_back(fs::path(stdDir).parent_path().string());
-    }
+    if (!stdDir.empty()) incs.push_back(fs::path(stdDir).parent_path().string());   // <std/...> only
 
     fs::path srcDir = fs::path(root_) / "src";
     auto srcs = collectSources(srcDir.string());

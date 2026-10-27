@@ -2710,7 +2710,7 @@ static ?&HttpReactorThreadCtx_ http_reactor_worker_(?&HttpReactorThreadCtx_ argP
         struct HttpReactorShared_* shared = ctx->shared;
 
         struct Reactor reactor = Reactor::new();
-        if (reactor.init() != 0) { return null; }
+        if (reactor.init() != 0) { reactor.drop(); return null; }
         struct TaskScheduler sched = TaskScheduler::new();
 
         struct HttpDispatchQ_* myQueue = shared->queues + ctx->selfIndex;
@@ -2736,7 +2736,7 @@ static ?&HttpReactorThreadCtx_ http_reactor_worker_(?&HttpReactorThreadCtx_ argP
 
         http_worker_loop_(&sched, &reactor, myQueue, shared->handler);
 
-        reactor.close_();
+        reactor.drop();
         if (ac != (struct HttpAcceptState_*)0) { free((unsigned char*)ac); }
         free((unsigned char*)ctx);
         return null;

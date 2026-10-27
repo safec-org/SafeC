@@ -7,6 +7,56 @@ release tags.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Containers of `Drop` elements:** `HashMap<K, String>`, `StrMap<String>`,
+  `List<String>`, `Stack<String>`, `Queue<String>`, `BST<K, String, C>`,
+  `BTree<String>`, `StaticVec<String>` and `StaticMap<String>` failed the
+  ownership check inside std (the value was not dropped on the OOM / full
+  path, or was moved out of a node outside `unsafe`). Every container now
+  owns its elements the way `Vec` does: overwriting a key drops the old
+  value, a value that can't be stored is dropped, `remove()` / `pop()` move
+  it out, `List::remove` drops the element it unlinks, and `clear()` /
+  `drop()` drop every element still held (before, `StrMap::clear()` /
+  `drop()` and the others released the storage but leaked the values).
+  `BTree`, `StaticVec` and `StaticMap` live in place / over the caller's
+  storage and have no `drop()`: `clear()` them. Don't free a container's
+  values yourself before dropping it (`m.foreach(free_value); m.drop()`):
+  drop the container alone.
+- **`std::Reactor` is a `Drop` type:** it had no `drop()`, and `close_()`
+  left the `sigfds` / `watched` tables allocated (and, on Windows, called
+  `WSACleanup` even if `init()` had failed). `Reactor::drop()` closes it;
+  `close_()` now also frees both tables, is idempotent (`kq = -1`
+  afterwards) and leaves a reactor `init()` can reopen. The HTTP server's
+  reactor threads drop their reactor (on the `init()` failure path too).
+- **`WsConn` never touches a descriptor it doesn't own:** a zero-initialised
+  `WsConn` (e.g. after a failed `accept()`) sent a close frame to fd 0 and
+  closed it when dropped. New `WsConn::closed()` (fd = -1) is the starting
+  value for `accept()` and std's own placeholders; `accept()` leaves the
+  connection closed when it fails; `drop()` / `close()` and the send
+  functions do nothing on a closed connection (fd < 0).
+- `safeguard --help` lists the `arm-81m` target alias (Armv8.1-M,
+  Cortex-M55/M85) with the others; the smoke test now checks the help
+  against `safec --list-targets`.
+- **`#include <math.h>` is the C library's header in a safeguard build:**
+  safeguard put std/ itself on SafeC's include path (`-I <std>`), so a bare
+  `<math.h>` (or `<time.h>`, `<stdint.h>`, `<ctype.h>`, ...) found std's
+  header instead and `sqrt` & co. were undeclared. std is now reached only
+  as `<std/...>` (its parent directory is on the path) — in builds, tests,
+  `check`, `lint`, `doc` and dependency builds, and for std's own units.
+  **Breaking** for code that included std headers without the prefix
+  (`#include <io.h>`, `"prelude.h"`): write `<std/io.h>`. The `safeguard
+  new` template says `<std/prelude.h>`; the smoke test builds a project
+  using both `<math.h>` and `<std/math.h>`.
+- **std/time links in the playground:** scc's runtime had no `gmtime_r`, so
+  a program using std/time failed with "undefined function". The runtime
+  now provides `gmtime_r`, `localtime_r` (UTC: the playground has no time
+  zone), `mktime`, `strftime`, `strptime`, `clock_gettime` (the epoch: no
+  clock) and `nanosleep`; a difftest corpus case checks them against glibc.
+  `tools/genvfs.py` now embeds each bundled file in chunks of at most
+  32 KiB: scc decodes a string literal into a 64 KiB buffer, so the grown
+  runtime came out truncated in the self-compiled scc (bootstrap stage 2).
+
 ### Changed — no `void*` anywhere in std
 
 - **The raw memory layer is bytes:** `alloc_raw_`, `dealloc_raw_`,

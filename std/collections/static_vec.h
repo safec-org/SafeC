@@ -17,6 +17,13 @@
 //
 // The container holds a slice of the storage: keep the backing array alive
 // at least as long as the container.
+//
+// Elements may own something (String, Vec, ...): push()/insert() take them
+// by value (a value that doesn't fit is dropped, and updating a StaticMap
+// key drops the old value), pop() moves one out, and clear() drops every
+// element still held. The storage is the caller's, so neither container
+// has a drop() of its own: clear() one whose elements own resources before
+// the storage goes away.
 #pragma once
 
 namespace std {
@@ -52,7 +59,7 @@ struct StaticVec<T> StaticVec::over([]T storage) {
 
 generic<T>
 int StaticVec::push(T val) {
-    if (self.len >= self.cap) return 0;
+    if (self.len >= self.cap) { drop(val); return 0; }
     unsafe { self.data[self.len] = val; }
     self.len = self.len + 1UL;
     return 1;
@@ -87,7 +94,13 @@ generic<T>
 int StaticVec::is_full() const { return self.len >= self.cap; }
 
 generic<T>
-void StaticVec::clear() { self.len = 0UL; }
+void StaticVec::clear() {
+    if const (needs_drop(T)) {
+        unsigned long i = 0UL;
+        while (i < self.len) { unsafe { drop(self.data[i]); } i = i + 1UL; }
+    }
+    self.len = 0UL;
+}
 
 // ── StaticMap<V> (unsigned long keys, open addressing) ────────────────────────
 
@@ -111,7 +124,9 @@ struct StaticMap {
     int           contains(unsigned long key) const;
     unsigned long length() const;
     int           is_empty() const;
-    void          clear();
+    void          clear();                          // drop every value
+
+    void          reset_();                         // mark every slot unused (no drops)
 };
 
 generic<V>
@@ -120,7 +135,7 @@ struct StaticMap<V> StaticMap::over([]StaticMapSlot<V> storage) {
     m.slots = storage;
     m.cap = storage.len;
     m.count = 0UL;
-    m.clear();
+    m.reset_();   // the storage holds no values yet: nothing to drop
     return m;
 }
 
@@ -132,6 +147,7 @@ int StaticMap::insert(unsigned long key, V val) {
         unsafe {
             if (!self.slots[s].used || self.slots[s].key == key) {
                 if (!self.slots[s].used) { self.slots[s].used = 1; self.count = self.count + 1UL; }
+                else drop(self.slots[s].val);
                 self.slots[s].key = key;
                 self.slots[s].val = val;
                 return 1;
@@ -139,6 +155,7 @@ int StaticMap::insert(unsigned long key, V val) {
         }
         i = i + 1UL;
     }
+    drop(val);   // full
     return 0;
 }
 
@@ -167,6 +184,17 @@ int StaticMap::is_empty() const { return self.count == 0UL; }
 
 generic<V>
 void StaticMap::clear() {
+    if const (needs_drop(V)) {
+        unsafe {
+            unsigned long i = 0UL;
+            while (i < self.cap) { if (self.slots[i].used) drop(self.slots[i].val); i = i + 1UL; }
+        }
+    }
+    self.reset_();
+}
+
+generic<V>
+void StaticMap::reset_() {
     unsafe {
         unsigned long i = 0UL;
         while (i < self.cap) { self.slots[i].used = 0; i = i + 1UL; }

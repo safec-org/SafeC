@@ -65,6 +65,17 @@ static struct TcpStream ws_stream_(const &WsConn c) {
     return s;
 }
 
+struct WsConn WsConn::closed() {
+    struct WsConn c;
+    c.fd = -1;
+    c.tls = null;
+    c.is_server = 0;
+    c.early = null;
+    c.earlyLen = 0UL;
+    c.earlyPos = 0UL;
+    return c;
+}
+
 struct WsConn WsConn::connect_timeout(const &char host, unsigned short port,
                                       const &char path, int timeout_ms, ?&int ok) {
     return WsConn::connect_tls(host, port, path, 0, null, timeout_ms, ok);
@@ -72,13 +83,7 @@ struct WsConn WsConn::connect_timeout(const &char host, unsigned short port,
 
 struct WsConn WsConn::connect_tls(const &char host, unsigned short port, const &char path,
                                   int tls, const ?&TlsConfig cfg, int timeout_ms, ?&int ok) {
-    struct WsConn conn;
-    conn.fd = -1;
-    conn.tls = null;
-    conn.is_server = 0;
-    conn.early = null;
-    conn.earlyLen = 0UL;
-    conn.earlyPos = 0UL;
+    struct WsConn conn = WsConn::closed();
     int good = 1;
 
     // Bounded by timeout_ms throughout the opening handshake (TLS included).
@@ -221,6 +226,17 @@ int ws_listen(unsigned short port) {
 }
 
 int WsConn::accept(int listenFd) {
+    // Start from a closed connection, whatever 'self' held (possibly
+    // zeroed or uninitialized memory): a failed accept leaves fd = -1, so
+    // dropping it touches no descriptor.
+    unsafe {
+        self.fd = -1;
+        self.tls = null;
+        self.is_server = 1;
+        self.early = null;
+        self.earlyLen = 0UL;
+        self.earlyPos = 0UL;
+    }
     int fd;
     unsafe { fd = tcp_accept_nb(listenFd); }
     if (fd < 0) { return 0; }
@@ -284,6 +300,7 @@ static int ws_write_frame_(struct WsConn* conn, int opcode,
     int mustMask;
     struct TcpStream s;
     unsafe {
+        if (conn->fd < 0) return 0;   // closed: never write to a stray descriptor
         mustMask = (conn->is_server != 0) ? 0 : 1;
         s = ws_stream_((&WsConn)conn);
     }
@@ -512,13 +529,8 @@ int ws_is_upgrade(const &HttpRequest req) {
 }
 
 struct WsConn WsConn::accept_upgrade(const &HttpRequest req, &HttpConn conn, ?&int ok) {
-    struct WsConn c;
-    c.fd = -1;
-    c.tls = null;
+    struct WsConn c = WsConn::closed();
     c.is_server = 1;
-    c.early = null;
-    c.earlyLen = 0UL;
-    c.earlyPos = 0UL;
     int good = ws_is_upgrade(req);
     struct String ver = req.header("Sec-WebSocket-Version");
     if (!ver.eq_cstr("13")) { good = 0; }
@@ -577,20 +589,13 @@ struct WsConn WsConn::connect_url_tls(const &char url, const ?&TlsConfig cfg, in
     if (pok && !tls && !u.scheme.eq_cstr("ws") && !u.scheme.eq_cstr("http")) { pok = 0; }
     int port = u.port_or_default();
     if (u.host.is_empty() || port <= 0) { pok = 0; }
-    struct WsConn c;
     if (!pok) {
-        c.fd = -1;
-        c.tls = null;
-        c.is_server = 0;
-        c.early = null;
-        c.earlyLen = 0UL;
-        c.earlyPos = 0UL;
         u.free();
         if (ok != (int*)0) { unsafe { *ok = 0; } }
-        return c;
+        return WsConn::closed();
     }
     struct String target = u.request_target();
-    c = WsConn::connect_tls(u.host.as_ptr(), (unsigned short)port, target.as_ptr(), tls, cfg, timeout_ms, ok);
+    struct WsConn c = WsConn::connect_tls(u.host.as_ptr(), (unsigned short)port, target.as_ptr(), tls, cfg, timeout_ms, ok);
     target.free();
     u.free();
     return c;
@@ -599,8 +604,8 @@ struct WsConn WsConn::connect_url_tls(const &char url, const ?&TlsConfig cfg, in
 void WsConn::close() { self.drop(); }
 
 void WsConn::drop() {
-    self.send_close();
     if (self.fd >= 0) {
+        self.send_close();
         struct TcpStream s = ws_stream_(self);
         s.close();
         self.fd = -1;

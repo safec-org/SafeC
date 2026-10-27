@@ -4,7 +4,7 @@
 
 int g_vfs_file[63];
 
-const char* g_vfs_0() {
+const char* g_vfs_0_0() {
     return
     "// The scc runtime, compiled into every program (as the pseudo-file\n"
     "// \"<runtime>\"). Host services come from three wasm imports; everything else\n"
@@ -951,7 +951,11 @@ const char* g_vfs_0() {
     "                if (prec > digits) { zeros = prec - digits; }\n"
     "                int signch = 0;\n"
     "                if (neg == 1) { signch = 45; } else if (is_signed == 1 && plus == 1) { signch = 43; } else if (is_signed == 1 && space == 1) { signch = 32; }\n"
-    "                int prefix = 0;\n"
+    "                int prefix = 0;\n";
+}
+
+const char* g_vfs_0_1() {
+    return
     "                if (alt == 1 && (c == 'x' || c == 'X' || c == 'p') && (nd > 0 && !(nd == 1 && __rt_nb[0] == '0' && c != 'p'))) { prefix = 2; }\n"
     "                if (alt == 1 && c == 'o' && zeros == 0 && !(nd == 1 && __rt_nb[0] == '0')) { zeros = 1; }\n"
     "                int total = nd + zeros + prefix;\n"
@@ -1714,17 +1718,341 @@ const char* g_vfs_0() {
     "float roundf(float x) { return (float)round((double)x); }\n"
     "\n"
     "// ── time ─────────────────────────────────────────────────────────────────────\n"
+    "// The playground has no clock: time() and clock_gettime() report 0 (the\n"
+    "// epoch) and nanosleep() returns at once. Calendar conversion is real and\n"
+    "// exact (proleptic Gregorian, any year), and there is no time zone: local\n"
+    "// time is UTC. A struct tm is handled as its 9 leading int fields, as\n"
+    "// std/time.sc passes it: sec, min, hour, mday, mon (0-11), year (since\n"
+    "// 1900), wday (0 = Sunday), yday (0-365), isdst.\n"
     "long time(long* t) {\n"
     "    unsafe { if (t != null) { *t = 0L; } }\n"
     "    return 0L;\n"
     "}\n"
     "long clock() { return 0L; }\n"
     "\n"
+    "// struct timespec on wasm32: two 4-byte fields\n"
+    "struct SafecTimespec_ { int tv_sec; int tv_nsec; };\n"
+    "int clock_gettime(int clk, SafecTimespec_* ts) {\n"
+    "    unsafe { if (ts != null) { ts->tv_sec = 0; ts->tv_nsec = 0; } }\n"
+    "    return 0;\n"
+    "}\n"
+    "int nanosleep(const SafecTimespec_* req, SafecTimespec_* rem) {\n"
+    "    unsafe { if (rem != null) { rem->tv_sec = 0; rem->tv_nsec = 0; } }\n"
+    "    return 0;\n"
+    "}\n"
+    "\n"
+    "// floor division and the matching non-negative remainder\n"
+    "long long __rt_fdiv(long long a, long long b) {\n"
+    "    long long q = a / b;\n"
+    "    if ((a % b != 0LL) && ((a < 0LL) != (b < 0LL))) { q = q - 1LL; }\n"
+    "    return q;\n"
+    "}\n"
+    "long long __rt_fmod(long long a, long long b) { return a - __rt_fdiv(a, b) * b; }\n"
+    "\n"
+    "// days since 1970-01-01 of y-m-d (m 1-12), and back (H. Hinnant's algorithm)\n"
+    "long long __rt_days_from_civil(long long y, long long m, long long d) {\n"
+    "    if (m <= 2LL) { y = y - 1LL; }\n"
+    "    long long era = __rt_fdiv(y, 400LL);\n"
+    "    long long yoe = y - era * 400LL;\n"
+    "    long long mp = m > 2LL ? m - 3LL : m + 9LL;\n"
+    "    long long doy = (153LL * mp + 2LL) / 5LL + d - 1LL;\n"
+    "    long long doe = yoe * 365LL + yoe / 4LL - yoe / 100LL + doy;\n"
+    "    return era * 146097LL + doe - 719468LL;\n"
+    "}\n"
+    "void __rt_civil_from_days(long long z, long long* yo, long long* mo, long long* dd) {\n"
+    "    z = z + 719468LL;\n"
+    "    long long era = __rt_fdiv(z, 146097LL);\n"
+    "    long long doe = z - era * 146097LL;\n"
+    "    long long yoe = (doe - doe / 1460LL + doe / 36524LL - doe / 146096LL) / 365LL;\n"
+    "    long long doy = doe - (365LL * yoe + yoe / 4LL - yoe / 100LL);\n"
+    "    long long mp = (5LL * doy + 2LL) / 153LL;\n"
+    "    long long d = doy - (153LL * mp + 2LL) / 5LL + 1LL;\n"
+    "    long long m = mp < 10LL ? mp + 3LL : mp - 9LL;\n"
+    "    unsafe {\n"
+    "        *yo = yoe + era * 400LL + (m <= 2LL ? 1LL : 0LL);\n"
+    "        *mo = m;\n"
+    "        *dd = d;\n"
+    "    }\n"
+    "}\n"
+    "\n"
+    "int* gmtime_r(const long long* t, int* tm) {\n"
+    "    unsafe {\n"
+    "        long long s = *t;\n"
+    "        long long days = __rt_fdiv(s, 86400LL);\n"
+    "        long long rem = s - days * 86400LL;\n"
+    "        long long y = 0LL;\n"
+    "        long long m = 0LL;\n"
+    "        long long d = 0LL;\n"
+    "        __rt_civil_from_days(days, &y, &m, &d);\n"
+    "        tm[0] = (int)(rem % 60LL);\n"
+    "        tm[1] = (int)((rem / 60LL) % 60LL);\n"
+    "        tm[2] = (int)(rem / 3600LL);\n"
+    "        tm[3] = (int)d;\n"
+    "        tm[4] = (int)(m - 1LL);\n"
+    "        tm[5] = (int)(y - 1900LL);\n"
+    "        tm[6] = (int)__rt_fmod(days + 4LL, 7LL);     // 1970-01-01 was a Thursday\n"
+    "        tm[7] = (int)(days - __rt_days_from_civil(y, 1LL, 1LL));\n"
+    "        tm[8] = 0;\n"
+    "    }\n"
+    "    return tm;\n"
+    "}\n"
+    "int* localtime_r(const long long* t, int* tm) { return gmtime_r(t, tm); }\n"
+    "\n"
+    "// the seconds tm's fields stand for (out of range fields carry over), and tm\n"
+    "// normalized to them, wday and yday included\n"
+    "long long __rt_timegm(int* tm) {\n"
+    "    long long secs = 0LL;\n"
+    "    unsafe {\n"
+    "        long long mon = (long long)tm[4];\n"
+    "        long long y = (long long)tm[5] + 1900LL + __rt_fdiv(mon, 12LL);\n"
+    "        mon = __rt_fmod(mon, 12LL);\n"
+    "        long long days = __rt_days_from_civil(y, mon + 1LL, 1LL) + (long long)tm[3] - 1LL;\n"
+    "        secs = days * 86400LL + (long long)tm[2] * 3600LL + (long long)tm[1] * 60LL + (long long)tm[0];\n"
+    "        gmtime_r(&secs, tm);\n"
+    "    }\n"
+    "    return secs;\n"
+    "}\n"
+    "long long mktime(int* tm) { return __rt_timegm(tm); }\n"
+    "\n"
+    "const char* __rt_wday_name(int i, int full) {\n";
+}
+
+const char* g_vfs_0_2() {
+    return
+    "    if (i < 0 || i > 6) { return \"?\"; }\n"
+    "    const char* longn[7] = { \"Sunday\", \"Monday\", \"Tuesday\", \"Wednesday\", \"Thursday\", \"Friday\", \"Saturday\" };\n"
+    "    const char* shortn[7] = { \"Sun\", \"Mon\", \"Tue\", \"Wed\", \"Thu\", \"Fri\", \"Sat\" };\n"
+    "    unsafe { if (full != 0) { return longn[i]; } return shortn[i]; }\n"
+    "}\n"
+    "const char* __rt_mon_name(int i, int full) {\n"
+    "    if (i < 0 || i > 11) { return \"?\"; }\n"
+    "    const char* longn[12] = { \"January\", \"February\", \"March\", \"April\", \"May\", \"June\", \"July\",\n"
+    "                              \"August\", \"September\", \"October\", \"November\", \"December\" };\n"
+    "    const char* shortn[12] = { \"Jan\", \"Feb\", \"Mar\", \"Apr\", \"May\", \"Jun\", \"Jul\", \"Aug\", \"Sep\", \"Oct\", \"Nov\", \"Dec\" };\n"
+    "    unsafe { if (full != 0) { return longn[i]; } return shortn[i]; }\n"
+    "}\n"
+    "\n"
+    "// strftime's output cursor: n bytes so far into s (of max); past max only counts\n"
+    "void __rt_tf_ch(char* s, unsigned long max, unsigned long* n, char c) {\n"
+    "    unsafe {\n"
+    "        if (*n < max) { s[*n] = c; }\n"
+    "        *n = *n + 1UL;\n"
+    "    }\n"
+    "}\n"
+    "void __rt_tf_str(char* s, unsigned long max, unsigned long* n, const char* t) {\n"
+    "    unsafe {\n"
+    "        int i = 0;\n"
+    "        while (t[i] != (char)0) { __rt_tf_ch(s, max, n, t[i]); i = i + 1; }\n"
+    "    }\n"
+    "}\n"
+    "// v in decimal, at least w digits, padded with 'pad' (0: no padding)\n"
+    "void __rt_tf_num(char* s, unsigned long max, unsigned long* n, long long v, int w, char pad) {\n"
+    "    char d[24];\n"
+    "    int k = 0;\n"
+    "    int neg = 0;\n"
+    "    if (v < 0LL) { neg = 1; v = 0LL - v; }\n"
+    "    unsafe {\n"
+    "        while (v > 0LL || k == 0) { d[k] = (char)(48LL + v % 10LL); v = v / 10LL; k = k + 1; }\n"
+    "        if (neg == 1) { __rt_tf_ch(s, max, n, '-'); w = w - 1; }\n"
+    "        int i = k;\n"
+    "        while (i < w && pad != (char)0) { __rt_tf_ch(s, max, n, pad); i = i + 1; }\n"
+    "        while (k > 0) { k = k - 1; __rt_tf_ch(s, max, n, d[k]); }\n"
+    "    }\n"
+    "}\n"
+    "void __rt_tf(char* s, unsigned long max, unsigned long* n, const char* fmt, const int* tm) {\n"
+    "    unsafe {\n"
+    "        int i = 0;\n"
+    "        while (fmt[i] != (char)0) {\n"
+    "            char c = fmt[i];\n"
+    "            if (c != '%' || fmt[i + 1] == (char)0) { __rt_tf_ch(s, max, n, c); i = i + 1; continue; }\n"
+    "            char f = fmt[i + 1];\n"
+    "            i = i + 2;\n"
+    "            int hour12 = tm[2] % 12;\n"
+    "            if (hour12 == 0) { hour12 = 12; }\n"
+    "            long long year = (long long)tm[5] + 1900LL;\n"
+    "            if (f == 'Y') { __rt_tf_num(s, max, n, year, 1, (char)0); }\n"
+    "            else if (f == 'C') { __rt_tf_num(s, max, n, __rt_fdiv(year, 100LL), 2, '0'); }\n"
+    "            else if (f == 'y') { __rt_tf_num(s, max, n, __rt_fmod(year, 100LL), 2, '0'); }\n"
+    "            else if (f == 'm') { __rt_tf_num(s, max, n, (long long)tm[4] + 1LL, 2, '0'); }\n"
+    "            else if (f == 'd') { __rt_tf_num(s, max, n, (long long)tm[3], 2, '0'); }\n"
+    "            else if (f == 'e') { __rt_tf_num(s, max, n, (long long)tm[3], 2, ' '); }\n"
+    "            else if (f == 'H') { __rt_tf_num(s, max, n, (long long)tm[2], 2, '0'); }\n"
+    "            else if (f == 'k') { __rt_tf_num(s, max, n, (long long)tm[2], 2, ' '); }\n"
+    "            else if (f == 'I') { __rt_tf_num(s, max, n, (long long)hour12, 2, '0'); }\n"
+    "            else if (f == 'l') { __rt_tf_num(s, max, n, (long long)hour12, 2, ' '); }\n"
+    "            else if (f == 'M') { __rt_tf_num(s, max, n, (long long)tm[1], 2, '0'); }\n"
+    "            else if (f == 'S') { __rt_tf_num(s, max, n, (long long)tm[0], 2, '0'); }\n"
+    "            else if (f == 'j') { __rt_tf_num(s, max, n, (long long)tm[7] + 1LL, 3, '0'); }\n"
+    "            else if (f == 'w') { __rt_tf_num(s, max, n, (long long)tm[6], 1, (char)0); }\n"
+    "            else if (f == 'u') { __rt_tf_num(s, max, n, tm[6] == 0 ? 7LL : (long long)tm[6], 1, (char)0); }\n"
+    "            else if (f == 'a') { __rt_tf_str(s, max, n, __rt_wday_name(tm[6], 0)); }\n"
+    "            else if (f == 'A') { __rt_tf_str(s, max, n, __rt_wday_name(tm[6], 1)); }\n"
+    "            else if (f == 'b' || f == 'h') { __rt_tf_str(s, max, n, __rt_mon_name(tm[4], 0)); }\n"
+    "            else if (f == 'B') { __rt_tf_str(s, max, n, __rt_mon_name(tm[4], 1)); }\n"
+    "            else if (f == 'p') { __rt_tf_str(s, max, n, tm[2] < 12 ? \"AM\" : \"PM\"); }\n"
+    "            else if (f == 'P') { __rt_tf_str(s, max, n, tm[2] < 12 ? \"am\" : \"pm\"); }\n"
+    "            else if (f == 'Z') { __rt_tf_str(s, max, n, \"UTC\"); }\n"
+    "            else if (f == 'z') { __rt_tf_str(s, max, n, \"+0000\"); }\n"
+    "            else if (f == 's') {\n"
+    "                int c2[11];\n"
+    "                int k = 0;\n"
+    "                while (k < 9) { c2[k] = tm[k]; k = k + 1; }\n"
+    "                __rt_tf_num(s, max, n, __rt_timegm(&c2[0]), 1, (char)0);\n"
+    "            }\n"
+    "            else if (f == 'n') { __rt_tf_ch(s, max, n, '\\n'); }\n"
+    "            else if (f == 't') { __rt_tf_ch(s, max, n, '\\t'); }\n"
+    "            else if (f == '%') { __rt_tf_ch(s, max, n, '%'); }\n"
+    "            else if (f == 'F') { __rt_tf(s, max, n, \"%Y-%m-%d\", tm); }\n"
+    "            else if (f == 'T') { __rt_tf(s, max, n, \"%H:%M:%S\", tm); }\n"
+    "            else if (f == 'R') { __rt_tf(s, max, n, \"%H:%M\", tm); }\n"
+    "            else if (f == 'D' || f == 'x') { __rt_tf(s, max, n, \"%m/%d/%y\", tm); }\n"
+    "            else if (f == 'X') { __rt_tf(s, max, n, \"%H:%M:%S\", tm); }\n"
+    "            else if (f == 'r') { __rt_tf(s, max, n, \"%I:%M:%S %p\", tm); }\n"
+    "            else if (f == 'c') { __rt_tf(s, max, n, \"%a %b %e %H:%M:%S %Y\", tm); }\n"
+    "            else { __rt_tf_ch(s, max, n, '%'); __rt_tf_ch(s, max, n, f); }\n"
+    "        }\n"
+    "    }\n"
+    "}\n"
+    "// the bytes written, not counting the NUL; 0 when they don't fit in max\n"
+    "unsigned long strftime(char* s, unsigned long max, const char* fmt, const int* tm) {\n"
+    "    unsigned long n = 0UL;\n"
+    "    __rt_tf(s, max, &n, fmt, tm);\n"
+    "    unsafe {\n"
+    "        if (n + 1UL > max) { if (max > 0UL) { s[0] = (char)0; } return 0UL; }\n"
+    "        s[n] = (char)0;\n"
+    "    }\n"
+    "    return n;\n"
+    "}\n"
+    "\n"
+    "// strptime's number: up to 'w' digits (after optional blanks, and a sign\n"
+    "// when 'sign' is set) in [lo, hi]; the index past it, or -1\n"
+    "int __rt_tp_num(const char* s, int i, int w, int sign, long long lo, long long hi, long long* out) {\n"
+    "    unsafe {\n"
+    "        while (isspace((int)s[i]) != 0) { i = i + 1; }\n"
+    "        int neg = 0;\n"
+    "        if (sign != 0 && (s[i] == '-' || s[i] == '+')) { neg = s[i] == '-' ? 1 : 0; i = i + 1; }\n"
+    "        long long v = 0LL;\n"
+    "        int k = 0;\n"
+    "        while (k < w && s[i] >= '0' && s[i] <= '9') { v = v * 10LL + (long long)(s[i] - '0'); i = i + 1; k = k + 1; }\n"
+    "        if (k == 0) { return -1; }\n"
+    "        if (neg == 1) { v = 0LL - v; }\n"
+    "        if (v < lo || v > hi) { return -1; }\n"
+    "        *out = v;\n"
+    "    }\n"
+    "    return i;\n"
+    "}\n"
+    "// a month or weekday name (full or abbreviated, any case) at s+i: its\n"
+    "// index, with *next past it, or -1\n"
+    "int __rt_tp_name(const char* s, int i, int months, int* next) {\n"
+    "    int count = months != 0 ? 12 : 7;\n"
+    "    int best = -1;\n"
+    "    int bestLen = 0;\n"
+    "    int k = 0;\n"
+    "    while (k < count) {\n"
+    "        int full = 1;\n"
+    "        while (full >= 0) {\n"
+    "            const char* nm = months != 0 ? __rt_mon_name(k, full) : __rt_wday_name(k, full);\n"
+    "            int len = (int)strlen(nm);\n"
+    "            int j = 0;\n"
+    "            unsafe {\n"
+    "                while (j < len && s[i + j] != (char)0 && tolower((int)s[i + j]) == tolower((int)nm[j])) { j = j + 1; }\n"
+    "            }\n"
+    "            if (j == len && len > bestLen) { best = k; bestLen = len; }\n"
+    "            full = full - 1;\n"
+    "        }\n"
+    "        k = k + 1;\n"
+    "    }\n"
+    "    unsafe { *next = i + bestLen; }\n"
+    "    return best;\n"
+    "}\n"
+    "int __rt_tp(const char* s, int i, const char* fmt, int* tm, int* have) {\n"
+    "    unsafe {\n"
+    "        int f = 0;\n"
+    "        while (fmt[f] != (char)0 && i >= 0) {\n"
+    "            char c = fmt[f];\n"
+    "            if (isspace((int)c) != 0) {\n"
+    "                while (isspace((int)s[i]) != 0) { i = i + 1; }\n"
+    "                f = f + 1;\n"
+    "                continue;\n"
+    "            }\n"
+    "            if (c != '%' || fmt[f + 1] == (char)0) {\n"
+    "                if (s[i] != c) { return -1; }\n"
+    "                i = i + 1;\n"
+    "                f = f + 1;\n"
+    "                continue;\n"
+    "            }\n"
+    "            char d = fmt[f + 1];\n"
+    "            f = f + 2;\n"
+    "            long long v = 0LL;\n"
+    "            if (d == 'Y') { i = __rt_tp_num(s, i, 4, 1, -9999LL, 9999LL, &v); if (i >= 0) { tm[5] = (int)(v - 1900LL); have[0] = 1; } }\n"
+    "            else if (d == 'y') {\n"
+    "                i = __rt_tp_num(s, i, 2, 0, 0LL, 99LL, &v);\n"
+    "                if (i >= 0) { tm[5] = (int)(v < 69LL ? v + 100LL : v); have[0] = 1; }\n"
+    "            }\n"
+    "            else if (d == 'm') { i = __rt_tp_num(s, i, 2, 0, 1LL, 12LL, &v); if (i >= 0) { tm[4] = (int)(v - 1LL); have[1] = 1; } }\n"
+    "            else if (d == 'd' || d == 'e') { i = __rt_tp_num(s, i, 2, 0, 1LL, 31LL, &v); if (i >= 0) { tm[3] = (int)v; have[2] = 1; } }\n"
+    "            else if (d == 'H' || d == 'k') { i = __rt_tp_num(s, i, 2, 0, 0LL, 23LL, &v); if (i >= 0) { tm[2] = (int)v; have[3] = 0; } }\n"
+    "            else if (d == 'I' || d == 'l') { i = __rt_tp_num(s, i, 2, 0, 1LL, 12LL, &v); if (i >= 0) { tm[2] = (int)(v % 12LL); have[3] = 1; } }\n"
+    "            else if (d == 'M') { i = __rt_tp_num(s, i, 2, 0, 0LL, 59LL, &v); if (i >= 0) { tm[1] = (int)v; } }\n"
+    "            else if (d == 'S') { i = __rt_tp_num(s, i, 2, 0, 0LL, 61LL, &v); if (i >= 0) { tm[0] = (int)v; } }\n"
+    "            else if (d == 'j') { i = __rt_tp_num(s, i, 3, 0, 1LL, 366LL, &v); if (i >= 0) { tm[7] = (int)(v - 1LL); have[5] = 1; } }\n"
+    "            else if (d == 'b' || d == 'B' || d == 'h') {\n"
+    "                while (isspace((int)s[i]) != 0) { i = i + 1; }\n"
+    "                int nx = i;\n"
+    "                int k = __rt_tp_name(s, i, 1, &nx);\n"
+    "                if (k < 0) { return -1; }\n"
+    "                tm[4] = k; have[1] = 1; i = nx;\n"
+    "            }\n"
+    "            else if (d == 'a' || d == 'A') {\n"
+    "                while (isspace((int)s[i]) != 0) { i = i + 1; }\n"
+    "                int nx = i;\n"
+    "                int k = __rt_tp_name(s, i, 0, &nx);\n"
+    "                if (k < 0) { return -1; }\n"
+    "                tm[6] = k; have[6] = 1; i = nx;\n"
+    "            }\n"
+    "            else if (d == 'p') {\n"
+    "                while (isspace((int)s[i]) != 0) { i = i + 1; }\n"
+    "                int a = tolower((int)s[i]);\n"
+    "                if ((a != 'a' && a != 'p') || tolower((int)s[i + 1]) != 'm') { return -1; }\n"
+    "                have[4] = a == 'p' ? 1 : 0;\n"
+    "                i = i + 2;\n"
+    "            }\n"
+    "            else if (d == 'n' || d == 't') { while (isspace((int)s[i]) != 0) { i = i + 1; } }\n"
+    "            else if (d == '%') { if (s[i] != '%') { return -1; } i = i + 1; }\n"
+    "            else if (d == 'T') { i = __rt_tp(s, i, \"%H:%M:%S\", tm, have); }\n"
+    "            else if (d == 'R') { i = __rt_tp(s, i, \"%H:%M\", tm, have); }\n"
+    "            else if (d == 'F') { i = __rt_tp(s, i, \"%Y-%m-%d\", tm, have); }\n"
+    "            else if (d == 'D') { i = __rt_tp(s, i, \"%m/%d/%y\", tm, have); }\n"
+    "            else { return -1; }\n"
+    "        }\n"
+    "    }\n"
+    "    return i;\n"
+    "}\n"
+    "// parses s by fmt into tm's fields; past the parsed text, or null. Like\n"
+    "// glibc, wday and yday are computed when the date fields allow it.\n"
+    "char* strptime(const char* s, const char* fmt, int* tm) {\n"
+    "    int have[7];   // year, mon, mday, 12-hour, pm, yday, wday\n"
+    "    int k = 0;\n"
+    "    while (k < 7) { have[k] = 0; k = k + 1; }\n"
+    "    int i = __rt_tp(s, 0, fmt, tm, &have[0]);\n"
+    "    if (i < 0) { return null; }\n"
+    "    unsafe {\n"
+    "        if (have[3] == 1 && have[4] == 1) { tm[2] = tm[2] + 12; }\n"
+    "        if (have[0] == 1 && have[1] == 1 && have[2] == 1) {\n"
+    "            long long y = (long long)tm[5] + 1900LL;\n"
+    "            long long days = __rt_days_from_civil(y, (long long)tm[4] + 1LL, (long long)tm[3]);\n"
+    "            if (have[6] == 0) { tm[6] = (int)__rt_fmod(days + 4LL, 7LL); }\n"
+    "            if (have[5] == 0) { tm[7] = (int)(days - __rt_days_from_civil(y, 1LL, 1LL)); }\n"
+    "        }\n"
+    "        return (char*)(s + i);\n"
+    "    }\n"
+    "}\n"
+    "\n"
     "// ── spawn/join (the playground has no threads: spawn runs the function\n"
     "// to completion right away; join is then a no-op) ─────────────────────────────\n";
 }
 
-const char* g_vfs_1() {
+const char* g_vfs_1_0() {
     return
     "// assert.h — playground subset\n"
     "#pragma once\n"
@@ -1732,7 +2060,7 @@ const char* g_vfs_1() {
     "#define assert(e) ((e) ? (void)0 : __rt_assert_fail(#e, __FILE__, __LINE__))\n";
 }
 
-const char* g_vfs_2() {
+const char* g_vfs_2_0() {
     return
     "// ctype.h — playground subset (implemented by the scc runtime)\n"
     "#pragma once\n"
@@ -1750,7 +2078,7 @@ const char* g_vfs_2() {
     "extern int tolower(int c);\n";
 }
 
-const char* g_vfs_3() {
+const char* g_vfs_3_0() {
     return
     "// limits.h — playground subset\n"
     "#pragma once\n"
@@ -1774,7 +2102,7 @@ const char* g_vfs_3() {
     "#define ULLONG_MAX 18446744073709551615UL\n";
 }
 
-const char* g_vfs_4() {
+const char* g_vfs_4_0() {
     return
     "// math.h — playground subset (implemented by the scc runtime)\n"
     "#pragma once\n"
@@ -1844,13 +2172,13 @@ const char* g_vfs_4() {
     "extern float fmaf(float a, float b, float c);\n";
 }
 
-const char* g_vfs_5() {
+const char* g_vfs_5_0() {
     return
     "// stdbool.h — bool/true/false are SafeC keywords\n"
     "#pragma once\n";
 }
 
-const char* g_vfs_6() {
+const char* g_vfs_6_0() {
     return
     "// stddef.h — playground subset. size_t is 64-bit (SafeC's unsigned long),\n"
     "// matching the native 64-bit targets programs are usually written for.\n"
@@ -1865,7 +2193,7 @@ const char* g_vfs_6() {
     "#endif\n";
 }
 
-const char* g_vfs_7() {
+const char* g_vfs_7_0() {
     return
     "// stdint.h — the fixed-width types are built into SafeC; limits only\n"
     "#pragma once\n"
@@ -1885,7 +2213,7 @@ const char* g_vfs_7() {
     "#define SIZE_MAX 18446744073709551615UL\n";
 }
 
-const char* g_vfs_8() {
+const char* g_vfs_8_0() {
     return
     "// stdio.h — the playground's C stdio subset (implemented by the scc runtime)\n"
     "#pragma once\n"
@@ -1935,7 +2263,7 @@ const char* g_vfs_8() {
     "#define SEEK_END 2\n";
 }
 
-const char* g_vfs_9() {
+const char* g_vfs_9_0() {
     return
     "// stdlib.h — playground subset (implemented by the scc runtime)\n"
     "#pragma once\n"
@@ -1971,7 +2299,7 @@ const char* g_vfs_9() {
     "extern void* bsearch(const void* key, const void* base, size_t n, size_t size, void* cmp);\n";
 }
 
-const char* g_vfs_10() {
+const char* g_vfs_10_0() {
     return
     "// string.h — playground subset (implemented by the scc runtime)\n"
     "#pragma once\n"
@@ -1999,7 +2327,7 @@ const char* g_vfs_10() {
     "extern char* strtok_r(char* s, const char* delim, char** save);\n";
 }
 
-const char* g_vfs_11() {
+const char* g_vfs_11_0() {
     return
     "// time.h — playground subset (the playground has no clock: both return 0)\n"
     "#pragma once\n"
@@ -2010,7 +2338,7 @@ const char* g_vfs_11() {
     "extern long clock();\n";
 }
 
-const char* g_vfs_12() {
+const char* g_vfs_12_0() {
     return
     "// SafeC Standard Library — I/O declarations (C11/C17/C23 stdio coverage)\n"
     "#pragma once\n"
@@ -2100,7 +2428,7 @@ const char* g_vfs_12() {
     "#pragma scc_impl <std/io.sc>\n";
 }
 
-const char* g_vfs_13() {
+const char* g_vfs_13_0() {
     return
     "// SafeC Standard Library — File I/O (C11 <stdio.h> wrappers)\n"
     "// Handles are '&File' references to an opaque type (the C FILE underneath is\n"
@@ -2213,7 +2541,7 @@ const char* g_vfs_13() {
     "#pragma scc_impl <std/io_file.sc>\n";
 }
 
-const char* g_vfs_14() {
+const char* g_vfs_14_0() {
     return
     "#pragma once\n"
     "#include <std/ownership.h>   // std::replace / std::swap, to take a String out of a field\n"
@@ -2340,7 +2668,7 @@ const char* g_vfs_14() {
     "#pragma scc_impl <std/collections/string.sc>\n";
 }
 
-const char* g_vfs_15() {
+const char* g_vfs_15_0() {
     return
     "#pragma once\n"
     "// SafeC Standard Library — ownership helpers\n"
@@ -2389,7 +2717,7 @@ const char* g_vfs_15() {
     "} // namespace std\n";
 }
 
-const char* g_vfs_16() {
+const char* g_vfs_16_0() {
     return
     "// SafeC Standard Library — String implementation\n"
     "#pragma once\n"
@@ -3245,7 +3573,7 @@ const char* g_vfs_16() {
     "} // namespace std\n";
 }
 
-const char* g_vfs_17() {
+const char* g_vfs_17_0() {
     return
     "// SafeC Standard Library — Memory declarations\n"
     "#pragma once\n"
@@ -3430,7 +3758,7 @@ const char* g_vfs_17() {
     "} // namespace std\n";
 }
 
-const char* g_vfs_18() {
+const char* g_vfs_18_0() {
     return
     "// SafeC Standard Library — String and memory declarations (C11/C17/C23 coverage)\n"
     "#pragma once\n"
@@ -3507,7 +3835,7 @@ const char* g_vfs_18() {
     "#pragma scc_impl <std/str.sc>\n";
 }
 
-const char* g_vfs_19() {
+const char* g_vfs_19_0() {
     return
     "// SafeC Standard Library — Strings\n"
     "// Safe wrappers around libc string functions.\n"
@@ -3823,7 +4151,7 @@ const char* g_vfs_19() {
     "} // namespace std\n";
 }
 
-const char* g_vfs_20() {
+const char* g_vfs_20_0() {
     return
     "// SafeC Standard Library — Standard type definitions (C99/C11/C17/C23)\n"
     "// Fundamental types, NULL, offsetof, max_align_t.\n"
@@ -3867,7 +4195,7 @@ const char* g_vfs_20() {
     "// or simply: sys_abort();  (in sys.h)\n";
 }
 
-const char* g_vfs_21() {
+const char* g_vfs_21_0() {
     return
     "// SafeC Standard Library — String formatting\n"
     "// Safe snprintf-based builders that write into caller-supplied buffers.\n"
@@ -3898,7 +4226,7 @@ const char* g_vfs_21() {
     "#pragma scc_impl <std/fmt.sc>\n";
 }
 
-const char* g_vfs_22() {
+const char* g_vfs_22_0() {
     return
     "// SafeC Standard Library — String formatting implementation\n"
     "#pragma once\n"
@@ -4066,7 +4394,7 @@ const char* g_vfs_22() {
     "} // namespace std\n";
 }
 
-const char* g_vfs_23() {
+const char* g_vfs_23_0() {
     return
     "// SafeC Standard Library — Type conversions (C11/C17 string ↔ number)\n"
     "// All parse functions set *ok = 1 on success, 0 on failure (NULL ok is safe).\n"
@@ -4114,7 +4442,7 @@ const char* g_vfs_23() {
     "#pragma scc_impl <std/convert.sc>\n";
 }
 
-const char* g_vfs_24() {
+const char* g_vfs_24_0() {
     return
     "// SafeC Standard Library — Type conversions implementation\n"
     "#pragma once\n"
@@ -4302,7 +4630,7 @@ const char* g_vfs_24() {
     "} // namespace std\n";
 }
 
-const char* g_vfs_25() {
+const char* g_vfs_25_0() {
     return
     "// SafeC Standard Library — File I/O implementation\n"
     "// &File handles wrap the C FILE (stderr_compat.h's opaque CFile_).\n"
@@ -4462,7 +4790,7 @@ const char* g_vfs_25() {
     "} // namespace std\n";
 }
 
-const char* g_vfs_26() {
+const char* g_vfs_26_0() {
     return
     "// SafeC Standard Library — internal stderr-handle compatibility shim.\n"
     "//\n"
@@ -4514,7 +4842,7 @@ const char* g_vfs_26() {
     "}\n";
 }
 
-const char* g_vfs_27() {
+const char* g_vfs_27_0() {
     return
     "#pragma once\n"
     "// SafeC Standard Library — byte-stream traits.\n"
@@ -4645,7 +4973,7 @@ const char* g_vfs_27() {
     "} // namespace std\n";
 }
 
-const char* g_vfs_28() {
+const char* g_vfs_28_0() {
     return
     "// SafeC Standard Library — I/O (C11/C17/C23 stdio coverage)\n"
     "// Wraps stdio functions for formatted, raw, and interactive I/O.\n"
@@ -4954,7 +5282,7 @@ const char* g_vfs_28() {
     "} // namespace std\n";
 }
 
-const char* g_vfs_29() {
+const char* g_vfs_29_0() {
     return
     "// SafeC Standard Library — Optional Panic System\n"
     "// Opt-in; does nothing unless panic_set_handler is called.\n"
@@ -5023,7 +5351,7 @@ const char* g_vfs_29() {
     "} // namespace std\n";
 }
 
-const char* g_vfs_30() {
+const char* g_vfs_30_0() {
     return
     "// SafeC Standard Library — Math declarations\n"
     "// Naming convention:\n"
@@ -5135,7 +5463,7 @@ const char* g_vfs_30() {
     "#pragma scc_impl <std/math.sc>\n";
 }
 
-const char* g_vfs_31() {
+const char* g_vfs_31_0() {
     return
     "// SafeC Standard Library — Math\n"
     "// Integer utilities are pure const functions eligible for compile-time evaluation.\n"
@@ -5378,7 +5706,7 @@ const char* g_vfs_31() {
     "} // namespace std\n";
 }
 
-const char* g_vfs_32() {
+const char* g_vfs_32_0() {
     return
     "// SafeC Standard Library — Slice<T>: a bounds-checked view of T elements\n"
     "//\n"
@@ -5576,14 +5904,14 @@ const char* g_vfs_32() {
     "#pragma scc_impl <std/collections/slice.sc>\n";
 }
 
-const char* g_vfs_33() {
+const char* g_vfs_33_0() {
     return
     "// SafeC Standard Library — Slice<T>: generic, defined entirely in slice.h.\n"
     "#pragma once\n"
     "#include <std/collections/slice.h>\n";
 }
 
-const char* g_vfs_34() {
+const char* g_vfs_34_0() {
     return
     "#pragma once\n"
     "// SafeC Standard Library — Vec<T> (dynamic array)\n"
@@ -6066,7 +6394,7 @@ const char* g_vfs_34() {
     "#pragma scc_impl <std/collections/vec.sc>\n";
 }
 
-const char* g_vfs_35() {
+const char* g_vfs_35_0() {
     return
     "#pragma once\n"
     "// SafeC Standard Library — compile-time orderings\n"
@@ -6144,7 +6472,7 @@ const char* g_vfs_35() {
     "} // namespace std\n";
 }
 
-const char* g_vfs_36() {
+const char* g_vfs_36_0() {
     return
     "#pragma once\n"
     "// SafeC Standard Library — Erased: the referent of a type-erased reference.\n"
@@ -6180,14 +6508,14 @@ const char* g_vfs_36() {
     "} // namespace std\n";
 }
 
-const char* g_vfs_37() {
+const char* g_vfs_37_0() {
     return
     "// SafeC Standard Library — Vec<T> is header-only (generic): see vec.h.\n"
     "#pragma once\n"
     "#include <std/collections/vec.h>\n";
 }
 
-const char* g_vfs_38() {
+const char* g_vfs_38_0() {
     return
     "#pragma once\n"
     "// SafeC Standard Library — HashMap<K,V> / StrMap<V> (open addressing, linear probing)\n"
@@ -6207,6 +6535,12 @@ const char* g_vfs_38() {
     "//\n"
     "// get() hands out '?&V' — a reference into the table, valid until the next\n"
     "// insert()/remove()/clear()/free() (any of which may move or drop entries).\n"
+    "//\n"
+    "// A map owns its values: it is a Drop type, and V may own something itself\n"
+    "// (String, Vec, ...). insert() takes the value by value — overwriting a key\n"
+    "// drops the old value, and a value it can't store (OOM) is dropped;\n"
+    "// remove() moves the value out to the caller; clear() and drop() drop\n"
+    "// every value still in the map.\n"
     "// The table resizes at a 0.75 load factor; tombstones count toward it, so a\n"
     "// remove-heavy workload rehashes instead of degrading every probe to O(cap).\n"
     "#include <std/mem.h>\n"
@@ -6423,7 +6757,7 @@ const char* g_vfs_38() {
     "        // Mostly tombstones: rehash in place; otherwise grow.\n"
     "        unsigned long next = self.cap == 0UL ? 16UL\n"
     "                           : ((self.len + 1UL) * 2UL > self.cap ? self.cap * 2UL : self.cap);\n"
-    "        if (!self.rehash_(next)) return 0;\n"
+    "        if (!self.rehash_(next)) { drop(key); drop(val); return 0; }\n"
     "    }\n"
     "    unsigned int h = map_key_hash_(&key);\n"
     "    unsigned long mask = self.cap - 1UL;\n"
@@ -6437,6 +6771,8 @@ const char* g_vfs_38() {
     "            unsigned char s = st[idx];\n"
     "            if (s == (unsigned char)MAP_FULL_) {\n"
     "                if (hs[idx] == h && map_key_eq_(&ks[idx], &key)) {\n"
+    "                    drop(key);\n"
+    "                    drop(self.vals[idx]);\n"
     "                    self.vals[idx] = val;\n"
     "                    return 1;\n"
     "                }\n"
@@ -6480,6 +6816,7 @@ const char* g_vfs_38() {
     "    self.len = self.len - 1UL;\n"
     "    self.tombstones = self.tombstones + 1UL;\n"
     "    unsafe {\n"
+    "        drop(self.keys[idx]);\n"
     "        self.states[idx] = (unsigned char)MAP_TOMB_;\n"
     "        return self.vals[idx];\n"
     "    }\n"
@@ -6487,6 +6824,15 @@ const char* g_vfs_38() {
     "\n"
     "generic<K, V>\n"
     "void HashMap::clear() {\n"
+    "    if const (needs_drop(K) || needs_drop(V)) {\n"
+    "        unsafe {\n"
+    "            unsigned long i = 0UL;\n"
+    "            while (i < self.cap) {\n"
+    "                if (self.states[i] == (unsigned char)MAP_FULL_) { drop(self.keys[i]); drop(self.vals[i]); }\n"
+    "                i = i + 1UL;\n"
+    "            }\n"
+    "        }\n"
+    "    }\n"
     "    if (self.cap != 0UL) {\n"
     "        unsafe { safe_memset_raw_((unsigned char*)self.states, 0, self.cap); }\n"
     "    }\n"
@@ -6510,6 +6856,7 @@ const char* g_vfs_38() {
     "\n"
     "generic<K, V>\n"
     "void HashMap::drop() {\n"
+    "    self.clear();\n"
     "    unsafe {\n"
     "        dealloc(self.keys); dealloc(self.vals);\n"
     "        dealloc(self.hashes); dealloc(self.states);\n"
@@ -6626,7 +6973,7 @@ const char* g_vfs_38() {
     "    if ((self.len + self.tombstones + 1UL) * 4UL > self.cap * 3UL) {\n"
     "        unsigned long next = self.cap == 0UL ? 16UL\n"
     "                           : ((self.len + 1UL) * 2UL > self.cap ? self.cap * 2UL : self.cap);\n"
-    "        if (!self.rehash_(next)) return 0;\n"
+    "        if (!self.rehash_(next)) { drop(val); return 0; }\n"
     "    }\n"
     "    unsigned int h = map_hash_str_(key);\n"
     "    unsigned long mask = self.cap - 1UL;\n"
@@ -6639,6 +6986,7 @@ const char* g_vfs_38() {
     "            if (s == (unsigned char)MAP_TOMB_) {\n"
     "                if (tomb < 0LL) tomb = (long long)idx;\n"
     "            } else if (self.hashes[idx] == h && str_cmp(self.keys[idx].as_ptr(), key) == 0) {\n"
+    "                drop(self.vals[idx]);\n"
     "                self.vals[idx] = val;\n"
     "                return 1;\n"
     "            }\n"
@@ -6688,7 +7036,7 @@ const char* g_vfs_38() {
     "    unsafe {\n"
     "        unsigned long i = 0UL;\n"
     "        while (i < self.cap) {\n"
-    "            if (self.states[i] == (unsigned char)MAP_FULL_) self.keys[i].free();\n"
+    "            if (self.states[i] == (unsigned char)MAP_FULL_) { self.keys[i].free(); drop(self.vals[i]); }\n"
     "            self.states[i] = (unsigned char)MAP_EMPTY_;\n"
     "            i = i + 1UL;\n"
     "        }\n"
@@ -6719,7 +7067,7 @@ const char* g_vfs_38() {
     "        dealloc(self.hashes); dealloc(self.states);\n"
     "    }\n"
     "    self.keys = null; self.vals = null; self.hashes = null; self.states = null;\n"
-    "    self.cap = 0UL;\n"
+    "    self.cap = 0UL; self.len = 0UL; self.tombstones = 0UL;\n"
     "}\n"
     "\n"
     "} // namespace std\n"
@@ -6727,7 +7075,7 @@ const char* g_vfs_38() {
     "#pragma scc_impl <std/collections/map.sc>\n";
 }
 
-const char* g_vfs_39() {
+const char* g_vfs_39_0() {
     return
     "// SafeC Standard Library — HashMap<K,V> / StrMap<V>. The containers are\n"
     "// generic and live entirely in map.h; this file holds the one non-generic\n"
@@ -6761,7 +7109,7 @@ const char* g_vfs_39() {
     "} // namespace std\n";
 }
 
-const char* g_vfs_40() {
+const char* g_vfs_40_0() {
     return
     "// SafeC Standard Library — Fixed-width integer types (C99/C11/C17/C23)\n"
     "// Provides exact-width, minimum-width, and fastest integer type aliases.\n"
@@ -6861,7 +7209,7 @@ const char* g_vfs_40() {
     "//   unsigned 64-bit : ULL suffix, e.g. 42ULL\n";
 }
 
-const char* g_vfs_41() {
+const char* g_vfs_41_0() {
     return
     "// SafeC Standard Library — Integer limit constants (C89/C99/C11/C17/C23)\n"
     "// Implementation assumes LP64 (64-bit POSIX) or LLP64 (Windows 64-bit).\n"
@@ -6904,7 +7252,7 @@ const char* g_vfs_41() {
     "#define MB_LEN_MAX  16\n";
 }
 
-const char* g_vfs_42() {
+const char* g_vfs_42_0() {
     return
     "// SafeC Standard Library — Floating-point limit constants (C89/C99/C11/C17/C23)\n"
     "// All values assume IEEE 754 binary32 (float) and binary64 (double).\n"
@@ -6974,7 +7322,7 @@ const char* g_vfs_42() {
     "#define DECIMAL_DIG  21\n";
 }
 
-const char* g_vfs_43() {
+const char* g_vfs_43_0() {
     return
     "// SafeC Standard Library — Boolean type (C99/C11/C17)\n"
     "// Defines bool, true, and false.  SafeC uses int-sized booleans.\n"
@@ -6991,7 +7339,7 @@ const char* g_vfs_43() {
     "#endif\n";
 }
 
-const char* g_vfs_44() {
+const char* g_vfs_44_0() {
     return
     "// SafeC Standard Library — Fixed-width integer format specifiers (C99/C11/C17/C23)\n"
     "// Use these macros with printf/scanf and the io_printf/io_scan family.\n"
@@ -7060,7 +7408,7 @@ const char* g_vfs_44() {
     "#define SCNxMAX  \"llx\"\n";
 }
 
-const char* g_vfs_45() {
+const char* g_vfs_45_0() {
     return
     "// SafeC Standard Library — Character classification and conversion (C89–C23)\n"
     "// Functions are locale-aware (delegate to the current C locale).\n"
@@ -7122,7 +7470,7 @@ const char* g_vfs_45() {
     "#pragma scc_impl <std/ctype.sc>\n";
 }
 
-const char* g_vfs_46() {
+const char* g_vfs_46_0() {
     return
     "// SafeC Standard Library — Character classification and conversion\n"
     "// ASCII / \"C\" locale semantics, implemented natively: freestanding-safe, and\n"
@@ -7150,7 +7498,7 @@ const char* g_vfs_46() {
     "} // namespace std\n";
 }
 
-const char* g_vfs_47() {
+const char* g_vfs_47_0() {
     return
     "// SafeC Standard Library — Runtime assertions (C89–C23)\n"
     "// SafeC has compile-time `static_assert` as a built-in keyword.\n"
@@ -7200,7 +7548,7 @@ const char* g_vfs_47() {
     "#pragma scc_impl <std/assert.sc>\n";
 }
 
-const char* g_vfs_48() {
+const char* g_vfs_48_0() {
     return
     "// SafeC Standard Library — Runtime assertions\n"
     "// runtime_assert() — checked condition with diagnostic message.\n"
@@ -7278,7 +7626,7 @@ const char* g_vfs_48() {
     "} // namespace std\n";
 }
 
-const char* g_vfs_49() {
+const char* g_vfs_49_0() {
     return
     "// SafeC Standard Library — Checked integer arithmetic (C23 <stdckdint.h>)\n"
     "// Each function performs op(a, b), stores the wrapped result in *result,\n"
@@ -7319,7 +7667,7 @@ const char* g_vfs_49() {
     "#pragma scc_impl <std/stdckdint.sc>\n";
 }
 
-const char* g_vfs_50() {
+const char* g_vfs_50_0() {
     return
     "// SafeC Standard Library — Checked integer arithmetic (C23)\n"
     "// Pure SafeC implementation — overflow is detected before the operation.\n"
@@ -7437,7 +7785,7 @@ const char* g_vfs_50() {
     "} // namespace std\n";
 }
 
-const char* g_vfs_51() {
+const char* g_vfs_51_0() {
     return
     "#pragma once\n"
     "// SafeC Standard Library — capability traits shared across modules.\n"
@@ -7460,7 +7808,7 @@ const char* g_vfs_51() {
     "} // namespace std\n";
 }
 
-const char* g_vfs_52() {
+const char* g_vfs_52_0() {
     return
     "// SafeC Standard Library — Bit manipulation (C23 <stdbit.h> + compiler builtins)\n"
     "// All functions are const-eligible (pure, no side effects).\n"
@@ -7543,7 +7891,7 @@ const char* g_vfs_52() {
     "#pragma scc_impl <std/bit.sc>\n";
 }
 
-const char* g_vfs_53() {
+const char* g_vfs_53_0() {
     return
     "// SafeC Standard Library — Bit manipulation implementation\n"
     "// Uses GCC/Clang compiler builtins for hardware-accelerated operations.\n"
@@ -7679,7 +8027,7 @@ const char* g_vfs_53() {
     "} // namespace std\n";
 }
 
-const char* g_vfs_54() {
+const char* g_vfs_54_0() {
     return
     "// SafeC Standard Library — Result<T,E>: a value or an error, stored inline\n"
     "//\n"
@@ -7780,14 +8128,14 @@ const char* g_vfs_54() {
     "#pragma scc_impl <std/result.sc>\n";
 }
 
-const char* g_vfs_55() {
+const char* g_vfs_55_0() {
     return
     "// SafeC Standard Library — Result<T,E>: generic, defined entirely in result.h.\n"
     "#pragma once\n"
     "#include <std/result.h>\n";
 }
 
-const char* g_vfs_56() {
+const char* g_vfs_56_0() {
     return
     "// SafeC Standard Library — Atomics (C11 <stdatomic.h>)\n"
     "// Lock-free operations on shared integers and pointers.\n"
@@ -7877,7 +8225,7 @@ const char* g_vfs_56() {
     "#pragma scc_impl <std/atomic.sc>\n";
 }
 
-const char* g_vfs_57() {
+const char* g_vfs_57_0() {
     return
     "// SafeC Standard Library — Atomics (C11 <stdatomic.h>-equivalent surface)\n"
     "//\n"
@@ -7981,7 +8329,7 @@ const char* g_vfs_57() {
     "} // namespace std\n";
 }
 
-const char* g_vfs_58() {
+const char* g_vfs_58_0() {
     return
     "// SafeC Standard Library — System declarations (C11/C17/C23 stdlib coverage)\n"
     "#pragma once\n"
@@ -8066,7 +8414,7 @@ const char* g_vfs_58() {
     "#pragma scc_impl <std/sys.sc>\n";
 }
 
-const char* g_vfs_59() {
+const char* g_vfs_59_0() {
     return
     "// SafeC Standard Library — System (C11/C17/C23 stdlib coverage)\n"
     "// Process control, PRNG, conversions, sorting, and clock wrappers.\n"
@@ -8248,7 +8596,7 @@ const char* g_vfs_59() {
     "} // namespace std\n";
 }
 
-const char* g_vfs_60() {
+const char* g_vfs_60_0() {
     return
     "#pragma once\n"
     "// SafeC Standard Library — Time (comprehensive C11 <time.h>)\n"
@@ -8322,7 +8670,7 @@ const char* g_vfs_60() {
     "#pragma scc_impl <std/time.sc>\n";
 }
 
-const char* g_vfs_61() {
+const char* g_vfs_61_0() {
     return
     "// SafeC Standard Library — time implementation\n"
     "#pragma once\n"
@@ -8615,261 +8963,572 @@ const char* g_vfs_61() {
     "} // namespace std\n";
 }
 
-int vfs_add(int name, const char* text) {
+int vfs_append(const char* text) {
     int n = lit_len(text);
-    int start = g_src_len;
     int i = 0;
     while (i < n && g_src_len < SRC_MAX) { g_src[g_src_len] = (unsigned char)lit_char(text, i); g_src_len = g_src_len + 1; i = i + 1; }
-    return add_file(name, start, n);
+    return i;
 }
 
 int vfs_load(int name) {
     if (str_eq_lit(name, "<runtime>") == 1) {
-        if (g_vfs_file[0] == 0) { g_vfs_file[0] = vfs_add(name, g_vfs_0()); }
+        if (g_vfs_file[0] == 0) {
+            int start = g_src_len;
+            int n = 0;
+            n = n + vfs_append(g_vfs_0_0());
+            n = n + vfs_append(g_vfs_0_1());
+            n = n + vfs_append(g_vfs_0_2());
+            g_vfs_file[0] = add_file(name, start, n);
+        }
         return g_vfs_file[0];
     }
     if (str_eq_lit(name, "assert.h") == 1) {
-        if (g_vfs_file[1] == 0) { g_vfs_file[1] = vfs_add(name, g_vfs_1()); }
+        if (g_vfs_file[1] == 0) {
+            int start = g_src_len;
+            int n = 0;
+            n = n + vfs_append(g_vfs_1_0());
+            g_vfs_file[1] = add_file(name, start, n);
+        }
         return g_vfs_file[1];
     }
     if (str_eq_lit(name, "ctype.h") == 1) {
-        if (g_vfs_file[2] == 0) { g_vfs_file[2] = vfs_add(name, g_vfs_2()); }
+        if (g_vfs_file[2] == 0) {
+            int start = g_src_len;
+            int n = 0;
+            n = n + vfs_append(g_vfs_2_0());
+            g_vfs_file[2] = add_file(name, start, n);
+        }
         return g_vfs_file[2];
     }
     if (str_eq_lit(name, "limits.h") == 1) {
-        if (g_vfs_file[3] == 0) { g_vfs_file[3] = vfs_add(name, g_vfs_3()); }
+        if (g_vfs_file[3] == 0) {
+            int start = g_src_len;
+            int n = 0;
+            n = n + vfs_append(g_vfs_3_0());
+            g_vfs_file[3] = add_file(name, start, n);
+        }
         return g_vfs_file[3];
     }
     if (str_eq_lit(name, "math.h") == 1) {
-        if (g_vfs_file[4] == 0) { g_vfs_file[4] = vfs_add(name, g_vfs_4()); }
+        if (g_vfs_file[4] == 0) {
+            int start = g_src_len;
+            int n = 0;
+            n = n + vfs_append(g_vfs_4_0());
+            g_vfs_file[4] = add_file(name, start, n);
+        }
         return g_vfs_file[4];
     }
     if (str_eq_lit(name, "stdbool.h") == 1) {
-        if (g_vfs_file[5] == 0) { g_vfs_file[5] = vfs_add(name, g_vfs_5()); }
+        if (g_vfs_file[5] == 0) {
+            int start = g_src_len;
+            int n = 0;
+            n = n + vfs_append(g_vfs_5_0());
+            g_vfs_file[5] = add_file(name, start, n);
+        }
         return g_vfs_file[5];
     }
     if (str_eq_lit(name, "stddef.h") == 1) {
-        if (g_vfs_file[6] == 0) { g_vfs_file[6] = vfs_add(name, g_vfs_6()); }
+        if (g_vfs_file[6] == 0) {
+            int start = g_src_len;
+            int n = 0;
+            n = n + vfs_append(g_vfs_6_0());
+            g_vfs_file[6] = add_file(name, start, n);
+        }
         return g_vfs_file[6];
     }
     if (str_eq_lit(name, "stdint.h") == 1) {
-        if (g_vfs_file[7] == 0) { g_vfs_file[7] = vfs_add(name, g_vfs_7()); }
+        if (g_vfs_file[7] == 0) {
+            int start = g_src_len;
+            int n = 0;
+            n = n + vfs_append(g_vfs_7_0());
+            g_vfs_file[7] = add_file(name, start, n);
+        }
         return g_vfs_file[7];
     }
     if (str_eq_lit(name, "stdio.h") == 1) {
-        if (g_vfs_file[8] == 0) { g_vfs_file[8] = vfs_add(name, g_vfs_8()); }
+        if (g_vfs_file[8] == 0) {
+            int start = g_src_len;
+            int n = 0;
+            n = n + vfs_append(g_vfs_8_0());
+            g_vfs_file[8] = add_file(name, start, n);
+        }
         return g_vfs_file[8];
     }
     if (str_eq_lit(name, "stdlib.h") == 1) {
-        if (g_vfs_file[9] == 0) { g_vfs_file[9] = vfs_add(name, g_vfs_9()); }
+        if (g_vfs_file[9] == 0) {
+            int start = g_src_len;
+            int n = 0;
+            n = n + vfs_append(g_vfs_9_0());
+            g_vfs_file[9] = add_file(name, start, n);
+        }
         return g_vfs_file[9];
     }
     if (str_eq_lit(name, "string.h") == 1) {
-        if (g_vfs_file[10] == 0) { g_vfs_file[10] = vfs_add(name, g_vfs_10()); }
+        if (g_vfs_file[10] == 0) {
+            int start = g_src_len;
+            int n = 0;
+            n = n + vfs_append(g_vfs_10_0());
+            g_vfs_file[10] = add_file(name, start, n);
+        }
         return g_vfs_file[10];
     }
     if (str_eq_lit(name, "time.h") == 1) {
-        if (g_vfs_file[11] == 0) { g_vfs_file[11] = vfs_add(name, g_vfs_11()); }
+        if (g_vfs_file[11] == 0) {
+            int start = g_src_len;
+            int n = 0;
+            n = n + vfs_append(g_vfs_11_0());
+            g_vfs_file[11] = add_file(name, start, n);
+        }
         return g_vfs_file[11];
     }
     if (str_eq_lit(name, "std/io.h") == 1) {
-        if (g_vfs_file[12] == 0) { g_vfs_file[12] = vfs_add(name, g_vfs_12()); }
+        if (g_vfs_file[12] == 0) {
+            int start = g_src_len;
+            int n = 0;
+            n = n + vfs_append(g_vfs_12_0());
+            g_vfs_file[12] = add_file(name, start, n);
+        }
         return g_vfs_file[12];
     }
     if (str_eq_lit(name, "std/io_file.h") == 1) {
-        if (g_vfs_file[13] == 0) { g_vfs_file[13] = vfs_add(name, g_vfs_13()); }
+        if (g_vfs_file[13] == 0) {
+            int start = g_src_len;
+            int n = 0;
+            n = n + vfs_append(g_vfs_13_0());
+            g_vfs_file[13] = add_file(name, start, n);
+        }
         return g_vfs_file[13];
     }
     if (str_eq_lit(name, "std/collections/string.h") == 1) {
-        if (g_vfs_file[14] == 0) { g_vfs_file[14] = vfs_add(name, g_vfs_14()); }
+        if (g_vfs_file[14] == 0) {
+            int start = g_src_len;
+            int n = 0;
+            n = n + vfs_append(g_vfs_14_0());
+            g_vfs_file[14] = add_file(name, start, n);
+        }
         return g_vfs_file[14];
     }
     if (str_eq_lit(name, "std/ownership.h") == 1) {
-        if (g_vfs_file[15] == 0) { g_vfs_file[15] = vfs_add(name, g_vfs_15()); }
+        if (g_vfs_file[15] == 0) {
+            int start = g_src_len;
+            int n = 0;
+            n = n + vfs_append(g_vfs_15_0());
+            g_vfs_file[15] = add_file(name, start, n);
+        }
         return g_vfs_file[15];
     }
     if (str_eq_lit(name, "std/collections/string.sc") == 1) {
-        if (g_vfs_file[16] == 0) { g_vfs_file[16] = vfs_add(name, g_vfs_16()); }
+        if (g_vfs_file[16] == 0) {
+            int start = g_src_len;
+            int n = 0;
+            n = n + vfs_append(g_vfs_16_0());
+            g_vfs_file[16] = add_file(name, start, n);
+        }
         return g_vfs_file[16];
     }
     if (str_eq_lit(name, "std/mem.h") == 1) {
-        if (g_vfs_file[17] == 0) { g_vfs_file[17] = vfs_add(name, g_vfs_17()); }
+        if (g_vfs_file[17] == 0) {
+            int start = g_src_len;
+            int n = 0;
+            n = n + vfs_append(g_vfs_17_0());
+            g_vfs_file[17] = add_file(name, start, n);
+        }
         return g_vfs_file[17];
     }
     if (str_eq_lit(name, "std/str.h") == 1) {
-        if (g_vfs_file[18] == 0) { g_vfs_file[18] = vfs_add(name, g_vfs_18()); }
+        if (g_vfs_file[18] == 0) {
+            int start = g_src_len;
+            int n = 0;
+            n = n + vfs_append(g_vfs_18_0());
+            g_vfs_file[18] = add_file(name, start, n);
+        }
         return g_vfs_file[18];
     }
     if (str_eq_lit(name, "std/str.sc") == 1) {
-        if (g_vfs_file[19] == 0) { g_vfs_file[19] = vfs_add(name, g_vfs_19()); }
+        if (g_vfs_file[19] == 0) {
+            int start = g_src_len;
+            int n = 0;
+            n = n + vfs_append(g_vfs_19_0());
+            g_vfs_file[19] = add_file(name, start, n);
+        }
         return g_vfs_file[19];
     }
     if (str_eq_lit(name, "std/stddef.h") == 1) {
-        if (g_vfs_file[20] == 0) { g_vfs_file[20] = vfs_add(name, g_vfs_20()); }
+        if (g_vfs_file[20] == 0) {
+            int start = g_src_len;
+            int n = 0;
+            n = n + vfs_append(g_vfs_20_0());
+            g_vfs_file[20] = add_file(name, start, n);
+        }
         return g_vfs_file[20];
     }
     if (str_eq_lit(name, "std/fmt.h") == 1) {
-        if (g_vfs_file[21] == 0) { g_vfs_file[21] = vfs_add(name, g_vfs_21()); }
+        if (g_vfs_file[21] == 0) {
+            int start = g_src_len;
+            int n = 0;
+            n = n + vfs_append(g_vfs_21_0());
+            g_vfs_file[21] = add_file(name, start, n);
+        }
         return g_vfs_file[21];
     }
     if (str_eq_lit(name, "std/fmt.sc") == 1) {
-        if (g_vfs_file[22] == 0) { g_vfs_file[22] = vfs_add(name, g_vfs_22()); }
+        if (g_vfs_file[22] == 0) {
+            int start = g_src_len;
+            int n = 0;
+            n = n + vfs_append(g_vfs_22_0());
+            g_vfs_file[22] = add_file(name, start, n);
+        }
         return g_vfs_file[22];
     }
     if (str_eq_lit(name, "std/convert.h") == 1) {
-        if (g_vfs_file[23] == 0) { g_vfs_file[23] = vfs_add(name, g_vfs_23()); }
+        if (g_vfs_file[23] == 0) {
+            int start = g_src_len;
+            int n = 0;
+            n = n + vfs_append(g_vfs_23_0());
+            g_vfs_file[23] = add_file(name, start, n);
+        }
         return g_vfs_file[23];
     }
     if (str_eq_lit(name, "std/convert.sc") == 1) {
-        if (g_vfs_file[24] == 0) { g_vfs_file[24] = vfs_add(name, g_vfs_24()); }
+        if (g_vfs_file[24] == 0) {
+            int start = g_src_len;
+            int n = 0;
+            n = n + vfs_append(g_vfs_24_0());
+            g_vfs_file[24] = add_file(name, start, n);
+        }
         return g_vfs_file[24];
     }
     if (str_eq_lit(name, "std/io_file.sc") == 1) {
-        if (g_vfs_file[25] == 0) { g_vfs_file[25] = vfs_add(name, g_vfs_25()); }
+        if (g_vfs_file[25] == 0) {
+            int start = g_src_len;
+            int n = 0;
+            n = n + vfs_append(g_vfs_25_0());
+            g_vfs_file[25] = add_file(name, start, n);
+        }
         return g_vfs_file[25];
     }
     if (str_eq_lit(name, "std/stderr_compat.h") == 1) {
-        if (g_vfs_file[26] == 0) { g_vfs_file[26] = vfs_add(name, g_vfs_26()); }
+        if (g_vfs_file[26] == 0) {
+            int start = g_src_len;
+            int n = 0;
+            n = n + vfs_append(g_vfs_26_0());
+            g_vfs_file[26] = add_file(name, start, n);
+        }
         return g_vfs_file[26];
     }
     if (str_eq_lit(name, "std/io_traits.h") == 1) {
-        if (g_vfs_file[27] == 0) { g_vfs_file[27] = vfs_add(name, g_vfs_27()); }
+        if (g_vfs_file[27] == 0) {
+            int start = g_src_len;
+            int n = 0;
+            n = n + vfs_append(g_vfs_27_0());
+            g_vfs_file[27] = add_file(name, start, n);
+        }
         return g_vfs_file[27];
     }
     if (str_eq_lit(name, "std/io.sc") == 1) {
-        if (g_vfs_file[28] == 0) { g_vfs_file[28] = vfs_add(name, g_vfs_28()); }
+        if (g_vfs_file[28] == 0) {
+            int start = g_src_len;
+            int n = 0;
+            n = n + vfs_append(g_vfs_28_0());
+            g_vfs_file[28] = add_file(name, start, n);
+        }
         return g_vfs_file[28];
     }
     if (str_eq_lit(name, "std/panic.h") == 1) {
-        if (g_vfs_file[29] == 0) { g_vfs_file[29] = vfs_add(name, g_vfs_29()); }
+        if (g_vfs_file[29] == 0) {
+            int start = g_src_len;
+            int n = 0;
+            n = n + vfs_append(g_vfs_29_0());
+            g_vfs_file[29] = add_file(name, start, n);
+        }
         return g_vfs_file[29];
     }
     if (str_eq_lit(name, "std/math.h") == 1) {
-        if (g_vfs_file[30] == 0) { g_vfs_file[30] = vfs_add(name, g_vfs_30()); }
+        if (g_vfs_file[30] == 0) {
+            int start = g_src_len;
+            int n = 0;
+            n = n + vfs_append(g_vfs_30_0());
+            g_vfs_file[30] = add_file(name, start, n);
+        }
         return g_vfs_file[30];
     }
     if (str_eq_lit(name, "std/math.sc") == 1) {
-        if (g_vfs_file[31] == 0) { g_vfs_file[31] = vfs_add(name, g_vfs_31()); }
+        if (g_vfs_file[31] == 0) {
+            int start = g_src_len;
+            int n = 0;
+            n = n + vfs_append(g_vfs_31_0());
+            g_vfs_file[31] = add_file(name, start, n);
+        }
         return g_vfs_file[31];
     }
     if (str_eq_lit(name, "std/collections/slice.h") == 1) {
-        if (g_vfs_file[32] == 0) { g_vfs_file[32] = vfs_add(name, g_vfs_32()); }
+        if (g_vfs_file[32] == 0) {
+            int start = g_src_len;
+            int n = 0;
+            n = n + vfs_append(g_vfs_32_0());
+            g_vfs_file[32] = add_file(name, start, n);
+        }
         return g_vfs_file[32];
     }
     if (str_eq_lit(name, "std/collections/slice.sc") == 1) {
-        if (g_vfs_file[33] == 0) { g_vfs_file[33] = vfs_add(name, g_vfs_33()); }
+        if (g_vfs_file[33] == 0) {
+            int start = g_src_len;
+            int n = 0;
+            n = n + vfs_append(g_vfs_33_0());
+            g_vfs_file[33] = add_file(name, start, n);
+        }
         return g_vfs_file[33];
     }
     if (str_eq_lit(name, "std/collections/vec.h") == 1) {
-        if (g_vfs_file[34] == 0) { g_vfs_file[34] = vfs_add(name, g_vfs_34()); }
+        if (g_vfs_file[34] == 0) {
+            int start = g_src_len;
+            int n = 0;
+            n = n + vfs_append(g_vfs_34_0());
+            g_vfs_file[34] = add_file(name, start, n);
+        }
         return g_vfs_file[34];
     }
     if (str_eq_lit(name, "std/cmp.h") == 1) {
-        if (g_vfs_file[35] == 0) { g_vfs_file[35] = vfs_add(name, g_vfs_35()); }
+        if (g_vfs_file[35] == 0) {
+            int start = g_src_len;
+            int n = 0;
+            n = n + vfs_append(g_vfs_35_0());
+            g_vfs_file[35] = add_file(name, start, n);
+        }
         return g_vfs_file[35];
     }
     if (str_eq_lit(name, "std/erased.h") == 1) {
-        if (g_vfs_file[36] == 0) { g_vfs_file[36] = vfs_add(name, g_vfs_36()); }
+        if (g_vfs_file[36] == 0) {
+            int start = g_src_len;
+            int n = 0;
+            n = n + vfs_append(g_vfs_36_0());
+            g_vfs_file[36] = add_file(name, start, n);
+        }
         return g_vfs_file[36];
     }
     if (str_eq_lit(name, "std/collections/vec.sc") == 1) {
-        if (g_vfs_file[37] == 0) { g_vfs_file[37] = vfs_add(name, g_vfs_37()); }
+        if (g_vfs_file[37] == 0) {
+            int start = g_src_len;
+            int n = 0;
+            n = n + vfs_append(g_vfs_37_0());
+            g_vfs_file[37] = add_file(name, start, n);
+        }
         return g_vfs_file[37];
     }
     if (str_eq_lit(name, "std/collections/map.h") == 1) {
-        if (g_vfs_file[38] == 0) { g_vfs_file[38] = vfs_add(name, g_vfs_38()); }
+        if (g_vfs_file[38] == 0) {
+            int start = g_src_len;
+            int n = 0;
+            n = n + vfs_append(g_vfs_38_0());
+            g_vfs_file[38] = add_file(name, start, n);
+        }
         return g_vfs_file[38];
     }
     if (str_eq_lit(name, "std/collections/map.sc") == 1) {
-        if (g_vfs_file[39] == 0) { g_vfs_file[39] = vfs_add(name, g_vfs_39()); }
+        if (g_vfs_file[39] == 0) {
+            int start = g_src_len;
+            int n = 0;
+            n = n + vfs_append(g_vfs_39_0());
+            g_vfs_file[39] = add_file(name, start, n);
+        }
         return g_vfs_file[39];
     }
     if (str_eq_lit(name, "std/stdint.h") == 1) {
-        if (g_vfs_file[40] == 0) { g_vfs_file[40] = vfs_add(name, g_vfs_40()); }
+        if (g_vfs_file[40] == 0) {
+            int start = g_src_len;
+            int n = 0;
+            n = n + vfs_append(g_vfs_40_0());
+            g_vfs_file[40] = add_file(name, start, n);
+        }
         return g_vfs_file[40];
     }
     if (str_eq_lit(name, "std/limits.h") == 1) {
-        if (g_vfs_file[41] == 0) { g_vfs_file[41] = vfs_add(name, g_vfs_41()); }
+        if (g_vfs_file[41] == 0) {
+            int start = g_src_len;
+            int n = 0;
+            n = n + vfs_append(g_vfs_41_0());
+            g_vfs_file[41] = add_file(name, start, n);
+        }
         return g_vfs_file[41];
     }
     if (str_eq_lit(name, "std/float.h") == 1) {
-        if (g_vfs_file[42] == 0) { g_vfs_file[42] = vfs_add(name, g_vfs_42()); }
+        if (g_vfs_file[42] == 0) {
+            int start = g_src_len;
+            int n = 0;
+            n = n + vfs_append(g_vfs_42_0());
+            g_vfs_file[42] = add_file(name, start, n);
+        }
         return g_vfs_file[42];
     }
     if (str_eq_lit(name, "std/stdbool.h") == 1) {
-        if (g_vfs_file[43] == 0) { g_vfs_file[43] = vfs_add(name, g_vfs_43()); }
+        if (g_vfs_file[43] == 0) {
+            int start = g_src_len;
+            int n = 0;
+            n = n + vfs_append(g_vfs_43_0());
+            g_vfs_file[43] = add_file(name, start, n);
+        }
         return g_vfs_file[43];
     }
     if (str_eq_lit(name, "std/inttypes.h") == 1) {
-        if (g_vfs_file[44] == 0) { g_vfs_file[44] = vfs_add(name, g_vfs_44()); }
+        if (g_vfs_file[44] == 0) {
+            int start = g_src_len;
+            int n = 0;
+            n = n + vfs_append(g_vfs_44_0());
+            g_vfs_file[44] = add_file(name, start, n);
+        }
         return g_vfs_file[44];
     }
     if (str_eq_lit(name, "std/ctype.h") == 1) {
-        if (g_vfs_file[45] == 0) { g_vfs_file[45] = vfs_add(name, g_vfs_45()); }
+        if (g_vfs_file[45] == 0) {
+            int start = g_src_len;
+            int n = 0;
+            n = n + vfs_append(g_vfs_45_0());
+            g_vfs_file[45] = add_file(name, start, n);
+        }
         return g_vfs_file[45];
     }
     if (str_eq_lit(name, "std/ctype.sc") == 1) {
-        if (g_vfs_file[46] == 0) { g_vfs_file[46] = vfs_add(name, g_vfs_46()); }
+        if (g_vfs_file[46] == 0) {
+            int start = g_src_len;
+            int n = 0;
+            n = n + vfs_append(g_vfs_46_0());
+            g_vfs_file[46] = add_file(name, start, n);
+        }
         return g_vfs_file[46];
     }
     if (str_eq_lit(name, "std/assert.h") == 1) {
-        if (g_vfs_file[47] == 0) { g_vfs_file[47] = vfs_add(name, g_vfs_47()); }
+        if (g_vfs_file[47] == 0) {
+            int start = g_src_len;
+            int n = 0;
+            n = n + vfs_append(g_vfs_47_0());
+            g_vfs_file[47] = add_file(name, start, n);
+        }
         return g_vfs_file[47];
     }
     if (str_eq_lit(name, "std/assert.sc") == 1) {
-        if (g_vfs_file[48] == 0) { g_vfs_file[48] = vfs_add(name, g_vfs_48()); }
+        if (g_vfs_file[48] == 0) {
+            int start = g_src_len;
+            int n = 0;
+            n = n + vfs_append(g_vfs_48_0());
+            g_vfs_file[48] = add_file(name, start, n);
+        }
         return g_vfs_file[48];
     }
     if (str_eq_lit(name, "std/stdckdint.h") == 1) {
-        if (g_vfs_file[49] == 0) { g_vfs_file[49] = vfs_add(name, g_vfs_49()); }
+        if (g_vfs_file[49] == 0) {
+            int start = g_src_len;
+            int n = 0;
+            n = n + vfs_append(g_vfs_49_0());
+            g_vfs_file[49] = add_file(name, start, n);
+        }
         return g_vfs_file[49];
     }
     if (str_eq_lit(name, "std/stdckdint.sc") == 1) {
-        if (g_vfs_file[50] == 0) { g_vfs_file[50] = vfs_add(name, g_vfs_50()); }
+        if (g_vfs_file[50] == 0) {
+            int start = g_src_len;
+            int n = 0;
+            n = n + vfs_append(g_vfs_50_0());
+            g_vfs_file[50] = add_file(name, start, n);
+        }
         return g_vfs_file[50];
     }
     if (str_eq_lit(name, "std/traits.h") == 1) {
-        if (g_vfs_file[51] == 0) { g_vfs_file[51] = vfs_add(name, g_vfs_51()); }
+        if (g_vfs_file[51] == 0) {
+            int start = g_src_len;
+            int n = 0;
+            n = n + vfs_append(g_vfs_51_0());
+            g_vfs_file[51] = add_file(name, start, n);
+        }
         return g_vfs_file[51];
     }
     if (str_eq_lit(name, "std/bit.h") == 1) {
-        if (g_vfs_file[52] == 0) { g_vfs_file[52] = vfs_add(name, g_vfs_52()); }
+        if (g_vfs_file[52] == 0) {
+            int start = g_src_len;
+            int n = 0;
+            n = n + vfs_append(g_vfs_52_0());
+            g_vfs_file[52] = add_file(name, start, n);
+        }
         return g_vfs_file[52];
     }
     if (str_eq_lit(name, "std/bit.sc") == 1) {
-        if (g_vfs_file[53] == 0) { g_vfs_file[53] = vfs_add(name, g_vfs_53()); }
+        if (g_vfs_file[53] == 0) {
+            int start = g_src_len;
+            int n = 0;
+            n = n + vfs_append(g_vfs_53_0());
+            g_vfs_file[53] = add_file(name, start, n);
+        }
         return g_vfs_file[53];
     }
     if (str_eq_lit(name, "std/result.h") == 1) {
-        if (g_vfs_file[54] == 0) { g_vfs_file[54] = vfs_add(name, g_vfs_54()); }
+        if (g_vfs_file[54] == 0) {
+            int start = g_src_len;
+            int n = 0;
+            n = n + vfs_append(g_vfs_54_0());
+            g_vfs_file[54] = add_file(name, start, n);
+        }
         return g_vfs_file[54];
     }
     if (str_eq_lit(name, "std/result.sc") == 1) {
-        if (g_vfs_file[55] == 0) { g_vfs_file[55] = vfs_add(name, g_vfs_55()); }
+        if (g_vfs_file[55] == 0) {
+            int start = g_src_len;
+            int n = 0;
+            n = n + vfs_append(g_vfs_55_0());
+            g_vfs_file[55] = add_file(name, start, n);
+        }
         return g_vfs_file[55];
     }
     if (str_eq_lit(name, "std/atomic.h") == 1) {
-        if (g_vfs_file[56] == 0) { g_vfs_file[56] = vfs_add(name, g_vfs_56()); }
+        if (g_vfs_file[56] == 0) {
+            int start = g_src_len;
+            int n = 0;
+            n = n + vfs_append(g_vfs_56_0());
+            g_vfs_file[56] = add_file(name, start, n);
+        }
         return g_vfs_file[56];
     }
     if (str_eq_lit(name, "std/atomic.sc") == 1) {
-        if (g_vfs_file[57] == 0) { g_vfs_file[57] = vfs_add(name, g_vfs_57()); }
+        if (g_vfs_file[57] == 0) {
+            int start = g_src_len;
+            int n = 0;
+            n = n + vfs_append(g_vfs_57_0());
+            g_vfs_file[57] = add_file(name, start, n);
+        }
         return g_vfs_file[57];
     }
     if (str_eq_lit(name, "std/sys.h") == 1) {
-        if (g_vfs_file[58] == 0) { g_vfs_file[58] = vfs_add(name, g_vfs_58()); }
+        if (g_vfs_file[58] == 0) {
+            int start = g_src_len;
+            int n = 0;
+            n = n + vfs_append(g_vfs_58_0());
+            g_vfs_file[58] = add_file(name, start, n);
+        }
         return g_vfs_file[58];
     }
     if (str_eq_lit(name, "std/sys.sc") == 1) {
-        if (g_vfs_file[59] == 0) { g_vfs_file[59] = vfs_add(name, g_vfs_59()); }
+        if (g_vfs_file[59] == 0) {
+            int start = g_src_len;
+            int n = 0;
+            n = n + vfs_append(g_vfs_59_0());
+            g_vfs_file[59] = add_file(name, start, n);
+        }
         return g_vfs_file[59];
     }
     if (str_eq_lit(name, "std/time.h") == 1) {
-        if (g_vfs_file[60] == 0) { g_vfs_file[60] = vfs_add(name, g_vfs_60()); }
+        if (g_vfs_file[60] == 0) {
+            int start = g_src_len;
+            int n = 0;
+            n = n + vfs_append(g_vfs_60_0());
+            g_vfs_file[60] = add_file(name, start, n);
+        }
         return g_vfs_file[60];
     }
     if (str_eq_lit(name, "std/time.sc") == 1) {
-        if (g_vfs_file[61] == 0) { g_vfs_file[61] = vfs_add(name, g_vfs_61()); }
+        if (g_vfs_file[61] == 0) {
+            int start = g_src_len;
+            int n = 0;
+            n = n + vfs_append(g_vfs_61_0());
+            g_vfs_file[61] = add_file(name, start, n);
+        }
         return g_vfs_file[61];
     }
     return 0;

@@ -36,6 +36,7 @@
 #include <std/ipc/pipe.h>
 #include <std/ipc/uds.h>
 #include <std/sched/io_nb.h>
+#include <std/sched/reactor.h>
 #include <std/reactive/signal.h>
 
 struct Pkt { long long id; int len; };
@@ -1145,6 +1146,50 @@ static ?&int signaller(?&int arg) {
     return null;
 }
 
+// Reactor: readiness through poll_events, and close_()/drop() releasing the
+// OS queue, the signalfds and the tables (close_ is idempotent and leaves
+// a reactor that init() can reopen).
+static int g_rx_fd = -1;
+static int g_rx_n = 0;
+static void reactor_seen_(?&int ctx, int fd, int filter) {
+    g_rx_fd = fd;
+    g_rx_n = g_rx_n + 1;
+}
+
+void t_reactor() {
+    struct Reactor r = Reactor::new();
+    defer r.drop();
+    r.close_();                                   // closing a never-opened reactor: no-op
+    ASSERT_EQ(r.init(), 0);
+    int q1 = r.kq;
+    ASSERT_TRUE(q1 >= 0);
+    unsafe {
+        struct Pipe p;
+        ASSERT_EQ(p.init(), 0);
+        int rfd = (int)p.read_fd;
+        r.add(rfd, SCHED_READ);
+        ASSERT_EQ(p.write(str_bytes("x")), 1);
+        g_rx_fd = -1; g_rx_n = 0;
+        fn void(?&int, int, int) cb = reactor_seen_;
+        ASSERT_TRUE(r.poll_events(cb, null, 1000LL) >= 1);
+        ASSERT_EQ(g_rx_fd, rfd);
+        r.remove(rfd, SCHED_READ);
+#ifdef __linux__
+        r.add(12, SCHED_SIGNAL);                  // SIGUSR2: a signalfd in r.sigfds
+        ASSERT_EQ(r.sigfds.length(), 1UL);
+#endif
+        r.close_();
+        ASSERT_EQ(r.kq, -1);
+        ASSERT_EQ(r.sigfds.length(), 0UL);
+        ASSERT_EQ(r.sigfds.total_capacity(), 0UL);   // the table's buffer is freed
+        r.close_();                               // idempotent
+        ASSERT_EQ(r.init(), 0);                   // reopenable; the closed fd number is reused
+        ASSERT_EQ(r.kq, q1);
+        p.close_read();
+        p.close_write();
+    }
+}
+
 void t_cond_trylock() {
     unsafe {
         ASSERT_EQ(mutex_init(&g_cmtx), 0);
@@ -1201,6 +1246,7 @@ int main() {
         t.add("simd", t_simd);
         t.add("simd ops/vmath/sgemm/cpu", t_simd_more);
         t.add("ipc pipe/uds", t_ipc);
+        t.add("reactor close/drop", t_reactor);
         t.add("cond/trylock/rwlock try", t_cond_trylock);
     }
     t.run();

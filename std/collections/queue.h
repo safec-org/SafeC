@@ -9,6 +9,11 @@
 // Amortized O(1) enqueue/dequeue; the ring grows (doubling, power-of-two
 // capacity) when full. front()/back() hand out '?&T' into the ring, valid
 // until the next enqueue()/free().
+//
+// A Queue owns its elements: it is a Drop type, and T may own something
+// itself (String, Vec, ...). enqueue() takes the element by value (one it
+// can't store is dropped), dequeue() moves it out, and clear()/drop() drop
+// every element still queued.
 #include <std/mem.h>
 
 namespace std {
@@ -29,9 +34,9 @@ struct Queue {
     ?&T           back() const;       // null if empty
     unsigned long length() const;
     int           is_empty() const;
-    void          clear();
+    void          clear();            // drop every element, keep the buffer
     int           reserve(unsigned long n);
-    void          drop();
+    void          drop();             // drops the elements, frees the buffer (Drop)
     void          free() consume;   // = drop()
 };
 
@@ -77,7 +82,7 @@ int Queue::reserve(unsigned long n) {
 generic<T>
 int Queue::enqueue(T value) {
     if (self.len == self.cap) {
-        if (!self.reserve(self.cap == 0UL ? 8UL : self.cap * 2UL)) return 0;
+        if (!self.reserve(self.cap == 0UL ? 8UL : self.cap * 2UL)) { drop(value); return 0; }
     }
     unsafe { self.data[(self.head + self.len) & (self.cap - 1UL)] = value; }
     self.len = self.len + 1UL;
@@ -112,13 +117,24 @@ generic<T>
 int Queue::is_empty() const { return self.len == 0UL; }
 
 generic<T>
-void Queue::clear() { self.head = 0UL; self.len = 0UL; }
+void Queue::clear() {
+    if const (needs_drop(T)) {
+        unsigned long i = 0UL;
+        while (i < self.len) {
+            unsafe { drop(self.data[(self.head + i) & (self.cap - 1UL)]); }
+            i = i + 1UL;
+        }
+    }
+    self.head = 0UL;
+    self.len = 0UL;
+}
 
 generic<T>
 void Queue::free() { self.drop(); }
 
 generic<T>
 void Queue::drop() {
+    self.clear();
     unsafe { dealloc(self.data); }
     self.data = null;
     self.head = 0UL;

@@ -27,6 +27,21 @@ int Reactor::poll(&TaskScheduler sched, long long timeout_ms) {
     unsafe { return self.poll_events_raw_((fn void(?&Erased, int, int))cb, (?&Erased)sched, timeout_ms); }
 }
 
+// close_()'s shared part: frees both registration tables, leaving them
+// empty (and the reactor reusable).
+void Reactor::free_tables_() {
+    struct Vec<struct SigFdEntry> no_sig = Vec::new();
+    struct Vec<struct WatchedFd>  no_fd  = Vec::new();
+    std::replace(&self.sigfds, no_sig).drop();
+    std::replace(&self.watched, no_fd).drop();
+}
+
+void Reactor::drop() {
+    self.close_();           // the OS queue; leaves the tables empty
+    self.sigfds.drop();
+    self.watched.drop();
+}
+
 void reactor_run(&TaskScheduler sched, &Reactor r) {
     while (sched->active_count() > 0) {
         int active = sched->tick();

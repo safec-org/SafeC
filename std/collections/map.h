@@ -16,6 +16,12 @@
 //
 // get() hands out '?&V' — a reference into the table, valid until the next
 // insert()/remove()/clear()/free() (any of which may move or drop entries).
+//
+// A map owns its values: it is a Drop type, and V may own something itself
+// (String, Vec, ...). insert() takes the value by value — overwriting a key
+// drops the old value, and a value it can't store (OOM) is dropped;
+// remove() moves the value out to the caller; clear() and drop() drop
+// every value still in the map.
 // The table resizes at a 0.75 load factor; tombstones count toward it, so a
 // remove-heavy workload rehashes instead of degrading every probe to O(cap).
 #include <std/mem.h>
@@ -232,7 +238,7 @@ int HashMap::insert(K key, V val) __attribute__((always_inline)) {
         // Mostly tombstones: rehash in place; otherwise grow.
         unsigned long next = self.cap == 0UL ? 16UL
                            : ((self.len + 1UL) * 2UL > self.cap ? self.cap * 2UL : self.cap);
-        if (!self.rehash_(next)) return 0;
+        if (!self.rehash_(next)) { drop(key); drop(val); return 0; }
     }
     unsigned int h = map_key_hash_(&key);
     unsigned long mask = self.cap - 1UL;
@@ -246,6 +252,8 @@ int HashMap::insert(K key, V val) __attribute__((always_inline)) {
             unsigned char s = st[idx];
             if (s == (unsigned char)MAP_FULL_) {
                 if (hs[idx] == h && map_key_eq_(&ks[idx], &key)) {
+                    drop(key);
+                    drop(self.vals[idx]);
                     self.vals[idx] = val;
                     return 1;
                 }
@@ -289,6 +297,7 @@ generic<K, V>
     self.len = self.len - 1UL;
     self.tombstones = self.tombstones + 1UL;
     unsafe {
+        drop(self.keys[idx]);
         self.states[idx] = (unsigned char)MAP_TOMB_;
         return self.vals[idx];
     }
@@ -296,6 +305,15 @@ generic<K, V>
 
 generic<K, V>
 void HashMap::clear() {
+    if const (needs_drop(K) || needs_drop(V)) {
+        unsafe {
+            unsigned long i = 0UL;
+            while (i < self.cap) {
+                if (self.states[i] == (unsigned char)MAP_FULL_) { drop(self.keys[i]); drop(self.vals[i]); }
+                i = i + 1UL;
+            }
+        }
+    }
     if (self.cap != 0UL) {
         unsafe { safe_memset_raw_((unsigned char*)self.states, 0, self.cap); }
     }
@@ -319,6 +337,7 @@ void HashMap::free() { self.drop(); }
 
 generic<K, V>
 void HashMap::drop() {
+    self.clear();
     unsafe {
         dealloc(self.keys); dealloc(self.vals);
         dealloc(self.hashes); dealloc(self.states);
@@ -435,7 +454,7 @@ int StrMap::insert(const &char key, V val) {
     if ((self.len + self.tombstones + 1UL) * 4UL > self.cap * 3UL) {
         unsigned long next = self.cap == 0UL ? 16UL
                            : ((self.len + 1UL) * 2UL > self.cap ? self.cap * 2UL : self.cap);
-        if (!self.rehash_(next)) return 0;
+        if (!self.rehash_(next)) { drop(val); return 0; }
     }
     unsigned int h = map_hash_str_(key);
     unsigned long mask = self.cap - 1UL;
@@ -448,6 +467,7 @@ int StrMap::insert(const &char key, V val) {
             if (s == (unsigned char)MAP_TOMB_) {
                 if (tomb < 0LL) tomb = (long long)idx;
             } else if (self.hashes[idx] == h && str_cmp(self.keys[idx].as_ptr(), key) == 0) {
+                drop(self.vals[idx]);
                 self.vals[idx] = val;
                 return 1;
             }
@@ -497,7 +517,7 @@ void StrMap::clear() {
     unsafe {
         unsigned long i = 0UL;
         while (i < self.cap) {
-            if (self.states[i] == (unsigned char)MAP_FULL_) self.keys[i].free();
+            if (self.states[i] == (unsigned char)MAP_FULL_) { self.keys[i].free(); drop(self.vals[i]); }
             self.states[i] = (unsigned char)MAP_EMPTY_;
             i = i + 1UL;
         }
@@ -528,7 +548,7 @@ void StrMap::drop() {
         dealloc(self.hashes); dealloc(self.states);
     }
     self.keys = null; self.vals = null; self.hashes = null; self.states = null;
-    self.cap = 0UL;
+    self.cap = 0UL; self.len = 0UL; self.tombstones = 0UL;
 }
 
 } // namespace std

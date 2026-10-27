@@ -146,8 +146,12 @@ files.
   macros are hidden while it compiles. `std/mem.h` and `std/panic.h` use
   playground implementations instead (`stdshim/`).
 - The runtime also provides what those sources need from libc: `sscanf`,
-  `qsort` and `bsearch`, `strtok`, the float math variants, and a
-  `rand()` that matches glibc's sequence. File functions exist, but
+  `qsort` and `bsearch`, `strtok`, the float math variants, a
+  `rand()` that matches glibc's sequence, and std/time's calendar
+  functions (`gmtime_r`, `localtime_r`, `mktime`, `strftime`, `strptime`;
+  exact for any year, but there is no time zone, so local time is UTC)
+  and clocks (`clock_gettime` reports the epoch, `nanosleep` returns at
+  once). File functions exist, but
   `fopen` always fails because there is no file system. Only
   stdin/stdout/stderr work.
 

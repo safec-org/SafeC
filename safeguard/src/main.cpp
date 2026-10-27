@@ -132,8 +132,8 @@ Options (build / run / check / test):
                            manifest's [build] crate_type
   --target <alias|triple>  Cross-compile: a bare-metal alias (x86, x86_64,
                             aarch32, aarch64, thumb, thumb2, arm-6m, arm-7m,
-                            arm-7em, arm-8m, rv32i, rv32e, rv64i, rv64e,
-                            wasm32, wasm64 — see 'safec --list-targets') or
+                            arm-7em, arm-8m, arm-81m, rv32i, rv32e, rv64i,
+                            rv64e, wasm32, wasm64 — see 'safec --list-targets') or
                             any LLVM triple. Bare-metal links use -nostdlib
                             -static; supply a linker script/runtime via
                             [build] cflags/libs. WebAssembly links a library

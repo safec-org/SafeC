@@ -11,6 +11,13 @@
 // BTREE_ORDER, so up to BTREE_MAX_KEYS keys per node), and nodes freed by a
 // merge go on a free list for reuse. Values are stored by value; get() hands
 // out a '?&V' into the pool, valid until the next insert()/remove().
+//
+// The tree owns its values, which may own something themselves (String,
+// Vec, ...): insert() takes the value by value (overwriting a key drops the
+// old value; one it can't store is dropped), remove() moves it out, and
+// clear() drops every value still in the tree. The tree lives in place
+// (usually behind a reference), so it has no drop() of its own: clear() a
+// tree whose values own resources before releasing its memory.
 #pragma once
 
 #define BTREE_ORDER      4      // min keys per non-root node
@@ -48,7 +55,7 @@ struct BTree {
     unsigned long length() const;
     int           is_empty() const;
     void          foreach(fn void(unsigned long, &V) cb);  // ascending key order
-    void          clear();
+    void          clear();   // drop every value; the tree is empty afterwards
 
     // ── Internal ────────────────────────────────────────────────────────────
     &BTreeNode<V> node_(unsigned long idx) const;
@@ -61,6 +68,7 @@ struct BTree {
     void          fill_(unsigned long node_idx, int idx);
     int           remove_(unsigned long node_idx, unsigned long key);
     void          foreach_(unsigned long node_idx, fn void(unsigned long, &V) cb);
+    void          drop_vals_(unsigned long node_idx);
 };
 
 generic<V>
@@ -179,21 +187,21 @@ generic<V>
 int BTree::insert(unsigned long key, V val) {
     // Overwrite in place first: no splits for a key that's already present.
     match (self.get(key)) {
-        case some(slot): { *slot = val; return 1; }
+        case some(slot): { unsafe { drop(*slot); *slot = val; } return 1; }
         case null: { }
     }
     if (self.root == 0UL) {
         unsigned long r = self.alloc_node_();
-        if (r == 0UL) return 0;
+        if (r == 0UL) { drop(val); return 0; }
         self.root = r;
     }
     if (self.node_(self.root).n == BTREE_MAX_KEYS) {
         unsigned long nr = self.alloc_node_();
-        if (nr == 0UL) return 0;
+        if (nr == 0UL) { drop(val); return 0; }
         &BTreeNode<V> top = self.node_(nr);
         top.leaf = 0;
         unsafe { top.children[0] = self.root; }
-        if (!self.split_child_(nr, 0)) { self.free_node_(nr); return 0; }
+        if (!self.split_child_(nr, 0)) { self.free_node_(nr); drop(val); return 0; }
         self.root = nr;
     }
     // Descend, splitting full children before entering them.
@@ -220,7 +228,7 @@ int BTree::insert(unsigned long key, V val) {
         unsigned long child = 0UL;
         unsafe { child = n.children[i]; }
         if (self.node_(child).n == BTREE_MAX_KEYS) {
-            if (!self.split_child_(cur, i)) return 0;
+            if (!self.split_child_(cur, i)) { drop(val); return 0; }
             unsafe {
                 if (key > n.keys[i]) i = i + 1;
                 child = n.children[i];
@@ -228,6 +236,7 @@ int BTree::insert(unsigned long key, V val) {
         }
         cur = child;
     }
+    drop(val);   // unreachable
     return 0;
 }
 
@@ -252,7 +261,22 @@ generic<V>
 void BTree::foreach(fn void(unsigned long, &V) cb) { self.foreach_(self.root, cb); }
 
 generic<V>
+void BTree::drop_vals_(unsigned long node_idx) {
+    if (node_idx == 0UL) return;
+    &BTreeNode<V> n = self.node_(node_idx);
+    unsafe {
+        int i = 0;
+        while (i < n.n) { drop(n.vals[i]); i = i + 1; }
+        if (n.leaf == 0) {
+            i = 0;
+            while (i <= n.n) { self.drop_vals_(n.children[i]); i = i + 1; }
+        }
+    }
+}
+
+generic<V>
 void BTree::clear() {
+    if const (needs_drop(V)) self.drop_vals_(self.root);
     self.pool_used = 0;
     self.free_head = 0UL;
     self.root      = 0UL;
@@ -438,10 +462,10 @@ int BTree::remove_(unsigned long node_idx, unsigned long key) {
 
 generic<V>
 ?V BTree::remove(unsigned long key) {
-    ?V out = null;
+    V out;
     match (self.get(key)) {
         case null: return null;
-        case some(v): out = *v;
+        case some(v): unsafe { out = *v; }   // moved out; remove_ shifts the slot away
     }
     self.remove_(self.root, key);
     &BTreeNode<V> r = self.node_(self.root);
