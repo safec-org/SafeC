@@ -1,7 +1,8 @@
 # Tests where scc and safec are known to disagree. difftest.py still runs
 # them, and fails if one starts passing (remove it here) or if a test not
 # listed here fails. Reasons are in SUBSET.md, "Not supported" and
-# "Differences".
+# "Differences". A line '<test> wasm' lists it for scc.wasm (--scc-wasm)
+# only.
 
 # SIMD vector types are not supported
 ctests/simd/vector_align.sc
@@ -28,3 +29,6 @@ ctests/ownership/use_after_col_err.sc
 ctests/ownership/tree_inserts_time.sc
 # std/thread.h is not bundled with scc (SUBSET.md, "Not supported")
 ctests/threads/mutex.sc
+# scc.wasm (the playground path) compiles one source: a test #including a
+# header of its own (inc/uses_math.h) can't find it
+ctests/cheaders/repeat_include.sc wasm

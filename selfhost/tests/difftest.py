@@ -184,7 +184,8 @@ kf = os.path.join(HERE, "known-failures.txt")
 if os.path.exists(kf):
     for line in open(kf, encoding="utf-8"):
         line = line.split("#", 1)[0].strip()
-        if line: known[line.split()[0]] = True
+        # 'test wasm': known only for scc.wasm (--scc-wasm)
+        if line and (line.split()[1:] != ["wasm"] or args.scc_wasm): known[line.split()[0]] = True
 ran = {r["test"]: r["ok"] for r in results}
 new_fail = [t for t, ok in ran.items() if not ok and t not in known]
 fixed = [t for t in known if ran.get(t) is True]
