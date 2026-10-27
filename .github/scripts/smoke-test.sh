@@ -52,6 +52,23 @@ else
     fail "safeguard --help omits target aliases:$MISSING_ALIASES"
 fi
 
+# ... and every option its command-line parser accepts (the "--name"
+# literals in safeguard/src/main.cpp; the help text there is one raw
+# string, so its own mentions aren't quoted).
+SG_MAIN="$SAFEC_HOME/safeguard/src/main.cpp"
+if [[ -f "$SG_MAIN" ]]; then
+    MISSING_FLAGS=""
+    for flag in $(grep -o '"--[a-z][a-z-]*' "$SG_MAIN" | tr -d '"' | sort -u); do
+        [[ "$flag" == "--help" ]] && continue
+        grep -q -- "$flag\([^a-z-]\|$\)" /tmp/sg_help.txt || MISSING_FLAGS="$MISSING_FLAGS $flag"
+    done
+    if [[ -z "$MISSING_FLAGS" ]]; then
+        pass "safeguard --help lists every option its parser accepts"
+    else
+        fail "safeguard --help omits options:$MISSING_FLAGS"
+    fi
+fi
+
 # ── 2. Compile a trivial hello-world ──────────────────────────────────────────
 section "Compile hello.sc"
 cat > /tmp/hello_smoke.sc <<'EOF'
@@ -293,6 +310,32 @@ if [[ "$LIBM_OUT" == "libm 1.414 4.0" ]]; then
 else
     fail "<math.h> / <std/math.h> in a safeguard build (output: '$LIBM_OUT')"
     cat /tmp/sg_libm.txt
+fi
+# Only the C library's <math.h> (no std/math.sc to bring libm along): its
+# functions must link and run, with arguments known only at run time so
+# no call is folded away (cbrt has no instruction to become).
+mkdir -p "$WORKDIR/ci_libm_c/src"
+printf '[package]\nname = "ci_libm_c"\nversion = "0.1.0"\n\n[build]\nedition = "2026"\n' > "$WORKDIR/ci_libm_c/Package.toml"
+cat > "$WORKDIR/ci_libm_c/src/main.sc" <<'EOF'
+#include <math.h>
+extern int printf(const char* fmt, ...);
+int main(int argc, char** argv) {
+    double x = (double)(argc + 26);
+    double a = sqrt(x - 25.0);
+    double b = cbrt(x);
+    unsafe { printf("libm %.3f %.1f\n", a, b); }
+    return 0;
+}
+EOF
+LIBMC_OUT=""
+if sg_in "$WORKDIR/ci_libm_c" /tmp/sg_libm_c.txt build; then
+    LIBMC_OUT="$("$WORKDIR/ci_libm_c/build/ci_libm_c" 2>&1)"
+fi
+if [[ "$LIBMC_OUT" == "libm 1.414 3.0" ]]; then
+    pass "a program using only the C library's <math.h> links libm and runs"
+else
+    fail "C <math.h> sqrt/cbrt in a safeguard build (output: '$LIBMC_OUT')"
+    cat /tmp/sg_libm_c.txt
 fi
     ;;
 esac

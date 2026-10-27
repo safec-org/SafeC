@@ -176,7 +176,6 @@ void Lexer::skipWhitespaceAndComments() {
 void Lexer::skipLineMarker() {
     // Interned for the process lifetime: SourceLocation keeps a raw
     // 'const char*' that diagnostics read long after this Lexer is gone.
-    static std::unordered_set<std::string> fileNames;
     advance(); advance(); // "# "
     unsigned n = 0;
     while (!atEnd() && std::isdigit((unsigned char)peek())) n = n * 10 + (unsigned)(advance() - '0');
@@ -186,7 +185,7 @@ void Lexer::skipLineMarker() {
         std::string f;
         while (!atEnd() && peek() != '"' && peek() != '\n') f += advance();
         if (peek() == '"') advance();
-        filename_ = fileNames.insert(f).first->c_str();
+        filename_ = internFileName(f);
     }
     while (!atEnd() && peek() != '\n') advance();
     if (!atEnd()) advance();

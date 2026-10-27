@@ -52,7 +52,8 @@ Usage:  bash install.sh [OPTIONS]
 
 Options:
   --prefix=<path>   Install directory (default: ~/safec)
-  --version=<tag>   Release tag to install, e.g. v1.0.0-beta-7
+  --version=<tag>   Release tag to install, as listed on
+                    https://github.com/safec-org/SafeC/releases (v<version>)
                     (default: the newest release, including pre-releases)
   --std=<sections>  The prebuilt std sections to install, comma-separated:
                     core (std/*.sc), collections, gui, ml, crypto, tls, net, http,
@@ -68,7 +69,7 @@ Options:
 Examples:
   curl -fsSL https://raw.githubusercontent.com/safec-org/SafeC/main/install.sh | bash
   bash install.sh --prefix=/opt/safec
-  bash install.sh --version=v1.0.0-beta-7
+  bash install.sh --version=v<version>
   bash install.sh --std=core,collections,gui
   bash install.sh --std=+ml
 EOF

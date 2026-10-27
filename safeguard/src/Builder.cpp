@@ -862,6 +862,21 @@ bool Builder::linkFinal(const std::vector<std::string>& objFiles,
     };
     for (auto& l : manifest_.build.libs)    if (!linked("-l" + l, "")) cmd.push_back("-l" + l);
     if (plat) for (auto& l : plat->libs)    if (!linked("-l" + l, "")) cmd.push_back("-l" + l);
+    // libm: on Linux and the BSDs the C library's math functions (<math.h>,
+    // <complex.h>, <fenv.h>, <tgmath.h>) live in a library of their own that
+    // the C driver doesn't link by default ('sqrt' undefined in a program
+    // that includes <math.h> without std/math.h). --as-needed keeps it out
+    // of a program that calls none of them. macOS and Windows have it in
+    // their C runtime; bare metal and WebAssembly have no libc here.
+    {
+        std::string os = targetOS();
+        if (!targetIsBareMetal() && !targetIsWasm() && os != "macos" && os != "windows" &&
+            !linked("-lm", "")) {
+            cmd.push_back("-Wl,--as-needed");
+            cmd.push_back("-lm");
+            cmd.push_back("-Wl,--no-as-needed");
+        }
+    }
     // Frameworks are a Mach-O notion: [build] frameworks apply on macOS and
     // are dropped (with a note) elsewhere; [build.macos] ones only reach here
     // on macOS anyway.

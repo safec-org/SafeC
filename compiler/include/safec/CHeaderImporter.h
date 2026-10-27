@@ -20,11 +20,17 @@ public:
     /// True when a usable clang binary was found at construction time.
     bool available() const { return !clangPath_.empty(); }
 
+    /// True when 'headerName' was already imported in this translation
+    /// unit: its declarations are in place, so a repeated #include of it
+    /// is a no-op (import() returns nothing for it).
+    bool imported(const std::string &headerName) const { return imported_.count(headerName) != 0; }
+
     /// Import declarations from the named C header.
     /// @param headerName  e.g. "stdio.h", "stdlib.h", "string.h"
     /// @param includePaths  additional -I search paths forwarded to clang
     /// @param loc  location of the #include directive, for diagnostics on failure
     /// @return  SafeC extern declaration text, or empty string on failure
+    ///          (and for a header already imported: see imported())
     std::string import(const std::string &headerName,
                        const std::vector<std::string> &includePaths = {},
                        SourceLocation loc = {});
