@@ -84,6 +84,10 @@ bool PointerType::equals(const Type &o) const {
 
 // ── ReferenceType ─────────────────────────────────────────────────────────────
 std::string ReferenceType::str() const {
+    // A function reference is what 'fn R(Args)' / '?fn R(Args)' spell (a
+    // '&static' reference to the function type): print it that way.
+    if (base && base->kind == TypeKind::Function && region == Region::Static)
+        return (nullable ? "?fn " : "fn ") + base->str();
     std::string s = nullable ? "?&" : "&";
     if (region == Region::Extern) {
         // No region keyword at all — round-trips as exactly '?&T'/'&T'.

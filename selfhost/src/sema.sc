@@ -90,8 +90,15 @@ void msg_type(int t) {
         return;
     }
     if (k == TY_REF) {
-        if ((g_ty[t].flags & TYF_NULL) != 0) { msg_lit("?&"); } else { msg_lit("&"); }
         int r = g_ty[t].n;
+        // A function reference prints as the 'fn R(Args)' / '?fn R(Args)'
+        // that spells it (a &static reference to the function type).
+        if (r == R_STATIC && g_ty[g_ty[t].base].kind == TY_FN) {
+            if ((g_ty[t].flags & TYF_NULL) != 0) { msg_lit("?fn "); } else { msg_lit("fn "); }
+            msg_type(g_ty[t].base);
+            return;
+        }
+        if ((g_ty[t].flags & TYF_NULL) != 0) { msg_lit("?&"); } else { msg_lit("&"); }
         if (r == R_ARENA) { msg_lit("arena<"); msg_str(g_ty[t].sid); msg_lit("> "); }
         else if (r == R_STACK) { msg_lit("stack "); }
         else if (r == R_HEAP) { msg_lit("heap "); }

@@ -17,10 +17,11 @@ Directives, read from '// ' comments in the test source:
                      on any line when it's a comment line of its own (repeat
                      it once per expected occurrence). Checked with --errors
                      <stderr-file>; every reported error must be expected.
-  EXPECT-ERROR-IN: file:line: msg
-                     the same, for an error reported in another file (an
-                     #include'd header): the reported file name must end
-                     with 'file' and the line must be 'line'.
+  EXPECT-ERROR-IN: file:line[:col]: msg
+                     the same, for an error reported in a given file (an
+                     #include'd header, or the test itself to pin the
+                     column): the reported file name must end with 'file',
+                     the line must be 'line' (and the column 'col').
 """
 import re
 import sys
@@ -41,9 +42,10 @@ def check_errors(src, errfile):
     # whole-line one ('// EXPECT-ERROR: msg' alone) may match any line.
     expected = []
     for n, line in enumerate(open(src), 1):
-        m = re.search(r"//\s*EXPECT-ERROR-IN:\s?(.+?):(\d+):\s?(.*)$", line)
+        m = re.search(r"//\s*EXPECT-ERROR-IN:\s?(.+?):(\d+)(?::(\d+))?:\s?(.*)$", line)
         if m:
-            expected.append((int(m.group(2)), m.group(3).strip(), n, m.group(1).strip()))
+            col = int(m.group(3)) if m.group(3) else None
+            expected.append((int(m.group(2)), m.group(4).strip(), n, (m.group(1).strip(), col)))
             continue
         m = re.search(r"//\s*EXPECT-ERROR:\s?(.*)$", line)
         if m:
@@ -51,9 +53,9 @@ def check_errors(src, errfile):
             expected.append((n if anchored else None, m.group(1).strip(), n, None))
     reported = []
     for line in open(errfile):
-        m = re.search(r"^(.*?):(\d+):\d+: error: (.*)$", line)
+        m = re.search(r"^(.*?):(\d+):(\d+): error: (.*)$", line)
         if m:
-            reported.append((int(m.group(2)), m.group(3), m.group(1)))
+            reported.append((int(m.group(2)), m.group(4), (m.group(1), int(m.group(3)))))
     # Each reported error satisfies at most one directive: line-tied ones
     # first, so a free-floating directive can't steal their match.
     used = [False] * len(reported)
@@ -61,7 +63,8 @@ def check_errors(src, errfile):
     for want_line, msg, n, want_file in sorted(expected, key=lambda e: e[0] is None):
         hit = next((i for i, (rn, rmsg, rf) in enumerate(reported)
                     if not used[i] and msg in rmsg and want_line in (None, rn)
-                    and (want_file is None or rf.replace("\\", "/").endswith(want_file))), None)
+                    and (want_file is None or (rf[0].replace("\\", "/").endswith(want_file[0])
+                                               and want_file[1] in (None, rf[1])))), None)
         if hit is None:
             print(f"{src}:{n}: expected error not reported: {msg}")
             failures += 1

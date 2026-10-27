@@ -2076,7 +2076,7 @@ EV Walker::evalCallInner(CallExpr &e) {
                 ownConsumeCells(pointees, kODrop, e.loc, nullptr);
                 refDropReported_ = false;
             } else {
-                ownUse(pointees, e.loc, false);
+                ownUse(pointees, e.methodBase->loc, false);   // at the receiver, not the '('
             }
         } else {
             EV self;
@@ -2092,7 +2092,7 @@ EV Walker::evalCallInner(CallExpr &e) {
                 else ownConsumeCells(cells, kODrop, e.loc, nullptr);
                 refDropReported_ = false;
             } else {
-                ownUse(cells, e.loc, false);
+                ownUse(cells, e.methodBase->loc, false);   // at the receiver, not the '('
                 if (isPlaceExpr(e.methodBase.get()) && cells.size() == 1 && tracked(cells[0].obj))
                     for (auto it : ownOverlap(cells[0].obj, cells[0].path)) callOwners_.push_back(it->first);
             }
