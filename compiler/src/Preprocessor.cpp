@@ -563,6 +563,10 @@ std::string Preprocessor::handleInclude(const std::string &rest,
             if (!cHeaderImporter_) {
                 cHeaderImporter_ = std::make_unique<CHeaderImporter>(diag_);
             }
+            // Already imported (directly or by a header included earlier):
+            // its declarations are in place, so this #include is a no-op,
+            // not a reason to paste the raw system header.
+            if (cHeaderImporter_->available() && cHeaderImporter_->imported(name)) return {};
             if (cHeaderImporter_->available()) {
                 std::string decls =
                     cHeaderImporter_->import(name, opts_.includePaths,
