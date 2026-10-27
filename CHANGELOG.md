@@ -7,6 +7,17 @@ release tags.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Warnings on incremental-cache hits:** a cache hit skips lexing, parsing,
+  sema and codegen, so a rebuild of an unchanged file printed none of their
+  warnings (e.g. a non-exhaustive `switch`), and `safeguard build` showed them
+  only on the first build. safec now stores the diagnostics a compile printed
+  after preprocessing in a `.bc.diag` file beside the cached bitcode and
+  prints them again on a hit. A cache entry without one (from an older safec)
+  is a miss, and `--clear-cache` removes both files. The smoke test compiles a
+  file twice into a fresh cache and compares the warnings.
+
 ## [1.0.0-beta-7] - 2026-10-27
 
 ### Fixed

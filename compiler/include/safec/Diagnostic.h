@@ -42,6 +42,11 @@ public:
     bool isSilent() const { return silent_; }
     void reset() { diags_.clear(); errorCount_ = 0; }
 
+    // Every line printed to stderr so far, in order. The incremental cache
+    // stores the part printed after preprocessing next to the cached
+    // bitcode, so a cache hit can print the same warnings again.
+    const std::string &transcript() const { return transcript_; }
+
     // ── Speculative-parse support ──────────────────────────────────────────
     // Some grammar productions are ambiguous (e.g. '(' could start a cast or
     // a parenthesized expression) and are resolved by trying one parse and
@@ -69,7 +74,11 @@ private:
             case DiagLevel::Fatal:   prefix = "fatal";   break;
             }
             const char *f = loc.file ? loc.file : (filename_ ? filename_ : "<input>");
-            fprintf(stderr, "%s:%u:%u: %s: %s\n", f, loc.line, loc.col, prefix, msg.c_str());
+            char head[64];
+            snprintf(head, sizeof(head), ":%u:%u: ", loc.line, loc.col);
+            std::string line = std::string(f) + head + prefix + ": " + msg + "\n";
+            fputs(line.c_str(), stderr);
+            transcript_ += line;
         }
         diags_.push_back({level, loc, std::move(msg)});
     }
@@ -78,6 +87,7 @@ private:
     int                   errorCount_ = 0;
     bool                  silent_     = false;
     std::vector<Diagnostic> diags_;
+    std::string           transcript_;
 };
 
 } // namespace safec
