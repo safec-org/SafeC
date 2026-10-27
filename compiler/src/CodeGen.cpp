@@ -79,9 +79,10 @@ CodeGen::CodeGen(llvm::LLVMContext &ctx, const std::string &moduleName,
         targetAbi_      = targetAbi;
         auto *tm = target->createTargetMachine(
             triple, targetCpu_, targetFeatures_, opts, llvm::Reloc::PIC_);
-        if (!targetTriple.empty()) {
-            mod_->setTargetTriple(triple);
-        }
+        // The host's triple too, not only a --target one: clang, linking
+        // or assembling the IR, otherwise warns on every build that it is
+        // "overriding the module target triple" with its own (the same).
+        mod_->setTargetTriple(triple);
         mod_->setDataLayout(tm->createDataLayout());
         targetMachine_.reset(tm);
     }
