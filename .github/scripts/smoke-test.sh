@@ -29,6 +29,17 @@ else
     cat /tmp/safec_help.txt
 fi
 
+# safec --version and safeguard --version print VERSION (the release tag
+# without its 'v').
+WANT_VERSION="$(head -1 "$SAFEC_HOME/VERSION" 2>/dev/null | tr -d '[:space:]')"
+GOT_SAFEC="$("$SAFEC_BIN" --version 2>&1 | head -1 | tr -d '\r')"
+GOT_SG="$("$SAFEGUARD_BIN" --version 2>&1 | head -1 | tr -d '\r')"
+if [[ -n "$WANT_VERSION" && "$GOT_SAFEC" == "safec $WANT_VERSION" && "$GOT_SG" == "safeguard $WANT_VERSION" ]]; then
+    pass "safec --version and safeguard --version print VERSION ($WANT_VERSION)"
+else
+    fail "versions: VERSION '$WANT_VERSION', safec --version '$GOT_SAFEC', safeguard --version '$GOT_SG'"
+fi
+
 # safeguard --help lists every --target alias safec knows.
 "$SAFEGUARD_BIN" --help >/tmp/sg_help.txt 2>&1
 MISSING_ALIASES=""

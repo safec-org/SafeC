@@ -1,3 +1,6 @@
+#ifndef SAFEGUARD_VERSION
+#define SAFEGUARD_VERSION "unknown"
+#endif
 #include "Manifest.h"
 #include "Builder.h"
 #include "Analyzer.h"
@@ -69,6 +72,7 @@ Commands:
                 Run static-analysis lint passes on all source files
   format [--check] [--verbose]
                 Reindent and whitespace-normalize all .sc/.h source files
+  --version     Print safeguard's version (the SafeC release it ships with)
 
 Dependency format in Package.toml:
   [[dependencies]]
@@ -206,6 +210,12 @@ int main(int argc, char** argv) {
     if (argc < 2) { usage(); return 1; }
 
     std::string cmd = argv[1];
+
+    // ── --version ─────────────────────────────────────────────────────────────
+    if (cmd == "--version" || cmd == "-V" || cmd == "version") {
+        std::cout << "safeguard " << SAFEGUARD_VERSION << "\n";
+        return 0;
+    }
 
     // ── new / init ────────────────────────────────────────────────────────────
     if (cmd == "new" || cmd == "init") {

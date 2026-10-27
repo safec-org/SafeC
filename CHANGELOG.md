@@ -7,6 +7,8 @@ release tags.
 
 ## [Unreleased]
 
+## [1.0.0-beta-7] - 2026-10-27
+
 ### Fixed
 
 - A local declaration whose type is a typedef name followed by two or more
