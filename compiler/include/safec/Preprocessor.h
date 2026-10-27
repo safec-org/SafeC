@@ -56,6 +56,14 @@ public:
     const std::unordered_map<std::string, MacroDef>& macros() const { return macros_; }
 
 private:
+    // The file name a SourceLocation records for 'f': the document's own
+    // (this preprocessor's filename_, which callers such as the language
+    // server recognise by address), or an interned copy (an #include'd
+    // file's path is a local string that dies with the #include).
+    const char *locFile(const std::string &f) const {
+        return f == filename_ ? filename_.c_str() : internFileName(f);
+    }
+
     // ── Top-level processing ──────────────────────────────────────────────────
     std::string processFile(const std::string &src,
                             const std::string &filename,
