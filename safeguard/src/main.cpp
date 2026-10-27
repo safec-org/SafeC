@@ -47,20 +47,28 @@ Commands:
                 comment, per-item pages, a module tree, search, source
                 pages and links into std's reference. --serve serves it
                 (--port N, default 8000); --std documents SafeC's std
-                instead; --out DIR, --private (hidden items too),
-                --std-url URL (where std links point), --no-check
+                instead; --out DIR, --private (hidden items too; also
+                --document-private-items), --std-url URL (where std links
+                point), --no-check, --home URL[=text] (a header link back
+                to the hosting site), --source-ref REF (with --std: the git
+                ref source links name, default main), --verbose
   publish [--ci=github|gitlab|gitea|forgejo] [--bump=patch|minor|major]
-          [--write] [--tag] [--push]
+          [--write|--dry-run] [--tag] [--push] [--remote=NAME]
+          [--no-verify] [--verbose]
                 Prepare a library for publishing to git: .gitignore,
                 README/LICENSE checks, CI that builds and tests on
                 Linux/macOS/Windows, attaches prebuilt libraries to a
                 release and deploys 'safeguard doc' to Pages on a tag.
                 Dry run (prints the plan) unless --write; commits/tags
-                only with --tag, pushes only with --push
+                only with --tag (after 'safeguard test' passes, unless
+                --no-verify), pushes only with --push (to --remote,
+                default origin)
   clean         Remove the build/ and deps/ directories
   verify-lock   Check Package.lock against current dependency state
-  lint          Run static-analysis lint passes on all source files
-  format        Reindent and whitespace-normalize all .sc/.h source files
+  lint  [--verbose]
+                Run static-analysis lint passes on all source files
+  format [--check] [--verbose]
+                Reindent and whitespace-normalize all .sc/.h source files
 
 Dependency format in Package.toml:
   [[dependencies]]

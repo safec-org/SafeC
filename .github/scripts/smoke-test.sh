@@ -41,6 +41,23 @@ else
     fail "safeguard --help omits target aliases:$MISSING_ALIASES"
 fi
 
+# ... and every option its command-line parser accepts (the "--name"
+# literals in safeguard/src/main.cpp; the help text there is one raw
+# string, so its own mentions aren't quoted).
+SG_MAIN="$SAFEC_HOME/safeguard/src/main.cpp"
+if [[ -f "$SG_MAIN" ]]; then
+    MISSING_FLAGS=""
+    for flag in $(grep -o '"--[a-z][a-z-]*' "$SG_MAIN" | tr -d '"' | sort -u); do
+        [[ "$flag" == "--help" ]] && continue
+        grep -q -- "$flag\([^a-z-]\|$\)" /tmp/sg_help.txt || MISSING_FLAGS="$MISSING_FLAGS $flag"
+    done
+    if [[ -z "$MISSING_FLAGS" ]]; then
+        pass "safeguard --help lists every option its parser accepts"
+    else
+        fail "safeguard --help omits options:$MISSING_FLAGS"
+    fi
+fi
+
 # ── 2. Compile a trivial hello-world ──────────────────────────────────────────
 section "Compile hello.sc"
 cat > /tmp/hello_smoke.sc <<'EOF'
