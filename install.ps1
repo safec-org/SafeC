@@ -14,8 +14,9 @@
     Install directory. Default: $HOME\safec
 
 .PARAMETER Version
-    Release tag to install, e.g. v1.0.0-beta-4. Default: the newest release,
-    including pre-releases.
+    Release tag to install, as listed on
+    https://github.com/safec-org/SafeC/releases (v<version>). Default: the
+    newest release, including pre-releases.
 
 .PARAMETER Std
     The prebuilt std sections to install, comma-separated: core (std/*.sc),
@@ -32,7 +33,7 @@
     irm https://raw.githubusercontent.com/safec-org/SafeC/main/install.ps1 | iex
 
 .EXAMPLE
-    .\install.ps1 -Prefix C:\safec -Version v1.0.0-beta-4
+    .\install.ps1 -Prefix C:\safec -Version v<version>
 
 .EXAMPLE
     .\install.ps1 -Std core,collections,gui
