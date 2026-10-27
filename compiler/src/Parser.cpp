@@ -962,7 +962,6 @@ void Parser::parseNamespaceDecl() {
 }
 
 DeclPtr Parser::parseTopLevelDecl() {
-    auto loc = cur().loc;
 
     // GNU/Clang '__attribute__((...))' in prefix position (before the rest
     // of the declaration) — see GnuAttrs / parseGnuAttributes for why this

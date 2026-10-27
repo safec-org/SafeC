@@ -488,7 +488,7 @@ private:
     void closure(const std::vector<CellRef> &cells, std::vector<CellRef> &outCells, std::vector<std::string> &deep);
     std::string calleeSite(const Expr &call, FunctionDecl *callee, const std::string &key);
     void report(SourceLocation loc, std::string msg) {
-        if (!quiet_ && !unsafe_) diags.push_back({loc, std::move(msg)});
+        if (!quiet_ && !unsafe_) diags.push_back({loc, std::move(msg), {}});
     }
     void buildSummary();
     Term termOf(const VEnt &e) const;
@@ -560,7 +560,7 @@ private:
 class FlowDriver {
 public:
     FlowDriver(DiagEngine &diag, const std::vector<FunctionDecl *> &fns, const Sema &sema)
-        : diag_(diag), fns_(fns), sema(sema) {}
+        : sema(sema), diag_(diag), fns_(fns) {}
     const Sema &sema;
     void run();
     FunctionDecl *bodyOf(FunctionDecl *fd) const {
@@ -1725,7 +1725,7 @@ EV Walker::rval(Expr &e) {
         for (auto &arm : me.arms) {
             cur_ = base;
             size_t nb = binds_.size();
-            frames_.push_back({nullptr, {}});
+            frames_.push_back({nullptr, {}, {}});
             for (auto &p : arm.patterns) {
                 bindPattern(p, subj, me.subject->type);
                 if (moving) ownBind(p, me.subject->loc);
@@ -2959,7 +2959,7 @@ int Walker::ownToken(const Expr &site, const std::vector<OwnKey> &owners) {
 // must be gone.
 void Walker::ownEndFunction() {
     // Every owned slot left, including ones a 'defer' was expected to drop.
-    Frame all{nullptr, {}};
+    Frame all{nullptr, {}, {}};
     for (auto &kv : cur_.own) {
         auto ov = ownVars_.find(kv.first.first);
         if (ov == ownVars_.end() || ov->second.pseudo) continue;
@@ -3146,7 +3146,7 @@ void Walker::stmt(Stmt &s) {
     switch (s.kind) {
     case StmtKind::Compound: {
         auto &cs = static_cast<CompoundStmt &>(s);
-        frames_.push_back({&s, {}});
+        frames_.push_back({&s, {}, {}});
         for (auto &c : cs.body) if (c) stmt(*c);
         if (cur_.live) {
             ownFlush();
@@ -3198,7 +3198,7 @@ void Walker::stmt(Stmt &s) {
     }
     case StmtKind::For: {
         auto &fs = static_cast<ForStmt &>(s);
-        frames_.push_back({&s, {}});
+        frames_.push_back({&s, {}, {}});
         if (fs.init) stmt(*fs.init);
         loop(s, fs.cond.get(), fs.body.get(), fs.incr.get(), false, fs.label);
         if (cur_.live) ownExitFrame(frames_.back(), fs.body ? fs.body->loc : s.loc, "after its loop");
@@ -3287,7 +3287,7 @@ void Walker::stmt(Stmt &s) {
         for (auto &arm : ms.arms) {
             cur_ = base;
             size_t nb = binds_.size();
-            frames_.push_back({nullptr, {}});
+            frames_.push_back({nullptr, {}, {}});
             for (auto &p : arm.patterns) {
                 if (p.kind == PatternKind::Wildcard && p.ident.empty()) exhaustive = true;
                 if (p.resolvedTag == 0) sawNone = true;
@@ -3314,7 +3314,7 @@ void Walker::stmt(Stmt &s) {
         State dispatch = cur_;
         bool hasDefault = false;
         targets_.push_back({"", true, State{}, State{}, frames_.size()});
-        frames_.push_back({&s, {}});
+        frames_.push_back({&s, {}, {}});
         State fall;
         for (auto &c : sw.cases) {
             if (c.isDefault) hasDefault = true;
@@ -3358,7 +3358,7 @@ void Walker::walkBody() {
     curPos_ = 0;
     // The function's own frame: by-value parameters of Drop type are owned
     // here; a destructor's *self is tracked for use after it was dropped.
-    frames_.push_back({fn_.body.get(), {}});
+    frames_.push_back({fn_.body.get(), {}, {}});
     for (size_t i = 0; i < fn_.paramVars.size() && i < fn_.params.size(); ++i) {
         const VarDecl *pv = fn_.paramVars[i];
         if (pv && mustDrop(fn_.params[i].type))

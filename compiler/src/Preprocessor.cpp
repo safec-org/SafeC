@@ -722,7 +722,6 @@ std::string Preprocessor::expandTokens(const std::string &text,
         }
         // Identifier: possibly a macro
         if (isIdentStart(c)) {
-            size_t start = pos;
             std::string name = readIdentAt(text, pos);
 
             // Handle __FILE__ and __LINE__ built-ins
@@ -1056,7 +1055,6 @@ int64_t Preprocessor::evalCondExpr(const std::string &expr,
         if (pos >= expr.size()) break;
 
         if (isIdentStart(expr[pos])) {
-            size_t start = pos;
             std::string name = readIdentAt(expr, pos);
             if (name == "defined") {
                 // Keep 'defined' and its argument unexpanded
