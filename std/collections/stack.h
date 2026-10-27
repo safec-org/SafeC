@@ -8,6 +8,11 @@
 //
 // Backed by one growing heap buffer: O(1) amortized push/pop. peek() hands
 // out a '?&T' into that buffer, valid until the next push()/free().
+//
+// A Stack owns its elements: it is a Drop type, and T may own something
+// itself (String, Vec, ...). push() takes the element by value (one it
+// can't store is dropped), pop() moves it out, and clear()/drop() drop
+// every element still on the stack.
 #include <std/mem.h>
 
 namespace std {
@@ -26,9 +31,9 @@ struct Stack {
     ?&T           peek() const;    // null if empty
     unsigned long length() const;
     int           is_empty() const;
-    void          clear();
+    void          clear();         // drop every element, keep the buffer
     int           reserve(unsigned long n);
-    void          drop();
+    void          drop();          // drops the elements, frees the buffer (Drop)
     void          free() consume;   // = drop()
 };
 
@@ -62,7 +67,7 @@ int Stack::reserve(unsigned long n) {
 generic<T>
 int Stack::push(T value) {
     if (self.top == self.cap) {
-        if (!self.reserve(self.cap < 8UL ? 8UL : self.cap * 2UL)) return 0;
+        if (!self.reserve(self.cap < 8UL ? 8UL : self.cap * 2UL)) { drop(value); return 0; }
     }
     unsafe { self.data[self.top] = value; }
     self.top = self.top + 1UL;
@@ -89,13 +94,20 @@ generic<T>
 int Stack::is_empty() const { return self.top == 0UL; }
 
 generic<T>
-void Stack::clear() { self.top = 0UL; }
+void Stack::clear() {
+    if const (needs_drop(T)) {
+        unsigned long i = 0UL;
+        while (i < self.top) { unsafe { drop(self.data[i]); } i = i + 1UL; }
+    }
+    self.top = 0UL;
+}
 
 generic<T>
 void Stack::free() { self.drop(); }
 
 generic<T>
 void Stack::drop() {
+    self.clear();
     unsafe { dealloc(self.data); }
     self.data = null;
     self.top = 0UL;

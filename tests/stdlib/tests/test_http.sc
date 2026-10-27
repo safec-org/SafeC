@@ -130,8 +130,8 @@ static ?&int run_ws(?&int arg) {
         int lfd = ws_listen(g_ws_port);
         if (lfd < 0) return null;
         while (1) {   // one client at a time, for as long as tests connect
-        struct WsConn c;
-        if (c.accept(lfd) != 1) continue;   // 1 = handshake completed
+        struct WsConn c = WsConn::closed();
+        if (c.accept(lfd) != 1) { c.drop(); continue; }   // 1 = handshake completed; a failed one is closed
         struct WsMessage m;
         while (c.recv(&m) == 1) {
             if (m.opcode == WS_OPCODE_TEXT) {
@@ -491,6 +491,44 @@ void t_ws_frame_with_handshake() {
     }
 }
 
+// A WsConn that never connected — WsConn::closed(), or a zeroed one after a
+// failed accept() — is closed (fd -1): dropping it neither writes a close
+// frame to nor closes fd 0. fd 0 is pointed at a pipe here to watch.
+extern int dup(int fd);
+extern int dup2(int fd, int fd2);
+
+void t_ws_closed() {
+    unsafe {
+        struct WsConn z = WsConn::closed();
+        ASSERT_EQ(z.fd, -1);
+        ASSERT_EQ(z.send_text("x"), 0);
+        z.drop();
+
+        struct Pipe p;
+        ASSERT_EQ(p.init(), 0);
+        ASSERT_EQ(p.set_read_nonblocking(), 0);
+        int saved = dup(0);
+        ASSERT_TRUE(dup2((int)p.write_fd, 0) == 0);
+
+        int lfd = tcp_listen_nb((unsigned short)0);   // nobody connects: accept fails at once
+        ASSERT_TRUE(lfd >= 0);
+        struct WsConn c;
+        safe_memset_obj(&c, 0);                       // fd 0, as a zero-initialised conn
+        ASSERT_EQ(c.accept(lfd), 0);
+        ASSERT_EQ(c.fd, -1);
+        c.drop();
+        close(lfd);
+
+        unsigned char buf[8];
+        ASSERT_EQ(p.read(buf[0..8UL]), -1);           // nothing was written to fd 0 ...
+        ASSERT_TRUE(dup2(0, 0) == 0);                 // ... and it is still open
+
+        if (saved >= 0) { dup2(saved, 0); close(saved); } else { close(0); }
+        p.close_read();
+        p.close_write();
+    }
+}
+
 void t_websocket() {
     start_servers();
     unsafe {
@@ -727,6 +765,7 @@ int main() {
         t.add("oauth2 code exchange", t_oauth2);
         t.add("rpc + server_fn", t_rpc);
         t.add("websocket", t_websocket);
+        t.add("websocket: closed / failed-accept conn", t_ws_closed);
         t.add("websocket frame sent with the handshake", t_ws_frame_with_handshake);
         t.add("connect/handshake timeouts", t_connect_timeout);
         t.add("write to closed peer", t_write_to_closed_peer);

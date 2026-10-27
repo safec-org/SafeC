@@ -239,8 +239,9 @@ inline void Reactor::close_() {
         unsafe { close(e->fd); }
         i = i + 1UL;
     }
-    self.sigfds.clear();
-    unsafe { close(self.kq); }
+    self.free_tables_();
+    if (self.kq >= 0) { unsafe { close(self.kq); } }
+    self.kq = -1;
 }
 
 } // namespace std

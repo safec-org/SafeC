@@ -277,7 +277,7 @@ bool Builder::doc(const DocOptions& o) {
     if (o.std || manifest_.build.compatPreprocessor) args.push_back("--compat-preprocessor");
     std::vector<std::string> incs;
     if (o.std) {
-        incs = { stdDir, fs::path(stdDir).parent_path().string() };
+        incs = { fs::path(stdDir).parent_path().string() };   // <std/...> only
     } else {
         incs = safecIncludeDirs();
         incs.push_back((root / "src").string());

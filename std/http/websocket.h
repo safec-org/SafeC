@@ -54,6 +54,10 @@ struct WsConn {
     unsigned long        earlyLen;
     unsigned long        earlyPos;
 
+    // A closed connection (fd = -1, nothing owned): the value to start from
+    // before accept(), or a placeholder. Dropping or closing it does nothing.
+    static struct WsConn closed();
+
     // ── Client ────────────────────────────────────────────────────────────
     // Connects to ws://host:port/path — performs the TCP connect, sends the
     // HTTP Upgrade request with a fresh random Sec-WebSocket-Key, and verifies
@@ -83,7 +87,12 @@ struct WsConn {
     // validates it, sends back the 101 response with the computed
     // Sec-WebSocket-Accept). On success, fills this connection in place
     // and returns 1; on a connection that fails to complete the
-    // handshake, returns 0 (the underlying fd is already closed).
+    // handshake, returns 0 (the underlying fd is already closed) and leaves
+    // this connection closed (fd = -1). Whatever this WsConn held before is
+    // overwritten, not closed: accept into a WsConn::closed() (or a
+    // connection already closed).
+    //   struct WsConn c = std::WsConn::closed(); defer c.drop();
+    //   if (c.accept(lfd)) { ... }
     int accept(int listenFd);
 
     // ── Framing ───────────────────────────────────────────────────────────
@@ -128,7 +137,9 @@ struct WsConn {
     int recv(&WsMessage out);
 
     // Sends a close frame (best-effort — ignores failure, since the peer
-    // may already be gone) and closes the socket.
+    // may already be gone) and closes the socket. Nothing is sent or closed
+    // for a closed connection (fd < 0: WsConn::closed(), a failed connect
+    // or accept, an earlier close).
     void drop();
     void close() consume;   // = drop()
 };
