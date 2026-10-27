@@ -23,5 +23,8 @@ ctests/ownership/forget_err.sc
 ctests/ownership/generics_err.sc
 ctests/ownership/leaks_err.sc
 ctests/ownership/use_after_err.sc
+ctests/ownership/use_after_col_err.sc
+# std/collections/bst.h is not bundled with scc (SUBSET.md, "Not supported")
+ctests/ownership/tree_inserts_time.sc
 # std/thread.h is not bundled with scc (SUBSET.md, "Not supported")
 ctests/threads/mutex.sc
