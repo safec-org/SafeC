@@ -3376,6 +3376,12 @@ llvm::Value *CodeGen::genCall(CallExpr &e, FnEnv &env) {
             return llvm::ConstantInt::get(llvm::Type::getInt32Ty(ctx_), 0);
         }
         // ── Atomic built-ins ─────────────────────────────────────────────────
+        // A failed compare-exchange is only a load: it can't be 'release'
+        // (C11 7.17.7.4), so release -> relaxed and acq_rel -> acquire, as
+        // the one-ordering C11 functions do (LLVM rejects the IR otherwise).
+        auto casFailureOrdering = [](llvm::AtomicOrdering o) {
+            return llvm::AtomicCmpXchgInst::getStrongestFailureOrdering(o);
+        };
         auto parseOrdering = [&](int argIdx) -> llvm::AtomicOrdering {
             if (argIdx < (int)e.args.size() && e.args[argIdx]->kind == ExprKind::StringLit) {
                 auto &str = static_cast<StringLitExpr &>(*e.args[argIdx]).value;
@@ -3427,7 +3433,7 @@ llvm::Value *CodeGen::genCall(CallExpr &e, FnEnv &env) {
             auto *expectedVal = builder_.CreateLoad(elemTy, expectedPtr, "cas.expected");
             auto ord = parseOrdering(3);
             auto *cmpxchg = builder_.CreateAtomicCmpXchg(
-                ptr, expectedVal, desired, llvm::MaybeAlign(), ord, ord);
+                ptr, expectedVal, desired, llvm::MaybeAlign(), ord, casFailureOrdering(ord));
             auto *oldVal  = builder_.CreateExtractValue(cmpxchg, 0, "cas.old");
             auto *success = builder_.CreateExtractValue(cmpxchg, 1, "cas.ok");
             // C11 semantics: the 'expected' out-pointer is updated with the
@@ -3461,7 +3467,7 @@ llvm::Value *CodeGen::genCall(CallExpr &e, FnEnv &env) {
             }
             auto ord = parseOrdering(3);
             auto *cmpxchg = builder_.CreateAtomicCmpXchg(
-                ptr, expected, desired, llvm::MaybeAlign(), ord, ord);
+                ptr, expected, desired, llvm::MaybeAlign(), ord, casFailureOrdering(ord));
             // Extract success flag (element 1 of { T, i1 })
             return builder_.CreateExtractValue(cmpxchg, 1, "cas.ok");
         }
