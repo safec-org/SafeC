@@ -43,6 +43,53 @@ env:
   LLVM_PKG_VERSION: "21.1.8"
 
 jobs:
+  # ── Version and release notes ────────────────────────────────────────────
+  # VERSION (the repository root) is what 'safec --version' and 'safeguard
+  # --version' print. On a tag push the tag, without a leading 'v', must
+  # equal it, and CHANGELOG.md must have that version's section
+  # ('## [<version>] - <date>'), which becomes the release notes. A
+  # workflow_dispatch run only prints what a tag would publish.
+  version:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout SafeC
+        uses: actions/checkout@v4
+        with:
+          path: SafeC
+
+      - name: Check VERSION, the tag and CHANGELOG.md
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="$(head -1 SafeC/VERSION | tr -d '[:space:]')"
+          echo "VERSION: $VERSION"
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || {
+            echo "::error::VERSION ('$VERSION') isn't MAJOR.MINOR.PATCH[-PRERELEASE]"; exit 1; }
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            TAG="${GITHUB_REF_NAME#v}"
+            [[ "$TAG" == "$VERSION" ]] || {
+              echo "::error::tag '$GITHUB_REF_NAME' doesn't match VERSION ('$VERSION'); bump VERSION (and CHANGELOG.md) before tagging"; exit 1; }
+          fi
+          mkdir -p notes
+          awk -v v="$VERSION" '
+            index($0, "## [" v "]") == 1 { on = 1; next }
+            on && /^## \[/ { exit }
+            on { print }
+          ' SafeC/CHANGELOG.md > notes/release-notes.md
+          if [[ ! -s notes/release-notes.md ]]; then
+            if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+              echo "::error::CHANGELOG.md has no '## [$VERSION]' section"; exit 1
+            fi
+            echo "CHANGELOG.md has no '## [$VERSION]' section yet (a tag push would fail here)"
+          fi
+          wc -l notes/release-notes.md
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-notes
+          path: notes/release-notes.md
+
   # ── macOS (Apple Silicon) ────────────────────────────────────────────────
   macos:
     runs-on: macos-14
@@ -375,7 +422,7 @@ jobs:
   # from the top-of-file comment) without needing a separate check for it.
   release:
     if: startsWith(github.ref, 'refs/tags/')
-    needs: [macos, linux, windows]
+    needs: [version, macos, linux, windows]
     runs-on: ubuntu-latest
     permissions:
       contents: write   # required for softprops/action-gh-release to create the release
@@ -391,6 +438,9 @@ jobs:
             dist/safec-macos-arm64/safec-macos-arm64.tar.gz
             dist/safec-linux-x86_64/safec-linux-x86_64.tar.gz
             dist/safec-windows-x86_64/safec-windows-x86_64.zip
+          # The version's CHANGELOG.md section (the version job), then
+          # GitHub's list of merged pull requests.
+          body_path: dist/release-notes/release-notes.md
           generate_release_notes: true
           # A tag with a hyphen ('v1.0.0-beta-4', '1.0.0-rc1') is a pre-release.
           prerelease: ${{ contains(github.ref_name, '-') }}

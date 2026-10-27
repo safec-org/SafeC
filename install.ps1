@@ -14,7 +14,7 @@
     Install directory. Default: $HOME\safec
 
 .PARAMETER Version
-    Release tag to install, e.g. v1.0.0-beta-4. Default: the newest release,
+    Release tag to install, e.g. v1.0.0-beta-7. Default: the newest release,
     including pre-releases.
 
 .PARAMETER Std
@@ -32,7 +32,7 @@
     irm https://raw.githubusercontent.com/safec-org/SafeC/main/install.ps1 | iex
 
 .EXAMPLE
-    .\install.ps1 -Prefix C:\safec -Version v1.0.0-beta-4
+    .\install.ps1 -Prefix C:\safec -Version v1.0.0-beta-7
 
 .EXAMPLE
     .\install.ps1 -Std core,collections,gui
