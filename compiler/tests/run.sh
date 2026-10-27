@@ -9,6 +9,9 @@
 #
 #   // SAFEC-ARGS: <flags>  extra compiler flags; '%root' is the repository
 #                           root ('-I %root' for '#include <std/...>')
+#   // EXPECT-WARNING: <text> the compile must report exactly these warnings
+#   // MAX-SECONDS: <n>     the -O2 --emit-llvm compile must take at most n
+#                           seconds (a compile-time regression test)
 #
 #   SAFEC_BIN=path/to/safec compiler/tests/run.sh
 set -uo pipefail
@@ -36,7 +39,7 @@ while IFS= read -r -d '' t; do
     fi
     # '// SAFEC-ARGS: <flags>' adds compiler flags (e.g. --target <triple>).
     read -r -a args <<<"$(sed -n 's|^// SAFEC-ARGS: *||p' "$t" | head -1 | sed "s|%root|$ROOT|g")"
-    if grep -q 'EXPECT-ERROR:' "$t"; then
+    if grep -qE 'EXPECT-ERROR(-IN)?:' "$t"; then
         # Negative test: must be rejected with exactly the expected errors.
         if "$SAFEC_BIN" "$t" --emit-llvm ${args[@]+"${args[@]}"} -o "$ll" >"$OUT/err.txt" 2>&1; then
             echo "  [FAIL] $name (compiled, expected errors)"
@@ -68,12 +71,27 @@ while IFS= read -r -d '' t; do
         fi
         continue
     fi
-    if ! "$SAFEC_BIN" "$t" -O2 --emit-llvm ${args[@]+"${args[@]}"} -o "$ll" >"$OUT/err.txt" 2>&1; then
+    maxs="$(sed -n 's|^// MAX-SECONDS: *||p' "$t" | head -1)"
+    # (python for the clock: BSD date has no %N)
+    now_ms() { python3 -c 'import time; print(int(time.time() * 1000))'; }
+    [[ -n "$maxs" ]] && t0=$(now_ms)
+    "$SAFEC_BIN" "$t" -O2 --emit-llvm ${args[@]+"${args[@]}"} -o "$ll" >"$OUT/err.txt" 2>&1
+    crc=$?
+    [[ -n "$maxs" ]] && ms=$(( $(now_ms) - t0 ))
+    if [[ "$crc" -ne 0 ]]; then
         echo "  [FAIL] $name (compile)"
         sed 's/^/      /' "$OUT/err.txt"
         FAIL=$((FAIL + 1))
+    elif [[ -n "$maxs" && "$ms" -gt $((maxs * 1000)) ]]; then
+        echo "  [FAIL] $name (compile took ${ms} ms, limit ${maxs} s)"
+        FAIL=$((FAIL + 1))
     elif ! python3 "$HERE/filecheck.py" "$t" "$ll" >"$OUT/check.txt" 2>&1; then
         echo "  [FAIL] $name"
+        sed 's/^/      /' "$OUT/check.txt"
+        FAIL=$((FAIL + 1))
+    elif grep -qE 'EXPECT-WARNING(-IN)?:' "$t" &&
+         ! python3 "$HERE/filecheck.py" --warnings "$t" "$OUT/err.txt" >"$OUT/check.txt" 2>&1; then
+        echo "  [FAIL] $name (warnings)"
         sed 's/^/      /' "$OUT/check.txt"
         FAIL=$((FAIL + 1))
     elif grep -q '^// EXEC$' "$t" && command -v "$CLANG_BIN" >/dev/null 2>&1; then

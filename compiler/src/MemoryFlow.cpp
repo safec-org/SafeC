@@ -139,11 +139,28 @@ std::string starAll(const std::string &p) {
     return out;
 }
 
-// At most one element of a multi-dimensional index is kept apart.
-std::string normPath(const std::string &p) {
+// At most one element of a multi-dimensional index is kept apart, and a
+// path more than kMaxCellDepth selectors deep is cut there and summarized
+// as one weak cell ('[*]': every write to it merges). Real nesting never
+// gets that deep, but copying an aggregate into a part of an object that
+// may be the same one (a node's 'val' from "any node", through a summary's
+// collapsed entry path) nests its paths once per evaluation: without the
+// cut a run of such calls grows the state exponentially.
+constexpr int kMaxCellDepth = 12;
+std::string normPath(const std::string &p0) {
+    const std::string *p = &p0;
+    std::string cut;
+    int depth = 0;
+    for (size_t i = 0; i < p0.size(); ++i) {
+        if ((p0[i] == '.' || p0[i] == '[') && ++depth > kMaxCellDepth) {
+            cut = p0.substr(0, i) + "[*]";
+            p = &cut;
+            break;
+        }
+    }
     int n = 0;
-    for (char c : p) if (c == '[') ++n;
-    return n > 1 ? starAll(p) : p;
+    for (char c : *p) if (c == '[') ++n;
+    return n > 1 ? starAll(*p) : *p;
 }
 
 bool hasStar(const std::string &p) { return p.find("[*]") != std::string::npos; }
@@ -471,7 +488,7 @@ private:
     void closure(const std::vector<CellRef> &cells, std::vector<CellRef> &outCells, std::vector<std::string> &deep);
     std::string calleeSite(const Expr &call, FunctionDecl *callee, const std::string &key);
     void report(SourceLocation loc, std::string msg) {
-        if (!quiet_ && !unsafe_) diags.push_back({loc, std::move(msg)});
+        if (!quiet_ && !unsafe_) diags.push_back({loc, std::move(msg), {}});
     }
     void buildSummary();
     Term termOf(const VEnt &e) const;
@@ -543,7 +560,7 @@ private:
 class FlowDriver {
 public:
     FlowDriver(DiagEngine &diag, const std::vector<FunctionDecl *> &fns, const Sema &sema)
-        : diag_(diag), fns_(fns), sema(sema) {}
+        : sema(sema), diag_(diag), fns_(fns) {}
     const Sema &sema;
     void run();
     FunctionDecl *bodyOf(FunctionDecl *fd) const {
@@ -908,8 +925,22 @@ void Walker::clearSubtree(int obj, const std::string &prefix) {
 
 // dst := src for an aggregate: explicit cells are copied, unwritten entry
 // memory is copied as a lazy reference to its entry path.
-void Walker::copyAgg(const std::vector<CellRef> &dst, const std::vector<CellRef> &src) {
-    if (dst.empty()) return;
+void Walker::copyAgg(const std::vector<CellRef> &dst0, const std::vector<CellRef> &src0) {
+    if (dst0.empty()) return;
+    // The same cell listed twice (a summary's entry paths resolving to the
+    // same caller objects) is one copy: without this a call's cost grows
+    // with every alias of the cells it touches.
+    auto dedup = [](const std::vector<CellRef> &in, bool keepWeak) {
+        std::vector<CellRef> out;
+        std::set<std::pair<int, std::string>> seen;
+        for (auto &c : in) {
+            if (seen.insert({c.obj, c.path}).second) { out.push_back(c); continue; }
+            if (keepWeak && c.weak)
+                for (auto &o : out) if (o.obj == c.obj && o.path == c.path) o.weak = true;
+        }
+        return out;
+    };
+    std::vector<CellRef> dst = dedup(dst0, true), src = dedup(src0, false);
     struct Snap {
         int obj; std::string path;
         std::vector<std::pair<std::string, VSet>> vals;
@@ -944,7 +975,11 @@ void Walker::copyAgg(const std::vector<CellRef> &dst, const std::vector<CellRef>
             clearSubtree(d.obj, d.path);
             auto &oc = cur_.mem[d.obj];
             for (auto &kv : sn.vals) vsUnion(oc.vals[normPath(d.path + kv.first)], kv.second);
-            for (auto &kv : sn.lazy) oc.lazy[d.path + kv.first] = kv.second;
+            for (auto &kv : sn.lazy) {
+                std::string at = normPath(d.path + kv.first);
+                if (hasStar(at)) sortedUnion(oc.lazy[at], kv.second);
+                else oc.lazy[at] = kv.second;
+            }
             if (!sn.def.empty()) oc.lazy[d.path] = sn.def;
             vsUnion(oc.any, sn.any);
             if (oc.vals.empty() && oc.lazy.empty() && oc.any.empty()) cur_.mem.erase(d.obj);
@@ -972,7 +1007,7 @@ void Walker::copyAgg(const std::vector<CellRef> &dst, const std::vector<CellRef>
                 sortedUnion(mine, eps);
                 if (!mine.empty()) cur_.mem[d.obj].lazy[at] = mine;
             };
-            for (auto &kv : sn.lazy) addLazy(d.path + kv.first, kv.second);
+            for (auto &kv : sn.lazy) addLazy(normPath(d.path + kv.first), kv.second);
             if (!sn.def.empty()) addLazy(d.path, sn.def);
             if (!sn.any.empty()) vsUnion(cur_.mem[d.obj].any, sn.any);
         }
@@ -1690,7 +1725,7 @@ EV Walker::rval(Expr &e) {
         for (auto &arm : me.arms) {
             cur_ = base;
             size_t nb = binds_.size();
-            frames_.push_back({nullptr, {}});
+            frames_.push_back({nullptr, {}, {}});
             for (auto &p : arm.patterns) {
                 bindPattern(p, subj, me.subject->type);
                 if (moving) ownBind(p, me.subject->loc);
@@ -2041,7 +2076,7 @@ EV Walker::evalCallInner(CallExpr &e) {
                 ownConsumeCells(pointees, kODrop, e.loc, nullptr);
                 refDropReported_ = false;
             } else {
-                ownUse(pointees, e.loc, false);
+                ownUse(pointees, e.methodBase->loc, false);   // at the receiver, not the '('
             }
         } else {
             EV self;
@@ -2057,7 +2092,7 @@ EV Walker::evalCallInner(CallExpr &e) {
                 else ownConsumeCells(cells, kODrop, e.loc, nullptr);
                 refDropReported_ = false;
             } else {
-                ownUse(cells, e.loc, false);
+                ownUse(cells, e.methodBase->loc, false);   // at the receiver, not the '('
                 if (isPlaceExpr(e.methodBase.get()) && cells.size() == 1 && tracked(cells[0].obj))
                     for (auto it : ownOverlap(cells[0].obj, cells[0].path)) callOwners_.push_back(it->first);
             }
@@ -2236,7 +2271,13 @@ Walker::Res Walker::resolveCells(const std::string &ep, const std::vector<int> &
             std::vector<CellRef> next;
             for (auto &cell : res.cells)
                 for (auto &x : lookup(cur_, cell.obj, cell.path)) next.push_back(cellOf(x, ""));
-            res.cells = std::move(next);
+            // Several cells may point to the same object: following each
+            // '*' without merging them multiplies the cells per dereference.
+            std::set<std::tuple<int, std::string, int>> seen;
+            res.cells.clear();
+            for (auto &c : next)
+                if (seen.insert({c.obj, c.path, c.elem}).second) res.cells.push_back(std::move(c));
+                else for (auto &o : res.cells) if (o.obj == c.obj && o.path == c.path && o.elem == c.elem) o.bits |= c.bits;
             ++i;
         } else if (c == '~') {
             std::vector<CellRef> next;
@@ -2427,6 +2468,7 @@ EV Walker::applySummary(const Expr &e, FunctionDecl *callee, const Summary &s, s
     for (auto &r2 : s.resets) resetRegion(r2, false);
     for (auto &ft : freeTos) freeTo(ft.first, ft.second);
 
+    std::unordered_set<std::string> weakCopies;
     for (auto &p : pend) {
         if (p.closure) {
             VSet all = p.any;
@@ -2441,6 +2483,18 @@ EV Walker::applySummary(const Expr &e, FunctionDecl *callee, const Summary &s, s
             for (auto &l : p.lazy) {
                 std::vector<CellRef> d2 = dst;
                 for (auto &x : d2) x.path = normPath(x.path + l.first);
+                // Several of the callee's entry paths can resolve to the
+                // same caller cells (every node of a summarized tree): the
+                // same weak copy again adds nothing.
+                if (!single) {
+                    std::string key = std::to_string(d2[0].obj) + "|" + d2[0].path;
+                    std::vector<std::pair<int, std::string>> ss;
+                    for (auto &x : l.second) ss.push_back({x.obj, x.path});
+                    std::sort(ss.begin(), ss.end());
+                    ss.erase(std::unique(ss.begin(), ss.end()), ss.end());
+                    for (auto &x : ss) key += "|" + std::to_string(x.first) + ":" + x.second;
+                    if (!weakCopies.insert(std::move(key)).second) continue;
+                }
                 copyAgg(d2, l.second);
             }
             for (auto &kv : p.vals) writeCell(c.obj, c.path + kv.first, kv.second, single);
@@ -2905,7 +2959,7 @@ int Walker::ownToken(const Expr &site, const std::vector<OwnKey> &owners) {
 // must be gone.
 void Walker::ownEndFunction() {
     // Every owned slot left, including ones a 'defer' was expected to drop.
-    Frame all{nullptr, {}};
+    Frame all{nullptr, {}, {}};
     for (auto &kv : cur_.own) {
         auto ov = ownVars_.find(kv.first.first);
         if (ov == ownVars_.end() || ov->second.pseudo) continue;
@@ -3092,7 +3146,7 @@ void Walker::stmt(Stmt &s) {
     switch (s.kind) {
     case StmtKind::Compound: {
         auto &cs = static_cast<CompoundStmt &>(s);
-        frames_.push_back({&s, {}});
+        frames_.push_back({&s, {}, {}});
         for (auto &c : cs.body) if (c) stmt(*c);
         if (cur_.live) {
             ownFlush();
@@ -3144,7 +3198,7 @@ void Walker::stmt(Stmt &s) {
     }
     case StmtKind::For: {
         auto &fs = static_cast<ForStmt &>(s);
-        frames_.push_back({&s, {}});
+        frames_.push_back({&s, {}, {}});
         if (fs.init) stmt(*fs.init);
         loop(s, fs.cond.get(), fs.body.get(), fs.incr.get(), false, fs.label);
         if (cur_.live) ownExitFrame(frames_.back(), fs.body ? fs.body->loc : s.loc, "after its loop");
@@ -3233,7 +3287,7 @@ void Walker::stmt(Stmt &s) {
         for (auto &arm : ms.arms) {
             cur_ = base;
             size_t nb = binds_.size();
-            frames_.push_back({nullptr, {}});
+            frames_.push_back({nullptr, {}, {}});
             for (auto &p : arm.patterns) {
                 if (p.kind == PatternKind::Wildcard && p.ident.empty()) exhaustive = true;
                 if (p.resolvedTag == 0) sawNone = true;
@@ -3260,7 +3314,7 @@ void Walker::stmt(Stmt &s) {
         State dispatch = cur_;
         bool hasDefault = false;
         targets_.push_back({"", true, State{}, State{}, frames_.size()});
-        frames_.push_back({&s, {}});
+        frames_.push_back({&s, {}, {}});
         State fall;
         for (auto &c : sw.cases) {
             if (c.isDefault) hasDefault = true;
@@ -3304,7 +3358,7 @@ void Walker::walkBody() {
     curPos_ = 0;
     // The function's own frame: by-value parameters of Drop type are owned
     // here; a destructor's *self is tracked for use after it was dropped.
-    frames_.push_back({fn_.body.get(), {}});
+    frames_.push_back({fn_.body.get(), {}, {}});
     for (size_t i = 0; i < fn_.paramVars.size() && i < fn_.params.size(); ++i) {
         const VarDecl *pv = fn_.paramVars[i];
         if (pv && mustDrop(fn_.params[i].type))

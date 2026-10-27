@@ -181,10 +181,16 @@ std::string Preprocessor::processFile(const std::string &src,
     // invocations below) are followed by padding newlines so every later
     // token keeps its real source line.
     unsigned outLine = 1;
+    // '#line N ["file"]': the presumed line and file of what follows, for
+    // __LINE__/__FILE__, diagnostics, and (through a line marker) the
+    // lexer's token locations.
+    long lineDelta = 0;
+    std::string presumed = filename;
     for (size_t li = 0; li < lines.size(); ++li) {
-        auto &[line, lineNo] = lines[li];
-        while (outLine < lineNo) { output += '\n'; ++outLine; }
-        outLine = lineNo + 1;
+        auto &[line, physLine] = lines[li];
+        while (outLine < physLine) { output += '\n'; ++outLine; }
+        outLine = physLine + 1;
+        unsigned lineNo = (unsigned)std::max(1L, (long)physLine + lineDelta);
         curLine_ = lineNo;
 
         // Find first non-whitespace
@@ -198,15 +204,43 @@ std::string Preprocessor::processFile(const std::string &src,
             std::string directiveLine = stripLineComment(line);
             std::string rest = (i + 1 < directiveLine.size())
                                     ? directiveLine.substr(i + 1) : std::string{};
-            // Skip optional whitespace between # and directive name
-            std::string injected = handleDirective(rest, filename, lineNo, depth);
+            std::string dirFileName;
+            {
+                size_t q = 0; skipWS(rest, q);
+                std::string dname = readIdentAt(rest, q);
+                if (dname == "line" && isActive()) {
+                    std::string arg = expandLine(rest.substr(q), presumed, lineNo);
+                    size_t p = 0; skipWS(arg, p);
+                    if (p >= arg.size() || !std::isdigit((unsigned char)arg[p])) {
+                        diag_.error({lineNo, 1, locFile(presumed)}, "#line expects a line number");
+                        output += '\n';
+                        continue;
+                    }
+                    long n = 0;
+                    while (p < arg.size() && std::isdigit((unsigned char)arg[p]) && n < 2147483647L)
+                        n = n * 10 + (arg[p++] - '0');
+                    skipWS(arg, p);
+                    if (p < arg.size() && arg[p] == '"') {
+                        size_t e = arg.find('"', p + 1);
+                        if (e != std::string::npos) presumed = arg.substr(p + 1, e - p - 1);
+                    }
+                    // The next physical line is line n.
+                    lineDelta = n - (long)(physLine + 1);
+                    output += "# " + std::to_string(n) + " \"" + presumed + "\"\n";
+                    continue;
+                }
+                // An #include resolves against the real file; the other
+                // directives report at the presumed one.
+                dirFileName = dname == "include" ? filename : presumed;
+            }
+            std::string injected = handleDirective(rest, dirFileName, lineNo, depth);
             if (!injected.empty()) {
                 // Injected include content (already wrapped in a leading
                 // '# 1 "<child>"' marker by handleInclude); resume this
                 // file's numbering after it.
                 output += injected;
                 if (output.back() != '\n') output += '\n';
-                output += "# " + std::to_string(lineNo + 1) + " \"" + filename + "\"\n";
+                output += "# " + std::to_string(lineNo + 1) + " \"" + presumed + "\"\n";
             } else {
                 output += '\n'; // blank line to preserve line numbers
             }
@@ -226,7 +260,7 @@ std::string Preprocessor::processFile(const std::string &src,
                 effective += ' ';
                 effective += stripLineComment(nxt);
             }
-            output += expandLine(effective, filename, lineNo);
+            output += expandLine(effective, presumed, lineNo);
             output += '\n';
         } else {
             output += '\n'; // skipped line
@@ -344,7 +378,7 @@ std::string Preprocessor::handleDirective(const std::string &rest,
         return {};
     }
 
-    diag_.warn({lineNo, 1, filename.c_str()},
+    diag_.warn({lineNo, 1, locFile(filename)},
                "unknown preprocessor directive '#" + dir + "'");
     return {};
 }
@@ -359,21 +393,21 @@ void Preprocessor::handleDefine(const std::string &rest,
     size_t pos = 0;
     skipWS(rest, pos);
     if (pos >= rest.size() || !isIdentStart(rest[pos])) {
-        diag_.error({lineNo, 1, filename.c_str()}, "invalid #define");
+        diag_.error({lineNo, 1, locFile(filename)}, "invalid #define");
         return;
     }
     std::string name = readIdentAt(rest, pos);
 
     MacroDef def;
     def.name = name;
-    def.loc  = {lineNo, 1, filename.c_str()};
+    def.loc  = {lineNo, 1, locFile(filename)};
     def.file = filename;
 
     // Function-like if '(' immediately follows name (no space)
     if (pos < rest.size() && rest[pos] == '(') {
         def.isFunctionLike = true;
         if (!opts_.compatMode) {
-            diag_.error({lineNo, 1, filename.c_str()},
+            diag_.error({lineNo, 1, locFile(filename)},
                 "function-like macros are not allowed in safe mode; "
                 "use generic<T> functions instead (or pass --compat-preprocessor)");
             return;
@@ -407,13 +441,13 @@ void Preprocessor::handleDefine(const std::string &rest,
         for (size_t i = 0; i < def.body.size(); ++i) {
             if (def.body[i] == '#') {
                 if (i + 1 < def.body.size() && def.body[i + 1] == '#') {
-                    diag_.error({lineNo, 1, filename.c_str()},
+                    diag_.error({lineNo, 1, locFile(filename)},
                         "token pasting '##' is not allowed in safe mode");
                     return;
                 }
                 if (!def.isFunctionLike) {
                     // Object-like macros shouldn't have # either
-                    diag_.error({lineNo, 1, filename.c_str()},
+                    diag_.error({lineNo, 1, locFile(filename)},
                         "stringification '#' is not allowed in safe mode");
                     return;
                 }
@@ -460,7 +494,7 @@ void Preprocessor::handleElif(const std::string &rest,
                                 const std::string &filename,
                                 unsigned lineNo) {
     if (condStack_.empty()) {
-        diag_.error({lineNo, 1, filename.c_str()}, "#elif without #if");
+        diag_.error({lineNo, 1, locFile(filename)}, "#elif without #if");
         return;
     }
     CondState &top = condStack_.back();
@@ -477,7 +511,7 @@ void Preprocessor::handleElif(const std::string &rest,
 
 void Preprocessor::handleElse(const std::string &filename, unsigned lineNo) {
     if (condStack_.empty()) {
-        diag_.error({lineNo, 1, filename.c_str()}, "#else without #if");
+        diag_.error({lineNo, 1, locFile(filename)}, "#else without #if");
         return;
     }
     CondState &top = condStack_.back();
@@ -487,7 +521,7 @@ void Preprocessor::handleElse(const std::string &filename, unsigned lineNo) {
 
 void Preprocessor::handleEndif(const std::string &filename, unsigned lineNo) {
     if (condStack_.empty()) {
-        diag_.error({lineNo, 1, filename.c_str()}, "#endif without #if");
+        diag_.error({lineNo, 1, locFile(filename)}, "#endif without #if");
         return;
     }
     condStack_.pop_back();
@@ -501,7 +535,7 @@ std::string Preprocessor::handleInclude(const std::string &rest,
                                          const std::string &curFile,
                                          unsigned lineNo, int depth) {
     if (depth >= opts_.maxIncludeDepth) {
-        diag_.error({lineNo, 1, curFile.c_str()},
+        diag_.error({lineNo, 1, locFile(curFile)},
                     "maximum #include depth exceeded");
         return {};
     }
@@ -510,7 +544,7 @@ std::string Preprocessor::handleInclude(const std::string &rest,
     size_t pos = 0;
     skipWS(rest, pos);
     if (pos >= rest.size()) {
-        diag_.error({lineNo, 1, curFile.c_str()}, "invalid #include");
+        diag_.error({lineNo, 1, locFile(curFile)}, "invalid #include");
         return {};
     }
 
@@ -526,13 +560,13 @@ std::string Preprocessor::handleInclude(const std::string &rest,
         while (pos < rest.size() && rest[pos] != '>') name += rest[pos++];
         ++pos; // closing >
     } else {
-        diag_.error({lineNo, 1, curFile.c_str()},
+        diag_.error({lineNo, 1, locFile(curFile)},
                     "expected '\"filename\"' or '<filename>' after #include");
         return {};
     }
 
     if (name.empty()) {
-        diag_.error({lineNo, 1, curFile.c_str()}, "empty filename in #include");
+        diag_.error({lineNo, 1, locFile(curFile)}, "empty filename in #include");
         return {};
     }
 
@@ -541,7 +575,7 @@ std::string Preprocessor::handleInclude(const std::string &rest,
     // (multiple-definition link errors, or two diverging copies of its
     // statics), so it is compiled separately and linked instead.
     if (name.size() >= 3 && name.compare(name.size() - 3, 3, ".sc") == 0) {
-        diag_.error({lineNo, 1, curFile.c_str()},
+        diag_.error({lineNo, 1, locFile(curFile)},
                     "#include must name a header (.h), not a source file '" + name +
                     "': compile it as its own translation unit and include its .h");
         return {};
@@ -563,17 +597,21 @@ std::string Preprocessor::handleInclude(const std::string &rest,
             if (!cHeaderImporter_) {
                 cHeaderImporter_ = std::make_unique<CHeaderImporter>(diag_);
             }
+            // Already imported (directly or by a header included earlier):
+            // its declarations are in place, so this #include is a no-op,
+            // not a reason to paste the raw system header.
+            if (cHeaderImporter_->available() && cHeaderImporter_->imported(name)) return {};
             if (cHeaderImporter_->available()) {
                 std::string decls =
                     cHeaderImporter_->import(name, opts_.includePaths,
-                                              {lineNo, 1, curFile.c_str()});
+                                              {lineNo, 1, locFile(curFile)});
                 if (!decls.empty()) return "# 1 \"<" + name + ">\"\n" + decls;
             }
         }
         if (isSystem && opts_.importCHeaders)
             path = resolveInclude(name, isSystem, curFile, /*searchSysDirs=*/true);
         if (path.empty()) {
-            diag_.error({lineNo, 1, curFile.c_str()},
+            diag_.error({lineNo, 1, locFile(curFile)},
                         "cannot find include file '" + name + "'");
             return {};
         }
@@ -657,13 +695,13 @@ void Preprocessor::handlePragma(const std::string &rest,
 void Preprocessor::handleError(const std::string &rest,
                                 const std::string &filename,
                                 unsigned lineNo) {
-    diag_.error({lineNo, 1, filename.c_str()}, "#error " + trim(rest));
+    diag_.error({lineNo, 1, locFile(filename)}, "#error " + trim(rest));
 }
 
 void Preprocessor::handleWarning(const std::string &rest,
                                   const std::string &filename,
                                   unsigned lineNo) {
-    diag_.warn({lineNo, 1, filename.c_str()}, "#warning " + trim(rest));
+    diag_.warn({lineNo, 1, locFile(filename)}, "#warning " + trim(rest));
 }
 
 // =============================================================================
@@ -718,13 +756,12 @@ std::string Preprocessor::expandTokens(const std::string &text,
         }
         // Identifier: possibly a macro
         if (isIdentStart(c)) {
-            size_t start = pos;
             std::string name = readIdentAt(text, pos);
 
             // Handle __FILE__ and __LINE__ built-ins
             if (name == "__FILE__") {
                 result += '"';
-                result += curFile_;
+                result += filename;   // the presumed file (#line)
                 result += '"';
                 continue;
             }
@@ -734,7 +771,7 @@ std::string Preprocessor::expandTokens(const std::string &text,
             }
             // Disabled built-ins
             if (name == "__TIME__" || name == "__DATE__") {
-                diag_.error({lineNo, 1, filename.c_str()},
+                diag_.error({lineNo, 1, locFile(filename)},
                     "__TIME__ and __DATE__ are disabled in SafeC "
                     "(non-deterministic build info)");
                 result += "0";
@@ -959,6 +996,17 @@ std::string Preprocessor::expandFunctionLike(const MacroDef &def,
         }
     }
 
+    // '...': the arguments from the last named parameter on are all
+    // __VA_ARGS__, commas included ('F(1, 2, 3)' with 'F(...)' passes
+    // '1, 2, 3', not just '1').
+    if (def.isVariadic && !def.params.empty() && args.size() > def.params.size()) {
+        size_t va = def.params.size() - 1;
+        std::string joined = args[va];
+        for (size_t i = va + 1; i < args.size(); ++i) joined += ", " + args[i];
+        args.resize(va);
+        args.push_back(joined);
+    }
+
     // Pre-expand each argument
     std::vector<std::string> expArgs;
     for (auto &a : args) {
@@ -1052,7 +1100,6 @@ int64_t Preprocessor::evalCondExpr(const std::string &expr,
         if (pos >= expr.size()) break;
 
         if (isIdentStart(expr[pos])) {
-            size_t start = pos;
             std::string name = readIdentAt(expr, pos);
             if (name == "defined") {
                 // Keep 'defined' and its argument unexpanded

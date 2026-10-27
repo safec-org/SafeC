@@ -57,3 +57,33 @@ int main() {
     }
     return 0;
 }
+
+// A failed compare-exchange is a load: its ordering can't be release
+// ('release' -> monotonic, 'acq_rel' -> acquire on failure). Using the
+// success ordering for both was invalid IR ("invalid cmpxchg failure
+// ordering").
+bool cas_release(int* p) {
+    unsafe { return atomic_cas(p, 1, 2, "release"); }
+}
+// CHECK-LABEL: define {{.*}}@cas_release(
+// CHECK: cmpxchg ptr {{%[^,]+}}, i32 1, i32 2 release monotonic
+
+bool cas_acq_rel(int* p) {
+    unsafe { return atomic_cas(p, 1, 2, "acq_rel"); }
+}
+// CHECK-LABEL: define {{.*}}@cas_acq_rel(
+// CHECK: cmpxchg ptr {{%[^,]+}}, i32 1, i32 2 acq_rel acquire
+
+bool cxs_release(int* p, int desired) {
+    int expected = 0;
+    unsafe { return atomic_compare_exchange_strong(p, &expected, desired, "release"); }
+}
+// CHECK-LABEL: define {{.*}}@cxs_release(
+// CHECK: release monotonic
+
+bool cxs_acq_rel(int* p, int desired) {
+    int expected = 0;
+    unsafe { return atomic_compare_exchange_strong(p, &expected, desired, "acq_rel"); }
+}
+// CHECK-LABEL: define {{.*}}@cxs_acq_rel(
+// CHECK: acq_rel acquire

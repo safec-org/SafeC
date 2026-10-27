@@ -628,6 +628,27 @@ void cond_push(int active) {
     g_cond_depth = g_cond_depth + 1;
 }
 
+// '#line N ["file"]': the rest of this file's tokens (already lexed, up to
+// its end-of-file token at the top of g_ptok) take the presumed line and
+// file, for __LINE__/__FILE__ and diagnostics.
+void do_line(int hash_idx, int s, int e) {
+    if (s >= e || g_ptok[s].kind != T_INT) { pp_error(hash_idx, "#line expects a line number"); return; }
+    int delta = (int)g_ptok[s].ival - (g_ptok[hash_idx].line + 1);
+    int file = g_ptok[hash_idx].file;
+    int nfile = file;
+    if (s + 1 < e && g_ptok[s + 1].kind == T_STRING) {
+        nfile = add_file(g_ptok[s + 1].sid, g_file_start[file], g_file_len[file]);
+    }
+    int j = e;
+    while (j < g_nptok) {
+        if (g_ptok[j].file == file) {
+            g_ptok[j].line = g_ptok[j].line + delta;
+            g_ptok[j].file = nfile;
+        }
+        j = j + 1;
+    }
+}
+
 void do_directive(int hash_idx, int s, int e) {
     if (s >= e) { return; }                         // null directive
     int k = g_ptok[s].kind;
@@ -700,7 +721,7 @@ void do_directive(int hash_idx, int s, int e) {
         diag_at(g_ptok[hash_idx].file, g_ptok[hash_idx].line, 1, is_err);
         return;
     }
-    if (d == S_line) { return; }
+    if (d == S_line) { do_line(hash_idx, s + 1, e); return; }
     msg_reset();
     msg_lit("unknown preprocessor directive '#");
     msg_str(d);

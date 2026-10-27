@@ -94,7 +94,7 @@ R"(// {{NAME}} — entry point
 extern int printf(const char* fmt, ...);
 
 int main() {
-    unsafe { printf("Hello from {{NAME}}!\n"); }
+    printf("Hello from {{NAME}}!\n");
     return 0;
 }
 )";

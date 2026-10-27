@@ -9,6 +9,45 @@ release tags.
 
 ### Fixed
 
+- **Compile time:** the memory-flow check grew exponentially with a run of
+  `insert()` calls on one `BST<K, struct S, C>` (7 calls took 46 s,
+  `tests/stdlib/tests/test_collections.sc` 23.6 s; now 0.2 s). Applying a
+  callee summary nested a node inside a node's `val` once per call and
+  multiplied the caller cells per dereference; cell paths are now bounded
+  and aliased cells merged. `compiler/tests` can bound a test's compile
+  time (`// MAX-SECONDS:`).
+- A second `#include` of a C header imported through clang (`<math.h>`
+  twice, or once more from another header) is a no-op instead of pasting
+  the raw `/usr/include` header (16 errors).
+- Diagnostics from inside an `#include`d file carry that file's name
+  (stored diagnostics, e.g. the language server's, pointed at a freed
+  string).
+- `safeguard` links libm on Linux and the BSDs: a program using the C
+  library's `<math.h>` (`sqrt`, `cbrt`, ...) without `std/math.h` failed to
+  link.
+- A use of a dropped or moved value through a method call (`b.len()`) is
+  reported at the variable, not at the `(`; function references print as
+  `fn R(Args)` / `?fn R(Args)` in messages (and doc JSON, and scc) instead
+  of `&static const R(Args)`.
+- `__VA_ARGS__` expands to every variadic argument (`F(1, 2, 3)` with
+  `#define F(...) g(__VA_ARGS__)` gave `g(1)`).
+- `#line N ["file"]` sets `__LINE__`, `__FILE__` and the locations of the
+  code after it (it was ignored; compiler and selfhost).
+- `atomic_cas` / `atomic_compare_exchange_strong` with `"release"` or
+  `"acq_rel"` generate valid IR: the failure ordering is the strongest one
+  allowed (relaxed / acquire), as in C11.
+- `must_use` / `warn_unused_result` on one declaration of a function
+  applies to it when another declaration (the definition) doesn't repeat
+  it.
+- `safec --emit-bin` no longer prints clang's "overriding the module target
+  triple" warning: host builds name their triple in the IR.
+- `safeguard --help` lists every option (`doc --home`, `--source-ref`,
+  `--verbose`, `publish --no-verify`, `--dry-run`, `--remote`, ...); the
+  smoke test checks it against the parser. `safeguard new`'s template calls
+  `printf` without an unneeded `unsafe { }`, and the install scripts' help
+  no longer names a stale release tag.
+- Compiler build warnings (unused variables, missing field initializers,
+  member initialization order).
 - **Warnings on incremental-cache hits:** a cache hit skips lexing, parsing,
   sema and codegen, so a rebuild of an unchanged file printed none of their
   warnings (e.g. a non-exhaustive `switch`), and `safeguard build` showed them

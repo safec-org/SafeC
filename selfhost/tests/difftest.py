@@ -133,7 +133,7 @@ if ctest_files:
 for f in ctest_files:
     name = os.path.join("ctests", os.path.relpath(f, CTESTS))
     src = open(f, encoding="utf-8").read()
-    neg = "EXPECT-ERROR:" in src
+    neg = re.search(r"EXPECT-ERROR(-IN)?:", src) is not None
     m = re.search(r"^// SAFEC-ARGS: *(.*)$", src, re.M)
     # '%root' is the repository root (compiler/tests/run.sh expands it too)
     extra = m.group(1).replace("%root", os.path.dirname(ROOT)).split() if m else []
@@ -184,7 +184,8 @@ kf = os.path.join(HERE, "known-failures.txt")
 if os.path.exists(kf):
     for line in open(kf, encoding="utf-8"):
         line = line.split("#", 1)[0].strip()
-        if line: known[line.split()[0]] = True
+        # 'test wasm': known only for scc.wasm (--scc-wasm)
+        if line and (line.split()[1:] != ["wasm"] or args.scc_wasm): known[line.split()[0]] = True
 ran = {r["test"]: r["ok"] for r in results}
 new_fail = [t for t, ok in ran.items() if not ok and t not in known]
 fixed = [t for t in known if ran.get(t) is True]

@@ -344,6 +344,9 @@ std::string typeStr(const TypePtr &t) {
     case TypeKind::Enum: return "enum " + static_cast<const EnumType &>(*t).name;
     case TypeKind::Reference: {
         auto &r = static_cast<const ReferenceType &>(*t);
+        // 'fn R(Args)' / '?fn R(Args)': a &static reference to a function.
+        if (r.base && r.base->kind == TypeKind::Function && r.region == Region::Static)
+            return (r.nullable ? "?" : "") + typeStr(r.base);
         std::string s = r.nullable ? "?&" : "&";
         if (r.region == Region::Arena) s += "arena<" + r.arenaName + "> ";
         else if (r.region == Region::Stack || r.region == Region::Heap || r.region == Region::Static)

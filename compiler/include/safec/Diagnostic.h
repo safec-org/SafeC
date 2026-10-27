@@ -2,8 +2,21 @@
 #include <string>
 #include <vector>
 #include <cstdio>
+#include <mutex>
+#include <unordered_set>
 
 namespace safec {
+
+// A file name with process lifetime, for SourceLocation::file: locations
+// (macro definitions, diagnostics) outlive the strings the preprocessor and
+// lexer hold while a file is being read. Safe to call from the parallel
+// per-file compiles.
+inline const char *internFileName(const std::string &f) {
+    static std::mutex mu;
+    static std::unordered_set<std::string> names;
+    std::lock_guard<std::mutex> lock(mu);
+    return names.insert(f).first->c_str();
+}
 
 struct SourceLocation {
     unsigned line   = 1;

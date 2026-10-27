@@ -378,6 +378,14 @@ bool Scope::define(Symbol sym) {
     if (it->second.kind == SymKind::Function && sym.kind == SymKind::Function) {
         bool existingHasBody = it->second.fnDecl && it->second.fnDecl->body;
         bool newHasBody      = sym.fnDecl && sym.fnDecl->body;
+        // must_use / warn_unused_result on any declaration applies to the
+        // function (C: attributes accumulate over redeclarations), whichever
+        // of them is the one kept.
+        if (it->second.fnDecl && sym.fnDecl &&
+            (it->second.fnDecl->isMustUse || sym.fnDecl->isMustUse)) {
+            it->second.fnDecl->isMustUse = true;
+            sym.fnDecl->isMustUse = true;
+        }
         if (!existingHasBody && newHasBody) {
             it->second = std::move(sym);
             return true;
